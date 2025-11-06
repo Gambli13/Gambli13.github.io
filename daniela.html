@@ -1,0 +1,1621 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/x-icon" href="images/redchrome.ico">
+    <title>New Tab</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        /* Custom font and base styles */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+            padding: 0;
+            overflow: hidden; /* Prevent body scroll */
+            /* New: Use a light base background color */
+            background-color: #fcfcfc; 
+        }
+        #background-container {
+            /* Initial background color (light fallback for now) */
+            background-image: url('data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 1 1\'%3E%3Crect width=\'1\' height=\'1\' fill=\'%230f172a\'/%3E%3C/svg%3E'); 
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: -1;
+            transition: background-image 1s ease-in-out; /* Smooth background transition */
+        }
+        .scroll-container {
+            overflow-y: auto;
+            height: 100vh;
+            padding: 20px;
+        }
+        /* Custom scrollbar for a sleek look (MODIFIED for light background) */
+        .scroll-container::-webkit-scrollbar { width: 6px; }
+        .scroll-container::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.3); border-radius: 3px; }
+        .scroll-container::-webkit-scrollbar-track { background: transparent; }
+
+        .bookmark-icon {
+            transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+        }
+        .bookmark-icon:hover {
+            transform: scale(1.05);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3), 0 4px 6px -4px rgba(0, 0, 0, 0.3);
+            border-color: #3b82f6;
+        }
+        
+        .bookmark-favicon {
+            width: 24px; 
+            height: 24px;
+            object-fit: contain;
+            /* Remove dark shadow as text is now dark */
+            filter: none; 
+        }
+
+        .mcast-link-item {
+            transition: background-color 0.3s, transform 0.3s;
+            cursor: pointer;
+        }
+        /* MODIFIED: hover for light theme */
+        .mcast-link-item:hover {
+            background-color: rgba(0, 0, 0, 0.05); 
+            transform: translateX(5px);
+        }
+
+        .delete-btn, .done-btn {
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+        /* MODIFIED: Ensure both delete and done buttons show on assignment item hover */
+        .assignment-item:hover .delete-btn,
+        .assignment-item:hover .done-btn,
+        .bookmark-item-wrap:hover .delete-btn,
+        .finished-item-wrap:hover .delete-btn {
+            opacity: 1;
+        }
+
+        .background-thumbnail {
+            width: 100%;
+            padding-top: 56.25%; 
+            background-size: cover;
+            background-position: center;
+            cursor: pointer;
+            border: 3px solid transparent;
+            transition: border-color 0.3s, opacity 0.3s;
+        }
+        .background-thumbnail:hover {
+            border-color: #3b82f6; 
+            opacity: 0.8;
+        }
+        .background-thumbnail.selected {
+            border-color: #10b981; 
+            border-width: 4px;
+        }
+
+        /* NEW: Style for the fixed 'Last Updated' timestamp (MODIFIED for light theme) */
+        #version-timestamp {
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            z-index: 10;
+            font-size: 0.75rem; 
+            color: rgba(0, 0, 0, 0.5); /* text-dark/50 */
+            background-color: rgba(255, 255, 255, 0.5);
+            padding: 4px 8px;
+            border-radius: 6px;
+            backdrop-filter: blur(5px);
+        }
+        
+        /* MODIFIED: New Dark Color Palette for light theme contrast */
+        .text-dark-primary {
+            color: #4a2c2c; /* Deep reddish-brown for contrast */
+        }
+        .text-dark-secondary {
+            color: #6a4a4a; /* Slightly lighter shade for secondary text */
+        }
+        .text-dark-tertiary {
+            color: #8a6a6a; /* Even lighter for less prominent text */
+        }
+        
+        /* MODIFIED: Icon color and removal of shadow */
+        .icon-dark-primary {
+            color: #4a2c2c;
+            /* Removed filter: drop-shadow */
+        }
+        
+        /* NEW: Styling to force finished assignment details onto one line */
+        .finished-assignment-details {
+            display: flex;
+            align-items: center;
+            flex-wrap: nowrap; /* Prevent wrapping */
+            white-space: nowrap; /* Prevent text wrapping */
+            overflow: hidden; /* Hide overflow */
+            text-overflow: ellipsis; /* Add ellipsis if hidden */
+            min-width: 0; /* Important for flex to shrink content */
+        }
+        .finished-assignment-details > * {
+            margin-right: 8px; /* Spacing between elements */
+        }
+        .finished-assignment-details .title {
+            font-weight: 600;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            flex-shrink: 1;
+            min-width: 50px; /* Minimum size for the title */
+        }
+        .finished-assignment-details .date {
+            font-size: 0.75rem; /* text-xs */
+            flex-shrink: 0; /* Prevent dates from shrinking */
+        }
+
+    </style>
+
+    <script>
+        // Define fallback variables in global scope for use in the module script below.
+        const LOCAL_FIREBASE_CONFIG_JSON = JSON.stringify({
+           apiKey: "AIzaSyDRYcVVOg_yzTbYQnBj7TxghX-2rNT3f3g",
+           authDomain: "personalment-c1a9c.firebaseapp.com",
+           projectId: "personalment-c1a9c",
+           storageBucket: "personalment-c1a9c.appspot.com",
+           messagingSenderId: "461177689665",
+           appId: "1:461177689665:web:bddc74fe94c21c097d18c0",
+           measurementId: "G-RC5MSQBNK"
+        });
+        const LOCAL_AUTH_TOKEN = null; 
+    </script>
+    <script type="module">
+        // --- USING v12.4.0 CDN LINKS AS REQUESTED ---
+        // MODIFIED: Added setDoc to imports for assignment editing functionality
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-auth.js";
+        import { getFirestore, doc, addDoc, deleteDoc, onSnapshot, collection, setLogLevel, setDoc } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore.js";
+        // --- END v12.4.0 IMPORTS ---
+
+        // Determine environment: Use Canvas globals OR local fallbacks
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        
+        // FIX: Accessing LOCAL_FIREBASE_CONFIG_JSON and LOCAL_AUTH_TOKEN which are now globally defined.
+        const configSource = typeof __firebase_config !== 'undefined' ? __firebase_config : LOCAL_FIREBASE_CONFIG_JSON;
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? LOCAL_AUTH_TOKEN : LOCAL_AUTH_TOKEN;
+
+        // Parse the configuration
+        const firebaseConfig = JSON.parse(configSource);
+        
+        let db, auth, userId = null;
+        let isAuthReady = false;
+
+        setLogLevel('debug'); // Enable Firestore logging
+
+        // Utility function to get the current collection path for private user data
+        const getCollectionPath = (collectionName) => `/artifacts/${appId}/users/${userId}/${collectionName}_daniela`;
+
+        const initFirebase = async () => {
+            try {
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+
+                // sign in anonymously so Firestore rules pass
+                await signInAnonymously(auth);
+                onAuthStateChanged(auth, (user) => {
+                if (user) {
+                    // Force same logical userId for shared data path
+                    userId = "daniela_shared_user";
+                    isAuthReady = true;
+                    console.log("Using shared user ID:", userId);
+                    document.getElementById('user-id-display').textContent = `User ID: ${userId}`;
+                    setupDataListeners();
+                }
+                });
+            } catch (e) {
+                console.error("Firebase initialization failed:", e);
+                window.setupMockData();
+            }
+            };
+
+
+        // --- Data Listener Setup (Only runs if Firestore is successfully initialized) ---
+        const setupDataListeners = () => {
+            if (!db || !userId) { 
+                console.error("Cannot set up listeners: DB not initialized or User ID missing.");
+                return;
+            }
+
+            // 1. Assignments Listener
+            onSnapshot(collection(db, getCollectionPath('assignments')), (snapshot) => {
+                const assignments = [];
+                snapshot.forEach(doc => {
+                    const data = doc.data();
+                    let deadlineDate;
+                    
+                    if (data.deadline && typeof data.deadline.toDate === 'function') {
+                        deadlineDate = data.deadline.toDate();
+                    } else if (data.deadline) {
+                        deadlineDate = new Date(data.deadline);
+                    } else {
+                        deadlineDate = null;
+                    }
+                    // Include all data fields, including 'notes' if it exists
+                    assignments.push({ id: doc.id, ...data, deadline: deadlineDate });
+                });
+                
+                assignments.sort((a, b) => (a.deadline || 0) - (b.deadline || 0));
+                window.renderAssignments(assignments);
+            }, (error) => {
+                console.error("Error fetching assignments:", error);
+            });
+
+            // 2. Bookmarks Listener
+            onSnapshot(collection(db, getCollectionPath('bookmarks')), (snapshot) => {
+                const bookmarks = [];
+                snapshot.forEach(doc => {
+                    bookmarks.push({ id: doc.id, ...doc.data() });
+                });
+                window.renderBookmarks(bookmarks);
+            }, (error) => {
+                console.error("Error fetching bookmarks:", error);
+            });
+            
+            // 3. Backgrounds Listener (NEW)
+            onSnapshot(collection(db, getCollectionPath('backgrounds')), (snapshot) => {
+                const userBackgrounds = [];
+                snapshot.forEach(doc => {
+                    // Only push the Base64 string for use in the CSS
+                    userBackgrounds.push({ id: doc.id, name: doc.data().name || 'Background', base64: doc.data().base64 });
+                });
+                window.setUserBackgrounds(userBackgrounds);
+                window.renderBackgroundGallery(userBackgrounds); // RENDER GALLERY
+            }, (error) => {
+                console.error("Error fetching backgrounds:", error);
+            });
+
+            // 4. Finished Assignments Listener (NEW)
+            onSnapshot(collection(db, getCollectionPath('finished')), (snapshot) => {
+                const finished = [];
+                snapshot.forEach(doc => {
+                    const data = doc.data();
+                    let deadlineDate;
+                    let completedAtDate;
+                    
+                    if (data.deadline && typeof data.deadline.toDate === 'function') {
+                        deadlineDate = data.deadline.toDate();
+                    } else if (data.deadline) {
+                        deadlineDate = new Date(data.deadline);
+                    } else {
+                        deadlineDate = null;
+                    }
+                    
+                    if (data.completedAt && typeof data.completedAt.toDate === 'function') {
+                        completedAtDate = data.completedAt.toDate();
+                    } else if (data.completedAt) {
+                        completedAtDate = new Date(data.completedAt);
+                    } else {
+                        completedAtDate = new Date(); // Fallback if missing
+                    }
+                    
+                    finished.push({ id: doc.id, ...data, deadline: deadlineDate, completedAt: completedAtDate });
+                });
+                
+                finished.sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0)); // Sort by completion time, newest first
+                window.renderFinishedAssignments(finished); // NEW RENDER FUNCTION
+            }, (error) => {
+                console.error("Error fetching finished assignments:", error);
+            });
+        };
+
+        // --- Firebase Data Operations (Global Functions) ---
+        window.db = {
+            // Assignment CRUD (existing)
+            addAssignment: async (title, deadlineDate, notes = '') => {
+                if (!db || !userId || !isAuthReady) { console.error("Firestore not initialized for persistence."); return; }
+                try {
+                    await addDoc(collection(db, getCollectionPath('assignments')), {
+                        title: title,
+                        // Storing date as ISO string is better for cross-platform/language consistency in Firestore
+                        deadline: deadlineDate.toISOString(), 
+                        notes: notes, // Add notes field for future proofing/editing
+                        createdAt: new Date().toISOString()
+                    });
+                    console.log("Assignment added to Firestore successfully.");
+                } catch (e) { console.error("Error adding document: ", e); }
+            },
+            // NEW: Function to update an existing assignment (now accepts notes)
+            updateAssignment: async (id, title, deadlineDate, notes = '') => {
+                if (!db || !userId || !isAuthReady) { console.error("Firestore not initialized for persistence."); return; }
+                try {
+                    // Use setDoc with merge: true to update fields without replacing the entire document
+                    await setDoc(doc(db, getCollectionPath('assignments'), id), {
+                        title: title,
+                        deadline: deadlineDate.toISOString(), 
+                        notes: notes, // Pass notes
+                        updatedAt: new Date().toISOString()
+                    }, { merge: true }); 
+                    console.log("Assignment updated in Firestore successfully.");
+                } catch (e) { console.error("Error updating document: ", e); }
+            },
+            deleteAssignment: async (id) => {
+                if (!db || !userId || !isAuthReady) { console.error("Firestore not initialized for persistence."); return; }
+                try {
+                    await deleteDoc(doc(db, getCollectionPath('assignments'), id));
+                    console.log("Assignment deleted from Firestore successfully.");
+                } catch (e) { console.error("Error deleting document: ", e); }
+            },
+
+            // NEW: Finished Assignments CRUD
+            addFinishedAssignment: async (assignmentData) => {
+                if (!db || !userId || !isAuthReady) { console.error("Firestore not initialized for persistence."); return; }
+                try {
+                    // 1. Delete from active assignments
+                    await deleteDoc(doc(db, getCollectionPath('assignments'), assignmentData.id));
+                    
+                    // 2. Add to finished assignments with a completion timestamp
+                    await setDoc(doc(db, getCollectionPath('finished'), assignmentData.id), {
+                        ...assignmentData,
+                        // Ensure deadline is an ISO string before saving
+                        deadline: typeof assignmentData.deadline === 'object' && assignmentData.deadline !== null ? assignmentData.deadline.toISOString() : assignmentData.deadline,
+                        completedAt: new Date().toISOString(), // Store completion time
+                    }, { merge: true }); // Use merge just in case
+                    console.log("Assignment marked as done successfully.");
+                } catch (e) { console.error("Error marking assignment as done: ", e); }
+            },
+            deleteFinishedAssignment: async (id) => {
+                if (!db || !userId || !isAuthReady) { console.error("Firestore not initialized for persistence."); return; }
+                try {
+                    await deleteDoc(doc(db, getCollectionPath('finished'), id));
+                    console.log("Finished assignment deleted from Firestore successfully.");
+                } catch (e) { console.error("Error deleting finished assignment: ", e); }
+            },
+
+            // Bookmark CRUD (existing)
+            addBookmark: async (name, url, icon) => {
+                if (!db || !userId || !isAuthReady) { console.error("Firestore not initialized for persistence."); return; }
+                try {
+                    await addDoc(collection(db, getCollectionPath('bookmarks')), {
+                        name: name,
+                        url: url,
+                        icon: icon,
+                    });
+                    console.log("Bookmark added to Firestore successfully.");
+                } catch (e) { console.error("Error adding bookmark: ", e); }
+            },
+            deleteBookmark: async (id) => {
+                if (!db || !userId || !isAuthReady) { console.error("Firestore not initialized for persistence."); return; }
+                try {
+                    await deleteDoc(doc(db, getCollectionPath('bookmarks'), id));
+                    console.log("Bookmark deleted from Firestore successfully.");
+                } catch (e) { console.error("Error deleting bookmark: ", e); }
+            },
+
+            // Background CRUD (NEW)
+            addBackground: async (base64String, fileName) => {
+                if (!db || !userId || !isAuthReady) { console.error("Firestore not initialized for persistence."); return; }
+                try {
+                    await addDoc(collection(db, getCollectionPath('backgrounds')), {
+                        base64: base64String, // The image data
+                        name: fileName,
+                        uploadedAt: new Date().toISOString()
+                    });
+                    console.log(`Background '${fileName}' added to Firestore successfully.`);
+                } catch (e) { console.error("Error adding background: ", e); }
+            },
+            deleteBackground: async (id) => {
+                if (!db || !userId || !isAuthReady) { console.error("Firestore not initialized for persistence."); return; }
+                try {
+                    await deleteDoc(doc(db, getCollectionPath('backgrounds'), id));
+                    console.log("Background deleted from Firestore successfully.");
+                } catch (e) { console.error("Error deleting background: ", e); }
+            },
+        };
+
+        initFirebase();
+    </script>
+
+    <script>
+        // --- Custom Background Image Array ---
+        let USER_BACKGROUNDS = [];
+        // Use localStorage to persist the ID of the currently selected background
+        const CURRENT_BG_KEY = 'currentBackgroundId';
+        let currentBackgroundId = localStorage.getItem(CURRENT_BG_KEY) || null;
+        let backgroundContainer;
+
+        /** Sets the user's available backgrounds array. */
+        window.setUserBackgrounds = (newBackgrounds) => {
+            USER_BACKGROUNDS = newBackgrounds;
+            
+            // Check if the current ID is still valid, if not, pick the first one.
+            const isCurrentValid = USER_BACKGROUNDS.some(bg => bg.id === currentBackgroundId);
+            if (!isCurrentValid && USER_BACKGROUNDS.length > 0) {
+                 // Set the first background as the default if the stored ID is invalid/deleted
+                 currentBackgroundId = USER_BACKGROUNDS[0].id;
+                 localStorage.setItem(CURRENT_BG_KEY, currentBackgroundId);
+            } else if (USER_BACKGROUNDS.length === 0) {
+                 currentBackgroundId = null;
+                 localStorage.removeItem(CURRENT_BG_KEY);
+            }
+            
+            // Update the display with the determined current background
+            changeBackground(currentBackgroundId);
+        }
+
+        /** Sets the current background to the one matching the given ID. */
+        const changeBackground = (backgroundId) => {
+            if (!backgroundContainer) {
+                backgroundContainer = document.getElementById('background-container');
+            }
+            
+            // Find the background object
+            const selectedBackground = USER_BACKGROUNDS.find(bg => bg.id === backgroundId);
+
+            if (selectedBackground) {
+                // Set as current and save to local storage
+                currentBackgroundId = selectedBackground.id;
+                localStorage.setItem(CURRENT_BG_KEY, currentBackgroundId);
+
+                // Set the CSS background to the Base64 string
+                backgroundContainer.style.backgroundImage = `url('${selectedBackground.base64}')`;
+            } else {
+                // Fallback if no backgrounds are available
+                currentBackgroundId = null;
+                localStorage.removeItem(CURRENT_BG_KEY);
+                // NEW: Use light fallback background for the new theme
+                backgroundContainer.style.backgroundImage = `url('data:image/svg+xml,%3Csvg xmlns=\\'http://www.w3.org/2000/svg\\' viewBox=\\'0 0 1 1\\'%3E%3Crect width=\\'1\\' height=\\'1\\' fill=\\'%23fcfcfc\\'/%3E%3C/svg%3E')`; 
+            }
+        };
+
+        /** Renders the gallery content inside the modal. */
+        window.renderBackgroundGallery = (userBackgrounds) => {
+            const galleryContainer = document.getElementById('background-gallery-grid');
+            galleryContainer.innerHTML = ''; // Clear gallery
+
+            if (userBackgrounds.length === 0) {
+                 // MODIFIED: text-dark-tertiary
+                 galleryContainer.innerHTML = '<p class="text-dark-tertiary text-center col-span-full">No backgrounds uploaded yet. Use the form below to add one!</p>';
+                 return;
+            }
+
+            userBackgrounds.forEach(bg => {
+                const isSelected = bg.id === currentBackgroundId;
+                const item = document.createElement('div');
+                item.className = 'relative group';
+                item.innerHTML = `
+                    <div class="background-thumbnail rounded-xl overflow-hidden shadow-lg border-2" 
+                         style="background-image: url('${bg.base64}');"
+                         data-bg-id="${bg.id}"
+                         title="Click to select: ${bg.name}">
+                         </div>
+                    <span class="absolute top-2 left-2 px-2 py-1 bg-dark-primary/70 text-white text-xs rounded-full opacity-80">${bg.name}</span>
+                    <button onclick="window.db.deleteBackground('${bg.id}')"
+                            class="absolute top-2 right-2 bg-red-500 text-white rounded-full p-1 shadow-md hover:bg-red-600 transition-opacity opacity-0 group-hover:opacity-100"
+                            title="Delete Background">
+                        <span data-lucide="x" class="w-4 h-4 icon-dark-primary"></span>
+                    </button>
+                `;
+
+                // Add click listener to select background
+                item.querySelector('.background-thumbnail').addEventListener('click', (e) => {
+                    const id = e.currentTarget.getAttribute('data-bg-id');
+                    changeBackground(id); // Set as current
+                    
+                    // Update visual selection in the gallery immediately
+                    document.querySelectorAll('.background-thumbnail').forEach(el => el.classList.remove('selected'));
+                    e.currentTarget.classList.add('selected');
+                });
+
+                // Set the 'selected' class if this is the currently active background
+                if (isSelected) {
+                    item.querySelector('.background-thumbnail').classList.add('selected');
+                }
+                
+                galleryContainer.appendChild(item);
+            });
+            lucide.createIcons(); // Initialize icons
+        }
+        // --- END Custom Background Logic ---
+
+
+        // --- Mock Data and Configuration ---
+
+        // Mock Assignments for fallback
+        let MOCK_ASSIGNMENTS = [];
+        let MOCK_FINISHED_ASSIGNMENTS = [ // NEW MOCK FINISHED LIST
+            { id: 'mockf1', title: 'Old Project Report (Mock)', deadline: new Date(new Date().getTime() - (24 * 60 * 60 * 1000)), completedAt: new Date(new Date().getTime() - (12 * 60 * 60 * 1000)), notes: 'Completed ahead of schedule' }
+        ];
+
+        const getMockAssignments = () => {
+            if (MOCK_ASSIGNMENTS.length === 0) {
+                const now = new Date();
+                const tomorrow = new Date(now.getTime() + (24 * 60 * 60 * 1000));
+                const nextWeek = new Date(now.getTime() + (7 * 24 * 60 * 60 * 1000));
+                MOCK_ASSIGNMENTS = [
+                    // Ensure mock deadlines are in the future for display
+                    { id: 'mock1', title: 'Database Design Exam (Mock)', deadline: tomorrow, createdAt: new Date(), notes: 'Focus on ER diagrams.' },
+                    { id: 'mock2', title: 'Physics Lab Report (Mock)', deadline: nextWeek, createdAt: new Date(), notes: 'Remember to attach photos.' },
+                ];
+            }
+            return MOCK_ASSIGNMENTS;
+        };
+
+        // Mock Bookmarks for fallback
+        let MOCK_BOOKMARKS = [
+            { id: 'bm1', name: "Gemini", url: "https://gemini.google.com/", icon: "sparkles" },
+            { id: 'bm2', name: "GitHub", url: "https://github.com/", icon: "code" },
+            { id: 'bm4', name: "Mail", url: "https://mail.google.com/", icon: "mail" },
+        ];
+        
+        // Mock Backgrounds for fallback (Simple placeholder)
+        let MOCK_BACKGROUNDS = [
+            { id: 'bg1', name: 'Mock Sunset', base64: 'https://placehold.co/1920x1080/1e3a8a/bfdbfe?text=MOCK+BACKGROUND' }
+        ];
+
+        // --- MCAST Links Data (New Section) ---
+        const MCAST_LINKS = [
+            // General Links
+            { name: "UoM VLE", url: "https://accounts.um.edu.mt/sign-in/go/vle/my/", icon: "school" },
+        ];
+        // --- END MCAST Links Data ---
+
+
+        // --- Timetable Data (NEW SECTION) ---
+        const TIMETABLE = {
+            // Each day has an array of schedule items, ordered by start time
+            Monday: [
+                { start: "09:00", end: "11:00", title: "Journalism Studies", location: "MAKS 313" },
+                { start: "11:00", end: "14:00", title: "BREAK", location: null },
+                { start: "14:00", end: "16:00", title: "Sociology of Island Life", location: "LC 116" },
+                { start: "16:00", end: "17:00", title: "Writing for the Media", location: "GateWay Hall B2" },
+                { start: "17:00", end: "23:59", title: "END OF DAY", location: null },
+            ],
+            Tuesday: [
+                { start: "09:00", end: "11:00", title: "Urban Society & Culture", location: "CH9411" },
+                { start: "11:00", end: "23:59", title: "END OF DAY", location: null },
+            ],
+            Wednesday: [
+                { start: "00:00", end: "14:00", title: "FREE DAY / Independent Study", location: null },
+                { start: "14:00", end: "16:00", title: "Film Studies", location: "Francis Ebejer Hall" },
+                { start: "16:00", end: "23:59", title: "END OF DAY", location: null },
+            ],
+            Thursday: [
+                { start: "09:00", end: "14:00", title: "FREE DAY / Independent Study", location: null },
+                { start: "14:00", end: "16:00", title: "Family Life", location: "Gateway Hall D1" },
+                { start: "16:00", end: "23:59", title: "END OF DAY", location: null },
+            ],
+            Friday: [
+                { start: "09:00", end: "10:00", title: "Marketing Communications", location: "Francis Ebejer Hall" },
+                { start: "10:00", end: "17:00", title: "BREAK", location: null },
+                { start: "17:00", end: "19:00", title: "New Media & Social World", location: "Francis Ebejer Hall" },
+                { start: "19:00", end: "23:59", title: "END OF DAY", location: null },
+            ],
+            Saturday: [
+                { start: "00:00", end: "23:59", title: "WEEKEND", location: null },
+            ],
+            Sunday: [
+                { start: "00:00", end: "23:59", title: "WEEKEND", location: null },
+            ]
+        };
+        const DAYS_OF_WEEK = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+        let nextLessonInterval;
+
+        // Function to convert "H:MM" to a total minutes from midnight
+        const timeToMinutes = (time) => {
+            const [h, m] = time.split(':').map(Number);
+            return h * 60 + m;
+        }
+
+        // Function to find the next scheduled event
+        const getNextScheduleItem = () => {
+            const now = new Date();
+            const dayIndex = now.getDay();
+            const currentDayName = DAYS_OF_WEEK[dayIndex];
+            const nowMinutes = now.getHours() * 60 + now.getMinutes();
+
+            // 1. Check today's schedule
+            let todaySchedule = TIMETABLE[currentDayName];
+            
+            // Filter out items that have already passed
+            // We need to check if we are currently *in* a lesson or break
+            let currentItem = todaySchedule.find(item => 
+                 timeToMinutes(item.start) <= nowMinutes && timeToMinutes(item.end) > nowMinutes
+            );
+
+            if (currentItem && currentItem.title !== "END OF DAY" && currentItem.title !== "WEEKEND") {
+                // If currently in a lesson/break, the next item is the one that starts right after it
+                 let nextItem = todaySchedule.find(item => timeToMinutes(item.start) === timeToMinutes(currentItem.end));
+                 
+                 // If there's an immediate next item (e.g., break -> lesson) we show the *current* activity with a countdown to the *start* of the *next* activity.
+                 if (nextItem) {
+                     return {
+                        ...currentItem, // Return the current item details
+                        day: currentDayName,
+                        isCurrent: true, 
+                        // Details of the *next* item
+                        nextTitle: nextItem.title,
+                        nextLocation: nextItem.location,
+                        nextStart: nextItem.start,
+                        nextEnd: nextItem.end,
+                        remainingMinutes: timeToMinutes(currentItem.end) - nowMinutes, // Countdown to end of current activity
+                        remainingSeconds: (timeToMinutes(currentItem.end) * 60) - (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()), // Countdown to end in seconds
+                    };
+                 }
+                 
+                 // If currentItem is the last activity of the day (e.g., Systems Programming 11:30-13:00 followed by END OF DAY)
+                 // Then we fall through to look for the next event, which will be the next day's first lesson.
+            }
+
+
+            // Find the next item that hasn't started yet
+            let nextItem = todaySchedule.find(item => timeToMinutes(item.start) > nowMinutes);
+
+            if (nextItem && nextItem.title !== "END OF DAY") {
+                // Found a lesson or break for today (which is NOT the current activity)
+                return {
+                    ...nextItem,
+                    day: currentDayName,
+                    remainingMinutes: timeToMinutes(nextItem.start) - nowMinutes,
+                    remainingSeconds: (timeToMinutes(nextItem.start) * 60) - (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()), // Countdown to start in seconds
+                    isCurrent: false
+                };
+            }
+
+            // 2. If nothing is left today (or it's weekend/after END OF DAY), find the first lesson of the next day.
+            for (let i = 1; i <= 7; i++) {
+                const nextDayIndex = (dayIndex + i) % 7;
+                const nextDayName = DAYS_OF_WEEK[nextDayIndex];
+                const nextDaySchedule = TIMETABLE[nextDayName]; // Corrected to use nextDayName
+                
+                // Find the first scheduled event that isn't a weekend or end-of-day marker
+                const firstEvent = nextDaySchedule.find(item => 
+                    item.title !== "END OF DAY" &&
+                    item.title !== "WEEKEND"
+                );
+
+                if (firstEvent) {
+                     // Calculate time until next day's midnight + time until lesson start
+                     let remainingDaySeconds = (24 * 60 * 60) - (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()); // Seconds until midnight tonight
+                     let totalSeconds = remainingDaySeconds;
+
+                     // Add seconds for each full day in between (i-1 because we calculated the current day's remainder)
+                     for(let j = 1; j < i; j++) {
+                         totalSeconds += 24 * 60 * 60;
+                     }
+                     
+                     // Add the seconds from midnight of the next day until the lesson starts
+                     totalSeconds += timeToMinutes(firstEvent.start) * 60;
+                     
+                     return {
+                        ...firstEvent,
+                        day: nextDayName,
+                        remainingMinutes: Math.ceil(totalSeconds / 60), // Keep for backward compatibility/quick check
+                        remainingSeconds: totalSeconds, // Use total seconds for accurate display
+                        isNextDay: true
+                    };
+                }
+            }
+            
+            // Fallback for an unlikely scenario
+            return { title: "Schedule Error", start: null, end: null, location: null, remainingMinutes: 0, remainingSeconds: 0 };
+        };
+
+        // Function to render the schedule widget
+        const renderScheduleWidget = () => {
+            const widgetEl = document.getElementById('next-lesson-widget');
+            if (!widgetEl) return;
+
+            const nextItem = getNextScheduleItem();
+            
+            // Extract properties. Use 'title', 'start', 'end', 'location' for the activity being displayed.
+            let { title, start, end, location, remainingSeconds, day, isNextDay, isCurrent, nextTitle } = nextItem; 
+            
+            // Handle the countdown - Use remainingSeconds for accuracy
+            const totalSeconds = remainingSeconds;
+            const days = Math.floor(totalSeconds / (60 * 60 * 24));
+            const hours = Math.floor((totalSeconds % (60 * 60 * 24)) / (60 * 60));
+            const minutes = Math.floor((totalSeconds % (60 * 60)) / 60);
+            const seconds = totalSeconds % 60; // seconds are still calculated for accuracy, but hidden from display
+
+            let countdownHTML;
+            let icon = "calendar";
+            // Use bright, high-contrast colors for status against a light background
+            let statusClass = "text-blue-600"; 
+            let subText = `<span class="text-dark-secondary">Next Up:</span> <span class="font-bold text-dark-primary">${title}</span>`; 
+            let timeRangeToDisplay = '';
+            let locationPrefix = 'Location: ';
+
+
+            if (isCurrent && totalSeconds > 0) {
+                 // If currently in an activity, display that activity and count down to its end time
+                 
+                 statusClass = title === "BREAK" ? "text-green-600" : "text-purple-600";
+                 icon = title === "BREAK" ? "coffee" : "hourglass";
+                 
+                 // Display the current activity as the main title
+                 subText = `<span class="text-dark-secondary">Currently in:</span> <span class="font-bold text-dark-primary">${title}</span>`;
+                 
+                 // MODIFIED: REMOVED SECONDS
+                 countdownHTML = `<span class="font-bold">${hours}</span>h <span class="font-bold">${minutes}</span>m left`;
+
+                 // Display the current lesson's duration and location
+                 timeRangeToDisplay = `${start} - ${end}`;
+                 // Location is already correct (location of the current activity)
+
+            } else if (days > 0) {
+                // If more than a day away (i.e., next day's first lesson)
+                // MODIFIED: REMOVED SECONDS
+                countdownHTML = `<span class="font-bold">${days}</span>d <span class="font-bold">${hours}</span>h <span class="font-bold">${minutes}</span>m`;
+                icon = "calendar-check";
+                statusClass = "text-yellow-700";
+                subText = `<span class="text-dark-secondary">First Lesson:</span> <span class="font-bold text-dark-primary">${title}</span> (${day})`;
+                timeRangeToDisplay = `${start} - ${end}`;
+            } else if (totalSeconds > 0) {
+                // If less than a day away (today's next lesson/break)
+                // MODIFIED: REMOVED SECONDS
+                countdownHTML = `<span class="font-bold">${hours}</span>h <span class="font-bold">${minutes}</span>m`;
+                if (title === "BREAK") {
+                    icon = "coffee";
+                    statusClass = "text-green-600";
+                } else {
+                    icon = "clock";
+                    statusClass = "text-blue-600";
+                }
+                timeRangeToDisplay = `${start} - ${end}`;
+            } else {
+                // End of all scheduled activities or error/countdown expired
+                countdownHTML = "Finished";
+                icon = "sun";
+                statusClass = "text-dark-tertiary";
+                subText = `<span class="text-dark-secondary">Classes are over. Enjoy your evening!</span>`;
+                location = '';
+            }
+
+            // MODIFIED: Replaced all text-white/x and text-shadow-outline with new dark classes and light border
+            widgetEl.innerHTML = `
+                <div class="flex justify-between items-center w-full">
+                    <div class="flex items-center">
+                        <span data-lucide="${icon}" class="w-5 h-5 mr-2 ${statusClass} icon-dark-primary"></span>
+                        <p class="text-sm text-dark-secondary">${subText}</p>
+                    </div>
+                    <p class="text-sm font-semibold ${statusClass} text-dark-primary">${countdownHTML}</p>
+                </div>
+                <div class="flex justify-between items-center w-full mt-1 border-t border-dark-tertiary/20 pt-1">
+                    <p class="text-xs text-dark-tertiary">${timeRangeToDisplay}</p>
+                    <p class="text-xs text-dark-tertiary">${location ? locationPrefix + location : ''}</p>
+                </div>
+            `;
+
+            lucide.createIcons(); // Re-initialize icons
+        };
+        // --- END Timetable Data and Logic ---
+
+
+        // --- State Management ---
+        let assignments = [];
+        let finishedAssignments = []; // NEW
+        let bookmarks = []; 
+        let countdownInterval;
+        // NEW: State for assignment modal
+        let isEditMode = false;
+        let currentAssignmentId = null;
+
+
+        // --- Mock Data Setup (Called if Firestore is unavailable) ---
+        window.setupMockData = () => {
+            // Load mock bookmarks
+            bookmarks = MOCK_BOOKMARKS;
+            window.renderBookmarks(bookmarks);
+
+            // Load mock assignments 
+            assignments = getMockAssignments();
+            window.renderAssignments(assignments);
+            
+            // Load mock finished assignments (NEW)
+            window.renderFinishedAssignments(MOCK_FINISHED_ASSIGNMENTS);
+
+            // Load mock backgrounds
+            window.setUserBackgrounds(MOCK_BACKGROUNDS);
+            window.renderBackgroundGallery(MOCK_BACKGROUNDS); // RENDER GALLERY
+            
+            // Render MCAST links
+            window.renderMCASTLinks();
+            
+            // Render Timetable Widget
+            renderScheduleWidget();
+            if (nextLessonInterval) {
+                clearInterval(nextLessonInterval);
+            }
+            // MODIFIED: Update every second for accuracy (1000ms)
+            nextLessonInterval = setInterval(renderScheduleWidget, 1000); 
+
+            // Override global DB functions to only handle local state for mock mode
+            window.db = {
+                // Assignments Mock
+                addAssignment: (title, deadlineDate, notes = '') => {
+                    const newAssignment = { 
+                        id: crypto.randomUUID(), 
+                        title: `${title} (Mock)`, 
+                        deadline: deadlineDate, 
+                        createdAt: new Date(), 
+                        notes: notes // Pass notes
+                    };
+                    assignments.push(newAssignment);
+                    assignments.sort((a, b) => (a.deadline || 0) - (b.deadline || 0));
+                    window.renderAssignments(assignments);
+                    console.warn("MOCK MODE: Assignment added locally, but will NOT persist on refresh.");
+                },
+                // NEW: Update Assignment Mock (now accepts notes)
+                updateAssignment: (id, title, deadlineDate, notes = '') => {
+                    const index = assignments.findIndex(a => a.id === id);
+                    if (index !== -1) {
+                        assignments[index].title = `${title} (Mock Updated)`;
+                        assignments[index].deadline = deadlineDate;
+                        assignments[index].notes = notes; // Update notes
+                        assignments[index].updatedAt = new Date();
+                        assignments.sort((a, b) => (a.deadline || 0) - (b.deadline || 0));
+                        window.renderAssignments(assignments);
+                        console.warn(`MOCK MODE: Assignment '${id}' updated locally (not persistent).`);
+                    }
+                },
+                deleteAssignment: (id) => {
+                    assignments = assignments.filter(a => a.id !== id);
+                    window.renderAssignments(assignments);
+                    console.warn("MOCK MODE: Assignment deleted locally.");
+                },
+                
+                // NEW: Finished Assignments Mock
+                addFinishedAssignment: (assignmentData) => {
+                    // Remove from active mock list
+                    assignments = assignments.filter(a => a.id !== assignmentData.id);
+                    // Add to finished mock list
+                    const finishedItem = { ...assignmentData, completedAt: new Date() };
+                    MOCK_FINISHED_ASSIGNMENTS.unshift(finishedItem); // Add to front
+                    // Re-render both
+                    window.renderAssignments(assignments);
+                    window.renderFinishedAssignments(MOCK_FINISHED_ASSIGNMENTS);
+                    console.warn("MOCK MODE: Assignment marked as done locally.");
+                },
+                deleteFinishedAssignment: (id) => {
+                    MOCK_FINISHED_ASSIGNMENTS = MOCK_FINISHED_ASSIGNMENTS.filter(a => a.id !== id);
+                    window.renderFinishedAssignments(MOCK_FINISHED_ASSIGNMENTS);
+                    console.warn("MOCK MODE: Finished assignment deleted locally.");
+                },
+
+                // Bookmark CRUD (Mock)
+                addBookmark: (name, url, icon) => {
+                    const newBookmark = { id: crypto.randomUUID(), name: name, url: url, icon: icon };
+                    bookmarks.push(newBookmark);
+                    window.renderBookmarks(bookmarks);
+                    console.warn(`MOCK MODE: Bookmark '${name}' added locally (not persistent).`);
+                },
+                deleteBookmark: (id) => {
+                    bookmarks = bookmarks.filter(b => b.id !== id);
+                    window.renderBookmarks(bookmarks);
+                    console.warn("MOCK MODE: Bookmark deleted locally.");
+                },
+
+                // Backgrounds Mock
+                addBackground: (base64String, fileName) => {
+                    const newBackground = { id: crypto.randomUUID(), name: fileName, base64: base64String };
+                    MOCK_BACKGROUNDS.push(newBackground);
+                    window.setUserBackgrounds(MOCK_BACKGROUNDS);
+                    window.renderBackgroundGallery(MOCK_BACKGROUNDS);
+                    console.warn(`MOCK MODE: Background '${fileName}' added locally (not persistent).`);
+                },
+                deleteBackground: (id) => {
+                    MOCK_BACKGROUNDS = MOCK_BACKGROUNDS.filter(b => b.id !== id);
+                    window.setUserBackgrounds(MOCK_BACKGROUNDS);
+                    window.renderBackgroundGallery(MOCK_BACKGROUNDS);
+                    console.warn("MOCK MODE: Background deleted locally.");
+                }
+            };
+        };
+
+
+        // --- Utility Functions ---
+
+        /** Pads a number with a leading zero if it's less than 10. */
+        const padZero = (num) => String(Math.floor(num)).padStart(2, '0');
+
+        /** Converts milliseconds into a countdown object {d, h, m, s} */
+        const getTimeRemaining = (endTime) => {
+            const total = endTime - new Date();
+            const seconds = padZero((total / 1000) % 60);
+            const minutes = padZero((total / (1000 * 60)) % 60);
+            const hours = padZero((total / (1000 * 60 * 60)) % 24);
+            const days = padZero(total / (1000 * 60 * 60 * 24));
+
+            return { total, days, hours, minutes, seconds };
+        };
+
+        /** Converts a File object to a Base64 string. */
+        const fileToBase64 = (file) => {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = error => reject(error);
+            });
+        };
+        
+        /** Extracts the base domain from a full URL. */
+        const getBaseDomain = (url) => {
+            try {
+                // Ensure URL has a protocol for parsing, add https if missing
+                const safeUrl = url.startsWith('http') ? url : `https://${url}`;
+                const domain = new URL(safeUrl).hostname;
+                // Remove 'www.' prefix if present
+                return domain.startsWith('www.') ? domain.substring(4) : domain;
+            } catch (e) {
+                console.error("Invalid URL for domain extraction:", url);
+                return null;
+            }
+        };
+        
+
+        // --- Core Assignment Logic ---
+
+        /** Handles the logic for marking an assignment as complete. (NEW) */
+        window.handleAssignmentDone = (id) => {
+            const assignment = assignments.find(a => a.id === id);
+            if (!assignment) return;
+            
+            // Pass the assignment data to the DB function to move it
+            window.db.addFinishedAssignment({
+                id: assignment.id,
+                title: assignment.title,
+                // Ensure deadline is an ISO string before saving
+                deadline: assignment.deadline instanceof Date ? assignment.deadline.toISOString() : assignment.deadline,
+                notes: assignment.notes || '' // Include notes
+            });
+        };
+        
+        /** Handles the logic for deleting an active assignment (the 'X' button). */
+        window.handleAssignmentDelete = (id) => {
+             window.db.deleteAssignment(id);
+        };
+
+
+        // --- Rendering Functions (MODIFIED: target="_blank" removed, colors updated) ---
+
+        /** Renders the MCAST links list. */
+        window.renderMCASTLinks = (newLinks) => {
+            const container = document.getElementById('mcast-link-list');
+            
+            container.innerHTML = MCAST_LINKS.map(link => `
+                <div class="mcast-link-item-wrap relative flex items-center group">
+                    <a href="${link.url}" 
+                       rel="noopener noreferrer"
+                       title="${link.name}"
+                       class="mcast-link-item block w-full text-left p-3 pr-4 rounded-xl bg-white/70 text-dark-primary hover:bg-white/90 backdrop-blur-sm transition-all duration-300">
+                        <span data-lucide="${link.icon || 'link'}" class="inline-block w-4 h-4 mr-2 icon-dark-primary"></span>
+                        ${link.name}
+                    </a>
+                </div>
+            `).join('');
+            lucide.createIcons(); // Initialize icons
+        };
+
+        /** Renders the bookmarks from Firestore (or Mock Data). */
+        window.renderBookmarks = (newBookmarks) => {
+            bookmarks = newBookmarks;
+            const container = document.getElementById('bookmark-container');
+            container.innerHTML = bookmarks.map(b => {
+                const domain = getBaseDomain(b.url);
+                const faviconUrl = domain ? `https://s2.googleusercontent.com/s2/favicons?domain=${domain}&sz=64` : null;
+
+                // Determine content of the bookmark tile
+                const iconContent = faviconUrl 
+                    ? `<img src="${faviconUrl}" alt="${b.name} Favicon" class="bookmark-favicon" onerror="this.outerHTML='<span data-lucide=${b.icon || 'link'} class=\\'w-6 h-6 icon-dark-primary\\'></span>'"/>`
+                    : `<span data-lucide="${b.icon || 'link'}" class="w-6 h-6 icon-dark-primary"></span>`;
+
+
+                return `
+                <div class="bookmark-item-wrap relative">
+                    <a href="${b.url}" rel="noopener noreferrer" title="${b.name}"
+                        class="bookmark-icon flex flex-col items-center justify-center w-16 h-16 sm:w-20 sm:h-20 bg-white/70 border border-white/90 rounded-2xl hover:border-blue-400">
+                        ${iconContent}
+                        <span class="text-xs text-dark-secondary mt-1 truncate max-w-full">${b.name}</span>
+                    </a>
+                    <button onclick="window.db.deleteBookmark('${b.id}')"
+                            class="delete-btn absolute top-[-5px] right-[-5px] w-6 h-6 flex items-center justify-center bg-dark-primary/20 text-dark-primary rounded-full p-0.5 shadow-md hover:bg-dark-primary/30 transition-colors">
+                        <span data-lucide="x" class="w-3 h-3 icon-dark-primary"></span>
+                    </button>
+                </div>
+                `;
+            }).join('');
+
+            // Add the 'Add Bookmark' button at the end
+            container.innerHTML += `
+                <button id="open-bookmark-modal-btn"
+                        class="flex flex-col items-center justify-center w-16 h-16 sm:w-20 sm:h-20 bg-white/50 border border-white/70 rounded-2xl text-dark-tertiary hover:text-dark-primary hover:border-blue-500 transition-all duration-300"
+                        title="Add New Bookmark">
+                    <span data-lucide="plus" class="w-8 h-8 icon-dark-primary"></span>
+                    <span class="text-xs mt-1">Add</span>
+                </button>
+            `;
+            
+            // Re-attach event listener for the new button
+            document.getElementById('open-bookmark-modal-btn')?.addEventListener('click', openBookmarkModal);
+
+            lucide.createIcons();
+        };
+
+        /** Renders the assignment list and manages the countdown timer. */
+        window.renderAssignments = (newAssignments) => {
+            assignments = newAssignments;
+            const list = document.getElementById('assignment-list');
+            list.innerHTML = ''; // Clear existing list
+
+            if (assignments.length === 0) {
+                // MODIFIED: text-dark-tertiary
+                list.innerHTML = '<p class="text-dark-tertiary text-center mt-4">No upcoming assignments. Add one!</p>';
+            }
+
+            assignments.forEach(assignment => {
+                // Ensure deadline is a Date object before calculating
+                const deadlineDate = assignment.deadline instanceof Date ? assignment.deadline : new Date(assignment.deadline);
+
+                // START: MODIFICATION FOR DD/MM/YYYY FORMAT
+                const day = String(deadlineDate.getDate()).padStart(2, '0');
+                const month = String(deadlineDate.getMonth() + 1).padStart(2, '0');
+                const year = deadlineDate.getFullYear();
+                const formattedDate = `${day}/${month}/${year}`; // European format (dd/mm/yyyy)
+                // END: MODIFICATION FOR DD/MM/YYYY FORMAT
+
+                // Get the ISO date for the date input in the modal (for editing)
+                const deadlineISO = deadlineDate.toISOString().split('T')[0]; // YYYY-MM-DD for input type="date"
+                
+                // MODIFIED: Text colors for countdown
+                const countdownHTML = `
+                    <div id="countdown-${assignment.id}" class="text-xs font-mono text-yellow-700 mt-1">
+                        Calculating...
+                    </div>
+                `;
+                // MODIFIED: Container colors and ADDED FUNCTIONALITY HOOK
+                const itemWrap = document.createElement('div');
+                itemWrap.id = `assignment-item-wrap-${assignment.id}`;
+                itemWrap.className = 'relative mb-3 group'; 
+                
+                itemWrap.innerHTML = `
+                    <div id="assignment-item-${assignment.id}" 
+                        class="assignment-item flex justify-between items-center p-3 rounded-lg bg-white/70 backdrop-blur-sm shadow-md transition-all duration-300 hover:bg-white/90 cursor-pointer" 
+                        data-id="${assignment.id}"
+                        onclick="window.openAssignmentDetailModal(
+                            '${assignment.id}', 
+                            '${assignment.title.replace(/'/g, "\\'")}', 
+                            '${deadlineISO}',
+                            '${(assignment.notes || '').replace(/'/g, "\\'")}'
+                        )">
+                        
+                        <div class="flex-grow pr-4">
+                            <p class="text-sm font-semibold text-dark-primary">${assignment.title}</p>
+                            <p class="text-xs text-dark-secondary">${formattedDate}</p>
+                            ${countdownHTML}
+                        </div>
+                        
+                        <div class="flex items-center space-x-1">
+                            <button onclick="event.stopPropagation(); window.handleAssignmentDone('${assignment.id}')" 
+                                    class="done-btn p-1 text-green-600 hover:text-green-700 rounded-full transition-colors" 
+                                    title="Mark as Done">
+                                <span data-lucide="check" class="w-4 h-4 icon-dark-primary"></span>
+                            </button>
+                            
+                            <button onclick="event.stopPropagation(); window.handleAssignmentDelete('${assignment.id}')"
+                                    class="delete-btn p-1 text-red-500 hover:text-red-700 rounded-full transition-colors" 
+                                    title="Delete Assignment">
+                                <span data-lucide="x" class="w-4 h-4 icon-dark-primary"></span>
+                            </button>
+                        </div>
+                    </div>
+                `;
+                list.appendChild(itemWrap);
+            });
+
+            // Re-create lucide icons for the new elements
+            lucide.createIcons();
+
+            // Clear previous interval and start a new one
+            if (countdownInterval) {
+                clearInterval(countdownInterval);
+            }
+            countdownInterval = setInterval(updateCountdowns, 1000);
+        };
+
+        /** Renders the list of finished assignments. (NEW) */
+        window.renderFinishedAssignments = (newFinished) => {
+            finishedAssignments = newFinished;
+            const list = document.getElementById('assignment-list-finished');
+            const toggleBtn = document.getElementById('toggle-finished-assignments-btn');
+            const chevronIcon = toggleBtn ? toggleBtn.querySelector('span[data-lucide="chevron-down"]') : null;
+            const btnTextSpan = document.getElementById('finished-assignments-count');
+            
+            list.innerHTML = ''; // Clear existing list
+
+            if (finishedAssignments.length === 0) {
+                btnTextSpan.textContent = "Finished Assignments (0)";
+                toggleBtn.disabled = true;
+                list.innerHTML = '<p class="text-dark-tertiary text-center mt-4 text-sm">No finished assignments recorded.</p>';
+                return;
+            }
+
+            toggleBtn.disabled = false;
+            btnTextSpan.textContent = `Finished Assignments (${finishedAssignments.length})`;
+
+            finishedAssignments.forEach(assignment => {
+                const deadlineDate = assignment.deadline instanceof Date ? assignment.deadline : new Date(assignment.deadline);
+                const completedAtDate = assignment.completedAt instanceof Date ? assignment.completedAt : new Date(assignment.completedAt);
+
+                // START: MODIFICATION FOR DD/MM/YYYY FORMAT
+                const day = String(deadlineDate.getDate()).padStart(2, '0');
+                const month = String(deadlineDate.getMonth() + 1).padStart(2, '0');
+                const year = deadlineDate.getFullYear();
+                const formattedDate = `${day}/${month}/${year}`; // European format (dd/mm/yyyy)
+
+                const completedDay = String(completedAtDate.getDate()).padStart(2, '0');
+                const completedMonth = String(completedAtDate.getMonth() + 1).padStart(2, '0');
+                const completedYear = completedAtDate.getFullYear();
+                // END: MODIFICATION FOR DD/MM/YYYY FORMAT
+
+                // MODIFIED: Container colors for light theme
+                const item = document.createElement('div');
+                // Add 'group' for hover effect on the delete button
+                item.className = 'finished-item-wrap flex justify-between items-center p-3 rounded-lg bg-white/50 backdrop-blur-sm shadow-sm transition-all duration-300 group'; 
+                
+                // Completion date format adjustment
+                const formattedCompletedDate = `${completedDay}/${completedMonth}/${completedYear}`;
+
+                // MODIFIED: Inner structure to use flex-col for dates
+                item.innerHTML = `
+                    <div class="finished-assignment-details min-w-0 flex-grow flex items-center justify-between">
+                        <span class="title text-sm text-dark-secondary font-semibold truncate flex-shrink">
+                            ${assignment.title}
+                        </span>
+                        
+                        <div class="flex flex-col items-end text-right text-dark-tertiary text-xs ml-4 flex-shrink-0">
+                            <span class="date">Due: ${formattedDate}</span>
+                            <span class="date mt-0.5">Completed: ${formattedCompletedDate}</span>
+                        </div>
+                    </div>
+                    <button onclick="window.db.deleteFinishedAssignment('${assignment.id}')" 
+                            class="delete-btn p-1 ml-2 flex-shrink-0 text-red-500 hover:text-red-700 rounded-full transition-colors opacity-0 group-hover:opacity-100" 
+                            title="Delete Finished Assignment">
+                        <span data-lucide="x" class="w-4 h-4 icon-dark-primary"></span>
+                    </button>
+                `;
+                list.appendChild(item);
+            });
+            
+            // Ensure chevron icon state is correct based on list visibility
+            if (chevronIcon && list) {
+                if (list.classList.contains('hidden')) {
+                    chevronIcon.classList.remove('rotate-180');
+                } else {
+                    chevronIcon.classList.add('rotate-180');
+                }
+            }
+            
+            lucide.createIcons();
+        };
+
+        /** Updates the countdown display for all assignments every second. */
+        const updateCountdowns = () => {
+            assignments.forEach(assignment => {
+                const countdownEl = document.getElementById(`countdown-${assignment.id}`);
+                if (!countdownEl) return;
+
+                // Ensure deadline is a Date object for calculation
+                const deadlineDate = assignment.deadline instanceof Date ? assignment.deadline : new Date(assignment.deadline);
+                const remaining = getTimeRemaining(deadlineDate);
+
+                if (remaining.total <= 0) {
+                    // MODIFIED: Text colors
+                    countdownEl.innerHTML = '<span class="text-red-600">!! DEADLINE PASSED !!</span>';
+                    return;
+                }
+
+                // Keep seconds in the display for assignments
+                countdownEl.innerHTML = `
+                    <span class="font-bold">${remaining.days}</span>d
+                    <span class="font-bold">${remaining.hours}</span>h
+                    <span class="font-bold">${remaining.minutes}</span>m
+                    <span class="font-bold">${remaining.seconds}</span>s
+                `;
+            });
+        };
+
+
+        // --- Modal Logic (MODIFIED for light theme modals and edit functionality) ---
+
+        // Assignment Modal UI function (Opens the modal without changing state)
+        const openAssignmentModalUI = () => document.getElementById('assignment-modal').classList.remove('opacity-0', 'pointer-events-none');
+        
+        // NEW FUNCTIONALITY: Opens the modal for editing
+        window.openAssignmentDetailModal = (id, title, deadlineISO, notes) => {
+            currentAssignmentId = id;
+            isEditMode = true;
+            
+            document.getElementById('assignment-title').value = title;
+            document.getElementById('assignment-deadline').value = deadlineISO;
+            document.getElementById('assignment-notes').value = notes; // NEW: Populate notes
+            
+            // Update button text and title for Edit mode
+            document.querySelector('#assignment-modal h3').textContent = 'Edit Assignment';
+            document.getElementById('add-assignment-btn').textContent = 'Save Changes';
+
+            openAssignmentModalUI();
+        };
+
+        const closeAssignmentModal = () => {
+            document.getElementById('assignment-modal').classList.add('opacity-0', 'pointer-events-none');
+            
+            // Reset modal state to Add mode when closing
+            document.querySelector('#assignment-modal h3').textContent = 'Add New Assignment';
+            document.getElementById('add-assignment-btn').textContent = 'Save Assignment';
+            
+            // Clear inputs and reset state flags
+            document.getElementById('assignment-title').value = '';
+            document.getElementById('assignment-deadline').value = '';
+            document.getElementById('assignment-notes').value = ''; // NEW: Clear notes
+            currentAssignmentId = null;
+            isEditMode = false;
+        };
+
+        // Refactored handler for both Add and Edit
+        const handleAddOrEditAssignment = async () => {
+            const titleInput = document.getElementById('assignment-title');
+            const deadlineInput = document.getElementById('assignment-deadline');
+            const notesInput = document.getElementById('assignment-notes'); // NEW: Get notes input
+
+            const title = titleInput.value.trim();
+            const deadline = deadlineInput.value;
+            const notes = notesInput.value.trim(); // NEW: Get notes value
+
+            if (!title || !deadline) {
+                console.error('Validation Error: Please enter both a title and a deadline.');
+                return;
+            }
+
+            try {
+                const deadlineDate = new Date(deadline);
+                
+                if (isEditMode && currentAssignmentId) {
+                    // EDIT/UPDATE LOGIC
+                    await window.db.updateAssignment(currentAssignmentId, title, deadlineDate, notes); // Pass notes
+                    console.log("Assignment updated successfully.");
+                } else {
+                    // EXISTING: ADD LOGIC
+                    await window.db.addAssignment(title, deadlineDate, notes); // Pass notes
+                    console.log("Assignment added to Firestore successfully.");
+                }
+
+                // Reset form and close modal
+                closeAssignmentModal();
+            } catch (error) {
+                console.error("Failed to save assignment:", error);
+            }
+        };
+        // Use a single function for the button's listener logic
+        const handleAddAssignment = handleAddOrEditAssignment; 
+
+        // Bookmark Modal
+        const openBookmarkModal = () => document.getElementById('bookmark-modal').classList.remove('opacity-0', 'pointer-events-none');
+        const closeBookmarkModal = () => document.getElementById('bookmark-modal').classList.add('opacity-0', 'pointer-events-none');
+
+        const handleAddBookmark = async () => {
+            const nameInput = document.getElementById('bookmark-name');
+            const urlInput = document.getElementById('bookmark-url');
+            // const iconInput = document.getElementById('bookmark-icon'); // Removed input
+            
+            const name = nameInput.value.trim();
+            const url = urlInput.value.trim();
+            // Hardcode icon to 'link' since the input was removed
+            const icon = 'link'; 
+
+            if (!name || !url) {
+                console.error('Validation Error: Please enter both a name and a URL.');
+                return;
+            }
+
+            try {
+                const validUrl = url.startsWith('http://') || url.startsWith('https://') || url.startsWith('file:///') ? url : `https://${url}`;
+
+                await window.db.addBookmark(name, validUrl, icon);
+
+                // Reset form and close modal
+                nameInput.value = '';
+                urlInput.value = '';
+                // iconInput.value = ''; // Removed icon input reset
+                closeBookmarkModal();
+            } catch (error) {
+                console.error("Failed to add bookmark:", error);
+            }
+        };
+        
+        // Background Gallery Modal (NEW)
+        const openBackgroundGalleryModal = () => document.getElementById('background-gallery-modal').classList.remove('opacity-0', 'pointer-events-none');
+        const closeBackgroundGalleryModal = () => {
+            document.getElementById('background-image-file').value = ''; // Reset file input
+            document.getElementById('background-gallery-modal').classList.add('opacity-0', 'pointer-events-none');
+        }
+
+        const handleAddBackground = async () => {
+            const fileInput = document.getElementById('background-image-file');
+            const file = fileInput.files[0];
+            const fileNameInput = document.getElementById('background-file-name');
+            const fileName = fileNameInput.value.trim() || file.name;
+
+
+            if (!file) {
+                console.error('Validation Error: Please select an image file.');
+                return;
+            }
+            
+            // Basic file validation
+            if (!file.type.startsWith('image/')) {
+                 console.error('Validation Error: File must be an image.');
+                 return;
+            }
+            
+            // Limit file size to 2MB to prevent Firebase document size limit issues (1 MiB limit is the hard limit)
+            const MAX_SIZE = 2 * 1024 * 1024; // 2MB
+            if (file.size > MAX_SIZE) {
+                alert('Image file is too large. Please upload an image under 2MB.');
+                return;
+            }
+
+            try {
+                // Convert to Base64
+                const base64String = await fileToBase64(file);
+
+                // Save to Firestore
+                await window.db.addBackground(base64String, fileName);
+
+                // Clear form inputs
+                fileInput.value = ''; 
+                fileNameInput.value = '';
+                // The listener will automatically re-render the gallery and update the background.
+            } catch (error) {
+                console.error("Failed to add background:", error);
+                alert("An error occurred during upload. Check console for details.");
+            }
+        };
+
+
+        // --- Main Initialization ---
+        window.onload = () => {
+            // Initial background will be set by the listener fetching user data, 
+            // but we call changeBackground(null) here to set the initial fallback image.
+            changeBackground(currentBackgroundId); 
+            
+            // Explicitly call renderMCASTLinks to ensure the list displays immediately
+            window.renderMCASTLinks(); 
+            
+            // Timetable Widget Update (Run now and set interval)
+            renderScheduleWidget(); 
+            if (nextLessonInterval) {
+                clearInterval(nextLessonInterval);
+            }
+            // Update every second for accuracy (1000ms)
+            nextLessonInterval = setInterval(renderScheduleWidget, 1000); 
+
+            // REMOVED: setVersionTimestamp();
+
+            // Attach event listeners for Assignment Modal
+            // MODIFIED: Use the new UI function for opening the modal for adding
+            document.getElementById('open-assignment-modal-btn').addEventListener('click', openAssignmentModalUI);
+            document.getElementById('close-assignment-modal-btn').addEventListener('click', closeAssignmentModal);
+            // The handler now supports both Add and Edit based on state
+            document.getElementById('add-assignment-btn').addEventListener('click', handleAddAssignment); 
+            
+            // Attach event listeners for Bookmark Modal
+            document.getElementById('bookmark-container').addEventListener('click', (e) => {
+                // Use closest to check if the click target or any parent is the add button
+                if (e.target.closest('#open-bookmark-modal-btn')) {
+                    openBookmarkModal();
+                }
+            });
+            document.getElementById('close-bookmark-modal-btn').addEventListener('click', closeBookmarkModal);
+            document.getElementById('add-bookmark-btn').addEventListener('click', handleAddBookmark);
+
+            // Attach event listeners for Background Gallery Modal (NEW)
+            document.getElementById('open-background-gallery-btn').addEventListener('click', openBackgroundGalleryModal);
+            document.getElementById('close-background-gallery-modal-btn').addEventListener('click', closeBackgroundGalleryModal);
+            document.getElementById('add-background-btn').addEventListener('click', handleAddBackground);
+
+
+            // Search functionality
+            document.getElementById('search-form').addEventListener('submit', (e) => {
+                e.preventDefault();
+                const query = document.getElementById('search-input').value;
+                if (query) {
+                    // Check if it looks like a URL starting with a domain (e.g., google.com or https://google.com)
+                    if (query.includes('.') && !query.includes(' ')) {
+                        let url = query.startsWith('http') ? query : `https://${query}`;
+                        window.location.href = url;
+                    } else {
+                        // Use Google search URL
+                        window.location.href = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+                    }
+                }
+            });
+
+            // The data listeners are now initiated inside initFirebase on successful authentication.
+        };
+
+    </script>
+</head>
+<body class="bg-white">
+
+    <div id="background-container"></div>
+
+    <div class="scroll-container flex justify-center items-start lg:items-center">
+
+        <div class="grid grid-cols-1 lg:grid-cols-7 gap-8 w-full max-w-7xl pt-16 lg:pt-0 pb-16">
+
+            <div class="lg:col-span-2 p-6 bg-white/70 rounded-3xl backdrop-blur-xl shadow-2xl h-fit border border-gray-100">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-xl font-bold text-dark-primary flex items-center">
+                        <span data-lucide="graduation-cap" class="w-6 h-6 mr-2 text-blue-600 icon-dark-primary"></span>
+                        UoM Links
+                    </h2>
+                    </div>
+                <div id="mcast-link-list" class="space-y-3">
+                    </div>
+            </div>
+
+            <div class="lg:col-span-3 flex flex-col items-center justify-center p-6 space-y-8">
+                
+                <div id="next-lesson-widget" class="w-full max-w-2xl p-4 bg-white/70 rounded-xl backdrop-blur-md shadow-lg border border-gray-100">
+                    <p class="text-dark-tertiary text-center">Loading timetable...</p>
+                </div>
+                <form id="search-form" class="w-full max-w-2xl relative">
+                    <input type="text" id="search-input" placeholder="Search Google or type a URL..."
+                            class="w-full p-4 pl-12 bg-white/90 text-dark-primary border-2 border-transparent focus:border-blue-500 rounded-full shadow-lg outline-none transition-all duration-300"
+                            autofocus>
+                    <span data-lucide="search" class="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-dark-secondary icon-dark-primary"></span>
+                    <button type="submit" class="hidden">Search</button>
+                </form>
+
+                <div id="bookmark-container" class="grid grid-cols-4 gap-4 sm:gap-6 p-4 rounded-3xl bg-white/50 backdrop-blur-md shadow-inner max-w-2xl w-full border border-gray-100">
+                    </div>
+
+                <div class="flex justify-center w-full">
+                    <button id="open-background-gallery-btn"
+                            class="flex items-center text-sm text-dark-secondary hover:text-dark-primary transition-colors p-3 rounded-full bg-white/70 hover:bg-white/90 border border-gray-100">
+                        <span data-lucide="gallery-vertical" class="w-4 h-4 mr-2 icon-dark-primary"></span>
+                        Manage Backgrounds
+                    </button>
+                </div>
+
+                <p id="user-id-display" class="text-xs text-dark-tertiary mt-4"></p>
+            </div>
+
+            <div class="lg:col-span-2 p-6 bg-white/70 rounded-3xl backdrop-blur-xl shadow-2xl h-fit border border-gray-100">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-xl font-bold text-dark-primary flex items-center">
+                        <span data-lucide="calendar-days" class="w-6 h-6 mr-2 text-green-600 icon-dark-primary"></span>
+                        Upcoming Assignments
+                    </h2>
+                    <button id="open-assignment-modal-btn"
+                            class="w-8 h-8 flex items-center justify-center bg-green-500 text-white rounded-full shadow-lg hover:bg-green-600 transition-transform transform hover:scale-110"
+                            title="Add New Assignment">
+                        <span data-lucide="plus" class="w-5 h-5 icon-dark-primary"></span>
+                    </button>
+                </div>
+
+                <div id="assignment-list" class="space-y-3 mb-8">
+                    </div>
+
+                <div class="pt-4 border-t border-gray-300">
+                    <button id="toggle-finished-assignments-btn"
+                            class="w-full mt-4 flex items-center justify-center p-2 rounded-xl bg-gray-100/70 text-dark-secondary hover:bg-gray-200/90 hover:text-dark-primary transition-colors"
+                            title="Show/Hide Completed Assignments"
+                            onclick="document.getElementById('assignment-list-finished').classList.toggle('hidden'); this.querySelector('span:first-child').classList.toggle('rotate-180')">
+                        <span data-lucide="chevrons-down" class="w-4 h-4 mr-2 transition-transform transform"></span>
+                        <span id="finished-assignments-count">Finished Assignments (0)</span>
+                    </button>
+                    
+                    <div id="assignment-list-finished" class="space-y-3 pt-4 hidden">
+                        </div>
+                </div>
+                
+            </div>
+        </div>
+    </div>
+
+    <div id="assignment-modal"
+         class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 transition-opacity duration-300 opacity-0 pointer-events-none z-50">
+        <div class="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-md border border-gray-200 transform transition-all duration-300 scale-100">
+            <h3 class="text-2xl font-bold text-dark-primary mb-6">Add New Assignment</h3>
+            <div class="space-y-4">
+                <input type="text" id="assignment-title" placeholder="Assignment Title (e.g., Final Paper)"
+                        class="w-full p-3 rounded-xl bg-gray-100 text-dark-primary placeholder-dark-tertiary border border-gray-300 focus:border-blue-500 outline-none transition-colors">
+                <input type="date" id="assignment-deadline"
+                        class="w-full p-3 rounded-xl bg-gray-100 text-dark-primary border border-gray-300 focus:border-blue-500 outline-none transition-colors">
+                <textarea id="assignment-notes" placeholder="Notes (optional)" rows="3"
+                    class="w-full p-3 rounded-xl bg-gray-100 text-dark-primary placeholder-dark-tertiary border border-gray-300 focus:border-blue-500 outline-none transition-colors"></textarea>
+            </div>
+            <div class="flex justify-end space-x-4 mt-6">
+                <button id="close-assignment-modal-btn"
+                        class="px-5 py-2 rounded-xl bg-gray-300 text-dark-primary hover:bg-gray-400 transition-colors">
+                    Cancel
+                </button>
+                <button id="add-assignment-btn"
+                        class="px-5 py-2 rounded-xl bg-blue-500 text-white font-semibold hover:bg-blue-600 transition-colors">
+                    Save Assignment
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="bookmark-modal"
+         class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 transition-opacity duration-300 opacity-0 pointer-events-none z-50">
+        <div class="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-md border border-gray-200 transform transition-all duration-300 scale-100">
+            <h3 class="text-2xl font-bold text-dark-primary mb-6">Add New Bookmark</h3>
+            <div class="space-y-4">
+                <input type="text" id="bookmark-name" placeholder="Name (e.g., Google News)"
+                        class="w-full p-3 rounded-xl bg-gray-100 text-dark-primary placeholder-dark-tertiary border border-gray-300 focus:border-blue-500 outline-none transition-colors">
+                <input type="url" id="bookmark-url" placeholder="URL (e.g., https://news.google.com)"
+                        class="w-full p-3 rounded-xl bg-gray-100 text-dark-primary placeholder-dark-tertiary border border-gray-300 focus:border-blue-500 outline-none transition-colors">
+                </div>
+            <div class="flex justify-end space-x-4 mt-6">
+                <button id="close-bookmark-modal-btn"
+                        class="px-5 py-2 rounded-xl bg-gray-300 text-dark-primary hover:bg-gray-400 transition-colors">
+                    Cancel
+                </button>
+                <button id="add-bookmark-btn"
+                        class="px-5 py-2 rounded-xl bg-blue-500 text-white font-semibold hover:bg-blue-600 transition-colors">
+                    Save Bookmark
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="background-gallery-modal"
+         class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 transition-opacity duration-300 opacity-0 pointer-events-none z-50">
+        <div class="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-4xl border border-gray-200 transform transition-all duration-300 scale-100 h-5/6 flex flex-col">
+            <h3 class="text-2xl font-bold text-dark-primary mb-6 flex items-center">
+                <span data-lucide="gallery-vertical" class="w-6 h-6 mr-2 icon-dark-primary"></span>
+                Manage Your Backgrounds
+            </h3>
+
+            <div class="flex-grow overflow-y-auto pr-2 mb-6 space-y-4">
+                <h4 class="text-lg font-semibold text-dark-primary mb-3 border-b border-gray-300 pb-2">Select or Delete</h4>
+                <div id="background-gallery-grid" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+                    <p class="text-dark-tertiary text-center col-span-full">Loading backgrounds...</p>
+                </div>
+                
+                <h4 class="text-lg font-semibold text-dark-primary mb-3 pt-6 border-t border-gray-300 pt-4">Add New Background</h4>
+                
+                <div class="space-y-4">
+                     <p class="text-sm text-dark-secondary">Upload an image file (e.g., JPG, PNG). Max size: 2MB.</p>
+                    <input type="text" id="background-file-name" placeholder="Optional: Give this background a name"
+                            class="w-full p-3 rounded-xl bg-gray-100 text-dark-primary placeholder-dark-tertiary border border-gray-300 focus:border-blue-500 outline-none transition-colors">
+                    <input type="file" id="background-image-file" accept="image/*"
+                            class="w-full text-dark-secondary file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-500 file:text-white hover:file:bg-blue-600">
+                </div>
+            </div>
+
+            <div class="flex justify-end space-x-4 mt-auto border-t border-gray-300 pt-4">
+                 <button id="close-background-gallery-modal-btn"
+                        class="px-5 py-2 rounded-xl bg-gray-300 text-dark-primary hover:bg-gray-400 transition-colors">
+                    Close Gallery
+                </button>
+                <button id="add-background-btn"
+                        class="px-5 py-2 rounded-xl bg-green-500 text-white font-semibold hover:bg-green-600 transition-colors">
+                    Upload Image
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <div id="version-timestamp" class="text-dark-secondary">Last Update 04/11/2025 - 13:09</div>
+    </body>
+
+</html>
