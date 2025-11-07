@@ -1591,10 +1591,16 @@
                     <p class="text-white/50 text-center">Loading timetable...</p>
                 </div>
                 <form id="search-form" class="w-full max-w-2xl relative">
-                    <input type="text" id="search-input" placeholder="Search Google or type a URL..."
-                            class="w-full p-4 pl-12 bg-white/90 text-gray-900 border-2 border-transparent focus:border-blue-500 rounded-full shadow-lg outline-none transition-all duration-300"
-                            autofocus>
+                    <input type="text" id="search-input" placeholder="Search Google or type a URL..." 
+                        class="w-full p-4 pl-12 pr-12 bg-white/90 text-gray-900 border-2 border-transparent focus:border-blue-500 rounded-full shadow-lg outline-none transition-all duration-300" 
+                        autofocus>
                     <span data-lucide="search" class="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-500"></span>
+                    
+                    <a href="https://www.google.com/maps" target="_blank" rel="noopener noreferrer" title="Google Maps"
+                    class="absolute right-4 top-1/2 transform -translate-y-1/2 text-gray-500 hover:text-blue-600 transition-colors">
+                        <span data-lucide="map-pin" class="w-5 h-5"></span>
+                    </a>
+                    
                     <button type="submit" class="hidden">Search</button>
                 </form>
 
@@ -1766,8 +1772,9 @@
         </div>
     </div>
     
-    <div id="version-timestamp">Last Update 03/11/2025 - 23:11</div>
+    <div id="version-timestamp">Last Update 07/11/2025 - 11:11</div>
     </body>
 
 
 </html>
+
