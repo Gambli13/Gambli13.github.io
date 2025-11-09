@@ -170,270 +170,267 @@
         const LOCAL_AUTH_TOKEN = null; 
     </script>
     <script type="module">
-        // --- USING v12.4.0 CDN LINKS AS REQUESTED ---
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-auth.js";
-        // setDoc is imported for updates
-        import { getFirestore, doc, addDoc, deleteDoc, setDoc, onSnapshot, collection, setLogLevel } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore.js";
-        // --- END v12.4.0 IMPORTS ---
+    // --- USING v12.4.0 CDN LINKS AS REQUESTED ---
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js";
+    import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-auth.js";
+    // setDoc is imported for updates
+    import { getFirestore, doc, addDoc, deleteDoc, setDoc, onSnapshot, collection, setLogLevel } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore.js";
+    // --- END v12.4.0 IMPORTS ---
 
-        // Determine environment: Use Canvas globals OR local fallbacks
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        
-        // FIX: Accessing LOCAL_FIREBASE_CONFIG_JSON and LOCAL_AUTH_TOKEN which are now globally defined.
-        const configSource = typeof __firebase_config !== 'undefined' ? __firebase_config : LOCAL_FIREBASE_CONFIG_JSON;
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : LOCAL_AUTH_TOKEN;
+    // Define the mandatory static ID requested by the user
+    const STATIC_OVERRIDE_USER_ID = 'zNllEXqmHpaqNZffrgOhyPrSfBB3';
 
-        // Parse the configuration
-        const firebaseConfig = JSON.parse(configSource);
-        
-        let db, auth, userId = null;
-        let isAuthReady = false;
+    // Determine environment: Use Canvas globals OR local fallbacks
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+    
+    // FIX: Accessing LOCAL_FIREBASE_CONFIG_JSON and LOCAL_AUTH_TOKEN which are now globally defined.
+    const configSource = typeof __firebase_config !== 'undefined' ? __firebase_config : LOCAL_FIREBASE_CONFIG_JSON;
+    const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : LOCAL_AUTH_TOKEN;
 
-        setLogLevel('debug'); // Enable Firestore logging
+    // Parse the configuration
+    const firebaseConfig = JSON.parse(configSource);
+    
+    let db, auth, userId = null;
+    let isAuthReady = false;
 
-        // Utility function to get the current collection path for private user data
-        const getCollectionPath = (collectionName) => `/artifacts/${appId}/users/${userId}/${collectionName}_index`;
+    setLogLevel('debug'); // Enable Firestore logging
 
-        // Initialize Firebase and Authentication
-        const initFirebase = async () => {
-            try {
-                // Initialize app with the provided configuration
-                const app = initializeApp(firebaseConfig);
-                db = getFirestore(app);
-                auth = getAuth(app);
+    // Utility function to get the current collection path for private user data
+    const getCollectionPath = (collectionName) => `/artifacts/${appId}/users/${userId}/${collectionName}_index`;
+
+    // Initialize Firebase and Authentication
+    const initFirebase = async () => {
+        try {
+            // Initialize app with the provided configuration
+            const app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+            
+            // Sign in with custom token if available, otherwise sign in anonymously.
+            // Authentication is still performed, but the resulting user.uid is ignored for pathing.
+            if (initialAuthToken) {
+                console.log("Attempting sign-in with custom token...");
+                await signInWithCustomToken(auth, initialAuthToken).catch(e => {
+                    console.warn("Custom token sign-in failed, trying anonymous:", e);
+                    return signInAnonymously(auth);
+                });
+            } else {
+                console.log("Attempting anonymous sign-in...");
+                await signInAnonymously(auth);
+            }
+
+            // Wait for auth state to be resolved
+            onAuthStateChanged(auth, (user) => {
+                // *** MODIFICATION START: FORCE STATIC USER ID ***
+                userId = STATIC_OVERRIDE_USER_ID; 
+                isAuthReady = true;
+                console.log("Firebase Auth Ready. FORCING User ID for pathing to:", userId);
+
+                // Once ready, start loading persistent data
+                setupDataListeners();
+                // Display the user ID for debugging/sharing purposes
+                document.getElementById('user-id-display').textContent = `Static User ID: ${userId}`;
+                // *** MODIFICATION END ***
+            });
+
+        } catch (error) {
+            // This catch block is only for core initialization failures (e.g., bad config, network)
+            console.error("Firebase Initialization failed, falling back to Mock Mode:", error);
+            window.setupMockData(); 
+        }
+    };
+
+    // --- Data Listener Setup (Only runs if Firestore is successfully initialized) ---
+    const setupDataListeners = () => {
+        if (!db || !userId) { 
+            console.error("Cannot set up listeners: DB not initialized or User ID missing.");
+            return;
+        }
+
+        // 1. Assignments Listener (Active)
+        onSnapshot(collection(db, getCollectionPath('assignments')), (snapshot) => {
+            const assignments = [];
+            snapshot.forEach(doc => {
+                const data = doc.data();
+                let deadlineDate;
                 
-                // Sign in with custom token if available, otherwise sign in anonymously.
-                if (initialAuthToken) {
-                    console.log("Attempting sign-in with custom token...");
-                    await signInWithCustomToken(auth, initialAuthToken).catch(e => {
-                        console.warn("Custom token sign-in failed, trying anonymous:", e);
-                        return signInAnonymously(auth);
-                    });
+                if (data.deadline && typeof data.deadline.toDate === 'function') {
+                    deadlineDate = data.deadline.toDate();
+                } else if (data.deadline) {
+                    deadlineDate = new Date(data.deadline);
                 } else {
-                    console.log("Attempting anonymous sign-in...");
-                    await signInAnonymously(auth);
+                    deadlineDate = null;
                 }
+                assignments.push({ id: doc.id, ...data, deadline: deadlineDate });
+            });
+            
+            assignments.sort((a, b) => (a.deadline || 0) - (b.deadline || 0));
+            window.renderAssignments(assignments);
+        }, (error) => {
+            console.error("Error fetching assignments:", error);
+        });
 
-                // Wait for auth state to be resolved
-                onAuthStateChanged(auth, (user) => {
-                    if (user && user.uid) {
-                        userId = user.uid; 
-                        isAuthReady = true;
-                        console.log("Firebase Auth Ready. User ID:", userId);
-
-                        // Once ready, start loading persistent data
-                        setupDataListeners();
-                        // Display the user ID for debugging/sharing purposes
-                        document.getElementById('user-id-display').textContent = `User ID: ${userId}`;
-                    } else {
-                         // If onAuthStateChanged resolves without a user (e.g., failed to get a custom/anonymous token)
-                         // Set a temporary user ID and call mock data as a last resort.
-                         userId = crypto.randomUUID();
-                         isAuthReady = true;
-                         console.log("Auth state resolved without persistent user. Activating Mock Mode via listener fallback.");
-                         window.setupMockData();
-                    }
-                });
-
-            } catch (error) {
-                // This catch block is only for core initialization failures (e.g., bad config, network)
-                console.error("Firebase Initialization failed, falling back to Mock Mode:", error);
-                window.setupMockData(); 
-            }
-        };
-
-        // --- Data Listener Setup (Only runs if Firestore is successfully initialized) ---
-        const setupDataListeners = () => {
-            if (!db || !userId) { 
-                console.error("Cannot set up listeners: DB not initialized or User ID missing.");
-                return;
-            }
-
-            // 1. Assignments Listener (Active)
-            onSnapshot(collection(db, getCollectionPath('assignments')), (snapshot) => {
-                const assignments = [];
-                snapshot.forEach(doc => {
-                    const data = doc.data();
-                    let deadlineDate;
-                    
-                    if (data.deadline && typeof data.deadline.toDate === 'function') {
-                        deadlineDate = data.deadline.toDate();
-                    } else if (data.deadline) {
-                        deadlineDate = new Date(data.deadline);
-                    } else {
-                        deadlineDate = null;
-                    }
-                    assignments.push({ id: doc.id, ...data, deadline: deadlineDate });
-                });
+        // 2. Bookmarks Listener
+        onSnapshot(collection(db, getCollectionPath('bookmarks')), (snapshot) => {
+            const bookmarks = [];
+            snapshot.forEach(doc => {
+                bookmarks.push({ id: doc.id, ...doc.data() });
+            });
+            window.renderBookmarks(bookmarks);
+        }, (error) => {
+            console.error("Error fetching bookmarks:", error);
+        });
+        
+        // 3. Backgrounds Listener (NEW)
+        onSnapshot(collection(db, getCollectionPath('backgrounds')), (snapshot) => {
+            const userBackgrounds = [];
+            snapshot.forEach(doc => {
+                // Only push the Base64 string for use in the CSS
+                userBackgrounds.push({ id: doc.id, name: doc.data().name || 'Background', base64: doc.data().base64 });
+            });
+            window.setUserBackgrounds(userBackgrounds);
+            window.renderBackgroundGallery(userBackgrounds); // RENDER GALLERY
+        }, (error) => {
+            console.error("Error fetching backgrounds:", error);
+        });
+        
+        // 4. Finished Assignments Listener (NEW)
+        onSnapshot(collection(db, getCollectionPath('finished_assignments')), (snapshot) => {
+            const finished = [];
+            snapshot.forEach(doc => {
+                const data = doc.data();
+                // Date conversion for deadline
+                let deadlineDate;
+                if (data.deadline && typeof data.deadline.toDate === 'function') {
+                    deadlineDate = data.deadline.toDate();
+                } else if (data.deadline) {
+                    deadlineDate = new Date(data.deadline);
+                } else {
+                    deadlineDate = null;
+                }
                 
-                assignments.sort((a, b) => (a.deadline || 0) - (b.deadline || 0));
-                window.renderAssignments(assignments);
-            }, (error) => {
-                console.error("Error fetching assignments:", error);
-            });
+                // Date conversion for completedAt
+                let completedAtDate = data.completedAt ? new Date(data.completedAt) : new Date();
 
-            // 2. Bookmarks Listener
-            onSnapshot(collection(db, getCollectionPath('bookmarks')), (snapshot) => {
-                const bookmarks = [];
-                snapshot.forEach(doc => {
-                    bookmarks.push({ id: doc.id, ...doc.data() });
+                finished.push({ id: doc.id, ...data, deadline: deadlineDate, completedAt: completedAtDate });
+            });
+            
+            // Sort by completedAt descending
+            finished.sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
+            window.renderFinishedAssignments(finished); // NEW RENDER CALL
+        }, (error) => {
+            console.error("Error fetching finished assignments:", error);
+        });
+    };
+
+    // --- Firebase Data Operations (Global Functions) ---
+    window.db = {
+        // Assignment CRUD (existing)
+        addAssignment: async (title, deadlineDate) => {
+            if (!db || !userId || !isAuthReady) { console.error("Firestore not initialized for persistence."); return; }
+            try {
+                await addDoc(collection(db, getCollectionPath('assignments')), {
+                    title: title,
+                    // Storing date as ISO string is better for cross-platform/language consistency in Firestore
+                    deadline: deadlineDate.toISOString(), 
+                    createdAt: new Date().toISOString(),
+                    notes: '' // Initialize notes field
                 });
-                window.renderBookmarks(bookmarks);
-            }, (error) => {
-                console.error("Error fetching bookmarks:", error);
-            });
-            
-            // 3. Backgrounds Listener (NEW)
-            onSnapshot(collection(db, getCollectionPath('backgrounds')), (snapshot) => {
-                const userBackgrounds = [];
-                snapshot.forEach(doc => {
-                    // Only push the Base64 string for use in the CSS
-                    userBackgrounds.push({ id: doc.id, name: doc.data().name || 'Background', base64: doc.data().base64 });
+                console.log("Assignment added to Firestore successfully.");
+            } catch (e) { console.error("Error adding document: ", e); }
+        },
+        
+        // NEW: Function to update an existing assignment
+        updateAssignment: async (id, title, deadlineDate, notes) => {
+            if (!db || !userId || !isAuthReady) { console.error("Firestore not initialized for persistence."); return; }
+            try {
+                // Convert date to ISO string for storage
+                const deadlineISO = deadlineDate instanceof Date && !isNaN(deadlineDate) ? deadlineDate.toISOString() : null;
+
+                await setDoc(doc(db, getCollectionPath('assignments'), id), {
+                    title: title,
+                    deadline: deadlineISO, 
+                    notes: notes || '', // Save notes field
+                }, { merge: true }); // Use merge: true to update specific fields
+                console.log(`Assignment ${id} updated in Firestore successfully.`);
+            } catch (e) { console.error("Error updating document: ", e); }
+        },
+        
+        deleteAssignment: async (id) => {
+            if (!db || !userId || !isAuthReady) { console.error("Firestore not initialized for persistence."); return; }
+            try {
+                await deleteDoc(doc(db, getCollectionPath('assignments'), id));
+                console.log("Assignment deleted from Firestore successfully.");
+            } catch (e) { console.error("Error deleting document: ", e); }
+        },
+        
+        // NEW: Function to move an active assignment to the finished collection
+        addFinishedAssignment: async (assignmentData) => {
+            if (!db || !userId || !isAuthReady) { console.error("Firestore not initialized for persistence."); return; }
+            try {
+                await addDoc(collection(db, getCollectionPath('finished_assignments')), {
+                    ...assignmentData,
+                    // Ensure deadline is stored as ISO string if it was a Date object
+                    deadline: assignmentData.deadline instanceof Date ? assignmentData.deadline.toISOString() : assignmentData.deadline,
+                    completedAt: new Date().toISOString() // Record completion time
                 });
-                window.setUserBackgrounds(userBackgrounds);
-                window.renderBackgroundGallery(userBackgrounds); // RENDER GALLERY
-            }, (error) => {
-                console.error("Error fetching backgrounds:", error);
-            });
-            
-            // 4. Finished Assignments Listener (NEW)
-            onSnapshot(collection(db, getCollectionPath('finished_assignments')), (snapshot) => {
-                const finished = [];
-                snapshot.forEach(doc => {
-                    const data = doc.data();
-                    // Date conversion for deadline
-                    let deadlineDate;
-                    if (data.deadline && typeof data.deadline.toDate === 'function') {
-                        deadlineDate = data.deadline.toDate();
-                    } else if (data.deadline) {
-                        deadlineDate = new Date(data.deadline);
-                    } else {
-                        deadlineDate = null;
-                    }
-                    
-                    // Date conversion for completedAt
-                    let completedAtDate = data.completedAt ? new Date(data.completedAt) : new Date();
+                console.log("Assignment moved to finished successfully.");
+            } catch (e) { console.error("Error adding finished document: ", e); }
+        },
 
-                    finished.push({ id: doc.id, ...data, deadline: deadlineDate, completedAt: completedAtDate });
+        // NEW: Function to delete a finished assignment (cleanup)
+        deleteFinishedAssignment: async (id) => {
+            if (!db || !userId || !isAuthReady) { console.error("Firestore not initialized for persistence."); return; }
+            try {
+                await deleteDoc(doc(db, getCollectionPath('finished_assignments'), id));
+                console.log("Finished assignment deleted from Firestore successfully.");
+            } catch (e) { console.error("Error deleting finished document: ", e); }
+        },
+
+
+        // Bookmark CRUD (existing)
+        addBookmark: async (name, url, icon) => {
+            if (!db || !userId || !isAuthReady) { console.error("Firestore not initialized for persistence."); return; }
+            try {
+                await addDoc(collection(db, getCollectionPath('bookmarks')), {
+                    name: name,
+                    url: url,
+                    icon: icon,
                 });
-                
-                // Sort by completedAt descending
-                finished.sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
-                window.renderFinishedAssignments(finished); // NEW RENDER CALL
-            }, (error) => {
-                console.error("Error fetching finished assignments:", error);
-            });
-        };
+                console.log("Bookmark added to Firestore successfully.");
+            } catch (e) { console.error("Error adding bookmark: ", e); }
+        },
+        deleteBookmark: async (id) => {
+            if (!db || !userId || !isAuthReady) { console.error("Firestore not initialized for persistence."); return; }
+            try {
+                await deleteDoc(doc(db, getCollectionPath('bookmarks'), id));
+                console.log("Bookmark deleted from Firestore successfully.");
+            } catch (e) { console.error("Error deleting bookmark: ", e); }
+        },
 
-        // --- Firebase Data Operations (Global Functions) ---
-        window.db = {
-            // Assignment CRUD (existing)
-            addAssignment: async (title, deadlineDate) => {
-                if (!db || !userId || !isAuthReady) { console.error("Firestore not initialized for persistence."); return; }
-                try {
-                    await addDoc(collection(db, getCollectionPath('assignments')), {
-                        title: title,
-                        // Storing date as ISO string is better for cross-platform/language consistency in Firestore
-                        deadline: deadlineDate.toISOString(), 
-                        createdAt: new Date().toISOString(),
-                        notes: '' // Initialize notes field
-                    });
-                    console.log("Assignment added to Firestore successfully.");
-                } catch (e) { console.error("Error adding document: ", e); }
-            },
-            
-            // NEW: Function to update an existing assignment
-            updateAssignment: async (id, title, deadlineDate, notes) => {
-                if (!db || !userId || !isAuthReady) { console.error("Firestore not initialized for persistence."); return; }
-                try {
-                    // Convert date to ISO string for storage
-                    const deadlineISO = deadlineDate instanceof Date && !isNaN(deadlineDate) ? deadlineDate.toISOString() : null;
+        // Background CRUD (NEW)
+        addBackground: async (base64String, fileName) => {
+            if (!db || !userId || !isAuthReady) { console.error("Firestore not initialized for persistence."); return; }
+            try {
+                await addDoc(collection(db, getCollectionPath('backgrounds')), {
+                    base64: base64String, // The image data
+                    name: fileName,
+                    uploadedAt: new Date().toISOString()
+                });
+                console.log(`Background '${fileName}' added to Firestore successfully.`);
+            } catch (e) { console.error("Error adding background: ", e); }
+        },
+        deleteBackground: async (id) => {
+            if (!db || !userId || !isAuthReady) { console.error("Firestore not initialized for persistence."); return; }
+            try {
+                await deleteDoc(doc(db, getCollectionPath('backgrounds'), id));
+                console.log("Background deleted from Firestore successfully.");
+            } catch (e) { console.error("Error deleting background: ", e); }
+        },
+    };
 
-                    await setDoc(doc(db, getCollectionPath('assignments'), id), {
-                        title: title,
-                        deadline: deadlineISO, 
-                        notes: notes || '', // Save notes field
-                    }, { merge: true }); // Use merge: true to update specific fields
-                    console.log(`Assignment ${id} updated in Firestore successfully.`);
-                } catch (e) { console.error("Error updating document: ", e); }
-            },
-            
-            deleteAssignment: async (id) => {
-                if (!db || !userId || !isAuthReady) { console.error("Firestore not initialized for persistence."); return; }
-                try {
-                    await deleteDoc(doc(db, getCollectionPath('assignments'), id));
-                    console.log("Assignment deleted from Firestore successfully.");
-                } catch (e) { console.error("Error deleting document: ", e); }
-            },
-            
-            // NEW: Function to move an active assignment to the finished collection
-            addFinishedAssignment: async (assignmentData) => {
-                if (!db || !userId || !isAuthReady) { console.error("Firestore not initialized for persistence."); return; }
-                try {
-                    await addDoc(collection(db, getCollectionPath('finished_assignments')), {
-                        ...assignmentData,
-                        // Ensure deadline is stored as ISO string if it was a Date object
-                        deadline: assignmentData.deadline instanceof Date ? assignmentData.deadline.toISOString() : assignmentData.deadline,
-                        completedAt: new Date().toISOString() // Record completion time
-                    });
-                    console.log("Assignment moved to finished successfully.");
-                } catch (e) { console.error("Error adding finished document: ", e); }
-            },
-
-            // NEW: Function to delete a finished assignment (cleanup)
-            deleteFinishedAssignment: async (id) => {
-                if (!db || !userId || !isAuthReady) { console.error("Firestore not initialized for persistence."); return; }
-                try {
-                    await deleteDoc(doc(db, getCollectionPath('finished_assignments'), id));
-                    console.log("Finished assignment deleted from Firestore successfully.");
-                } catch (e) { console.error("Error deleting finished document: ", e); }
-            },
-
-
-            // Bookmark CRUD (existing)
-            addBookmark: async (name, url, icon) => {
-                if (!db || !userId || !isAuthReady) { console.error("Firestore not initialized for persistence."); return; }
-                try {
-                    await addDoc(collection(db, getCollectionPath('bookmarks')), {
-                        name: name,
-                        url: url,
-                        icon: icon,
-                    });
-                    console.log("Bookmark added to Firestore successfully.");
-                } catch (e) { console.error("Error adding bookmark: ", e); }
-            },
-            deleteBookmark: async (id) => {
-                if (!db || !userId || !isAuthReady) { console.error("Firestore not initialized for persistence."); return; }
-                try {
-                    await deleteDoc(doc(db, getCollectionPath('bookmarks'), id));
-                    console.log("Bookmark deleted from Firestore successfully.");
-                } catch (e) { console.error("Error deleting bookmark: ", e); }
-            },
-
-            // Background CRUD (NEW)
-            addBackground: async (base64String, fileName) => {
-                if (!db || !userId || !isAuthReady) { console.error("Firestore not initialized for persistence."); return; }
-                try {
-                    await addDoc(collection(db, getCollectionPath('backgrounds')), {
-                        base64: base64String, // The image data
-                        name: fileName,
-                        uploadedAt: new Date().toISOString()
-                    });
-                    console.log(`Background '${fileName}' added to Firestore successfully.`);
-                } catch (e) { console.error("Error adding background: ", e); }
-            },
-            deleteBackground: async (id) => {
-                if (!db || !userId || !isAuthReady) { console.error("Firestore not initialized for persistence."); return; }
-                try {
-                    await deleteDoc(doc(db, getCollectionPath('backgrounds'), id));
-                    console.log("Background deleted from Firestore successfully.");
-                } catch (e) { console.error("Error deleting background: ", e); }
-            },
-        };
-
-        initFirebase();
-    </script>
+    initFirebase();
+</script>
 
     <script>
         // --- Custom Background Image Array ---
