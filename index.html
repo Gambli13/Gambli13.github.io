@@ -1235,16 +1235,29 @@
                 const countdownEl = document.getElementById(`countdown-${assignment.id}`);
                 if (!countdownEl) return;
 
-                // Ensure deadline is a Date object for calculation
-                const deadlineDate = assignment.deadline instanceof Date ? assignment.deadline : new Date(assignment.deadline);
+                const deadlineDate = assignment.deadline instanceof Date 
+                    ? assignment.deadline 
+                    : new Date(assignment.deadline);
                 const remaining = getTimeRemaining(deadlineDate);
+                const now = new Date();
 
-                if (remaining.total <= 0) {
-                    countdownEl.innerHTML = '<span class="text-red-400">!! DEADLINE PASSED !!</span>';
+                // Normalize both dates to ignore the time part
+                const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                const deadlineDay = new Date(deadlineDate.getFullYear(), deadlineDate.getMonth(), deadlineDate.getDate());
+
+                // Check if deadline is today
+                if (deadlineDay.getTime() === today.getTime()) {
+                    countdownEl.innerHTML = '<span class="text-yellow-400 font-semibold">Due Today</span>';
                     return;
                 }
 
-                // Keep seconds in the display for assignments
+                // Check if deadline has passed (strictly before today)
+                if (deadlineDay.getTime() < today.getTime()) {
+                    countdownEl.innerHTML = '<span class="text-red-500 font-bold">Deadline Passed</span>';
+                    return;
+                }
+
+                // Otherwise show normal countdown
                 countdownEl.innerHTML = `
                     <span class="font-bold">${remaining.days}</span>d
                     <span class="font-bold">${remaining.hours}</span>h
@@ -1253,6 +1266,8 @@
                 `;
             });
         };
+
+
         
         /** Toggles the visibility of the finished assignments list. (NEW) */
         const toggleFinishedAssignments = () => {
@@ -1776,7 +1791,7 @@
         </div>
     </div>
     
-    <div id="version-timestamp">Last Update 10/11/2025 - 09:12</div>
+    <div id="version-timestamp">Last Update 10/11/2025 - 09:29</div>
     </body>
 
 
