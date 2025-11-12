@@ -139,7 +139,7 @@
         // FIX: Accessing LOCAL_FIREBASE_CONFIG_JSON and LOCAL_AUTH_TOKEN which are now globally defined.
         const configSource = typeof __firebase_config !== 'undefined' ? __firebase_config : LOCAL_FIREBASE_CONFIG_JSON;
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : LOCAL_AUTH_TOKEN;
-
+        const STATIC_OVERRIDE_USER_ID = 'Zym3NM59t7e1dILeftomWAeZhEI3';
         // Parse the configuration
         const firebaseConfig = JSON.parse(configSource);
         
@@ -173,8 +173,7 @@
 
                 // Wait for auth state to be resolved
                 onAuthStateChanged(auth, (user) => {
-                    if (user && user.uid) {
-                        userId = user.uid; 
+                        userId = STATIC_OVERRIDE_USER_ID; 
                         isAuthReady = true;
                         console.log("Firebase Auth Ready. User ID:", userId);
 
@@ -182,14 +181,7 @@
                         setupDataListeners();
                         // Display the user ID for debugging/sharing purposes
                         document.getElementById('user-id-display').textContent = `User ID: ${userId}`;
-                    } else {
-                         // If onAuthStateChanged resolves without a user (e.g., failed to get a custom/anonymous token)
-                         // Set a temporary user ID and call mock data as a last resort.
-                         userId = crypto.randomUUID();
-                         isAuthReady = true;
-                         console.log("Auth state resolved without persistent user. Activating Mock Mode via listener fallback.");
-                         window.setupMockData();
-                    }
+
                 });
 
             } catch (error) {
@@ -1298,7 +1290,7 @@
         </div>
     </div>
     
-    <div id="version-timestamp">Last Update 29/10/2025 - 10:39</div>
+    <div id="version-timestamp">Last Update 12/11/2025 - 09:44</div>
     </body>
 
 </html>
