@@ -601,7 +601,7 @@
                 { start: "14:00", end: "23:59", title: "END OF DAY", location: null },
             ],
             Wednesday: [
-                { start: "08:00", end: "23:59", title: "FREE DAY / Independent Study", location: null },
+                { start: "08:00", end: "23:59", title: "WORK / FREE DAY", location: null },
             ],
             Thursday: [
                 { start: "10:30", end: "12:30", title: "Systems Programming", location: "ICT-B02" },
@@ -620,7 +620,7 @@
                 { start: "00:00", end: "23:59", title: "WEEKEND", location: null },
             ]
         };
-        const DAYS_OF_WEEK = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+        const DAYS_OF_WEEK = ["Sunday","Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
         let nextLessonInterval;
 
         // Function to convert "H:MM" to a total minutes from midnight
@@ -722,6 +722,8 @@
             // Fallback for an unlikely scenario
             return { title: "Schedule Error", start: null, end: null, location: null, remainingMinutes: 0, remainingSeconds: 0 };
         };
+
+        
 
         // Function to render the schedule widget
         const renderScheduleWidget = () => {
@@ -1577,6 +1579,79 @@
             // The data listeners are now initiated inside initFirebase on successful authentication.
         };
 
+/* -----------------------------------------
+   WEEKLY TIMETABLE POPUP — END OF DAY FIXED
+------------------------------------------*/
+document.addEventListener("DOMContentLoaded", () => {
+
+    const openWeeklyBtn = document.getElementById("open-weekly-timetable-btn");
+    const weeklyModal = document.getElementById("weekly-timetable-modal");
+    const closeWeeklyBtn = document.getElementById("close-weekly-timetable-btn");
+    const weeklyContent = document.getElementById("weekly-timetable-content");
+
+    function formatLesson(item, highlight) {
+        return `
+            <div class="p-3 rounded-lg ${highlight ? 'bg-purple-800/40 border border-purple-400' : 'bg-white/5'}">
+                <p class="font-semibold ${highlight ? 'text-purple-300' : 'text-blue-300'}">${item.title}</p>
+                <p class="text-white/70 text-sm">${item.start} - ${item.end}</p>
+                <p class="text-white/50 text-xs">${item.location ?? ''}</p>
+            </div>
+        `;
+    }
+
+    function renderWeeklyTimetable() {
+        const now = new Date();
+        const dayIndex = now.getDay();
+        const todayName = DAYS_OF_WEEK[dayIndex];
+        const nowMinutes = now.getHours() * 60 + now.getMinutes();
+
+        weeklyContent.innerHTML = "";
+
+        for (const day of DAYS_OF_WEEK) {
+            const lessons = TIMETABLE[day];
+
+            let html = `
+                <div class="mb-6">
+                    <h3 class="text-xl font-bold text-white mb-2">${day}</h3>
+                    <div class="space-y-2">
+            `;
+
+            lessons.forEach(item => {
+                const start = timeToMinutes(item.start);
+                const end = timeToMinutes(item.end);
+
+                // ✅ NEW FIX:
+                // HIGHLIGHT current lesson INCLUDING "END OF DAY"
+                const isCurrent =
+                    day === todayName &&
+                    nowMinutes >= start &&
+                    nowMinutes < end &&
+                    item.title !== "WEEKEND"; // Weekend still excluded
+
+                html += formatLesson(item, isCurrent);
+            });
+
+            html += "</div></div>";
+            weeklyContent.innerHTML += html;
+        }
+    }
+
+    openWeeklyBtn.addEventListener("click", () => {
+        renderWeeklyTimetable();
+        weeklyModal.classList.remove("opacity-0", "pointer-events-none");
+    });
+
+    closeWeeklyBtn.addEventListener("click", () => {
+        weeklyModal.classList.add("opacity-0", "pointer-events-none");
+    });
+
+    weeklyModal.addEventListener("click", (e) => {
+        if (e.target === weeklyModal) {
+            weeklyModal.classList.add("opacity-0", "pointer-events-none");
+        }
+    });
+});
+
     </script>
 </head>
 <body class="bg-gray-900">
@@ -1791,10 +1866,54 @@
             </div>
         </div>
     </div>
-    
+   <!-- WEEKLY TIMETABLE BUTTON (GLASS + ICON ONLY) -->
+    <button id="open-weekly-timetable-btn"
+        class="fixed bottom-5 left-5 z-50 p-3 rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition flex items-center justify-center">
+        <span data-lucide="square-menu" class="w-6 h-6 text-white"></span>
+    </button>
+
+
+    <!-- WEEKLY TIMETABLE MODAL -->
+    <div id="weekly-timetable-modal"
+        class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition duration-300 z-50">
+
+        <div class="bg-gray-900 w-full max-w-3xl p-6 rounded-2xl shadow-2xl border border-gray-700 overflow-y-auto max-h-[85vh] relative custom-scroll">
+
+            <!-- CLOSE BUTTON (always visible) -->
+            <button id="close-weekly-timetable-btn"
+                    class="absolute top-4 right-4 text-white/70 hover:text-red-400 transition"
+                    title="Close">
+                <span data-lucide="x" class="w-6 h-6"></span>
+            </button>
+
+            <h2 class="text-2xl font-bold text-blue-400 mb-4 text-center">Weekly Timetable</h2>
+
+            <div id="weekly-timetable-content" class="space-y-6"></div>
+
+        </div>
+    </div>
+
     <div id="version-timestamp">Last Update 11/11/2025 - 12:52</div>
     </body>
-
+    <style>
+    /* --------------------------
+    CUSTOM SCROLLBAR (Modal)
+    ---------------------------*/
+    .custom-scroll::-webkit-scrollbar {
+        width: 10px;
+    }
+    .custom-scroll::-webkit-scrollbar-track {
+        background: rgba(255, 255, 255, 0.08);
+        border-radius: 10px;
+    }
+    .custom-scroll::-webkit-scrollbar-thumb {
+        background: linear-gradient(180deg, #3b82f6, #9333ea);
+        border-radius: 10px;
+    }
+    .custom-scroll::-webkit-scrollbar-thumb:hover {
+        background: linear-gradient(180deg, #60a5fa, #a855f7);
+    }
+    </style>
 
 </html>
 
