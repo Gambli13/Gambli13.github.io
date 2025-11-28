@@ -199,6 +199,45 @@
         }
     };
 
+    // Utility to combine Date and optional Time for proper Date object creation (FIXED)
+    // This uses local time components to avoid timezone misinterpretation, ensuring 23:59 is 23:59 local time.
+    const createDeadlineDate = (dateString, timeString) => {
+        if (!dateString) return null;
+
+        // Default to end of day if no time is provided
+        const time = timeString || '23:59'; 
+        
+        // Parse date parts (YYYY-MM-DD)
+        const [year, month, day] = dateString.split('-').map(Number);
+        // Parse time parts (HH:MM)
+        const [hours, minutes] = time.split(':').map(Number);
+
+        // Create a new Date object using local time constructor (month is 0-indexed).
+        const deadlineDate = new Date(year, month - 1, day, hours, minutes);
+
+        if (isNaN(deadlineDate.getTime())) {
+            console.error("Invalid Date components provided.");
+            return null;
+        }
+
+        return deadlineDate;
+    };
+    
+    
+
+    // Utility to parse ISO string and return Date object
+    const parseDeadlineISO = (isoString) => {
+        if (!isoString) return null;
+        try {
+            const date = new Date(isoString);
+            return isNaN(date) ? null : date;
+        } catch (e) {
+            console.error("Error parsing deadline ISO:", e);
+            return null;
+        }
+    }
+
+
     const setupDataListeners = () => {
         if (!db || !userId) return;
 
@@ -207,17 +246,18 @@
             const assignments = [];
             snapshot.forEach(doc => {
                 const data = doc.data();
-                let deadlineDate;
-                if (data.deadline && typeof data.deadline.toDate === 'function') {
-                    deadlineDate = data.deadline.toDate();
-                } else if (data.deadline) {
-                    deadlineDate = new Date(data.deadline);
-                } else {
-                    deadlineDate = null;
-                }
-                assignments.push({ id: doc.id, ...data, deadline: deadlineDate });
+                // Determine the correct date object from stored deadline (which is an ISO string in firestore)
+                const deadlineDate = parseDeadlineISO(data.deadline);
+                
+                assignments.push({ 
+                    id: doc.id, 
+                    ...data, 
+                    // Pass the correctly parsed Date object
+                    deadline: deadlineDate 
+                });
             });
-            assignments.sort((a, b) => (a.deadline || 0) - (b.deadline || 0));
+            // Sort by the Date object
+            assignments.sort((a, b) => (a.deadline || new Date(0)) - (b.deadline || new Date(0)));
             window.renderAssignments(assignments);
         });
 
@@ -245,15 +285,9 @@
             const finished = [];
             snapshot.forEach(doc => {
                 const data = doc.data();
-                let deadlineDate;
-                if (data.deadline && typeof data.deadline.toDate === 'function') {
-                    deadlineDate = data.deadline.toDate();
-                } else if (data.deadline) {
-                    deadlineDate = new Date(data.deadline);
-                } else {
-                    deadlineDate = null;
-                }
+                let deadlineDate = parseDeadlineISO(data.deadline);
                 let completedAtDate = data.completedAt ? new Date(data.completedAt) : new Date();
+
                 finished.push({ id: doc.id, ...data, deadline: deadlineDate, completedAt: completedAtDate });
             });
             finished.sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
@@ -262,21 +296,28 @@
     };
 
     window.db = {
-        addAssignment: async (title, deadlineDate) => {
-            if (!db || !userId) return;
+        // Now accepts a date string (YYYY-MM-DD) and an optional time string (HH:MM)
+        addAssignment: async (title, dateString, timeString) => {
+            if (!db || !userId || !dateString) return;
             try {
+                const deadlineDate = createDeadlineDate(dateString, timeString);
                 await addDoc(collection(db, getCollectionPath('assignments')), {
                     title: title,
+                    // Store the combined ISO string in Firestore
                     deadline: deadlineDate.toISOString(), 
                     createdAt: new Date().toISOString(),
                     notes: '' 
                 });
             } catch (e) { console.error(e); }
         },
-        updateAssignment: async (id, title, deadlineDate, notes) => {
+        // Now accepts a date string (YYYY-MM-DD) and an optional time string (HH:MM)
+        updateAssignment: async (id, title, dateString, timeString, notes) => {
             if (!db || !userId) return;
             try {
-                const deadlineISO = deadlineDate instanceof Date && !isNaN(deadlineDate) ? deadlineDate.toISOString() : null;
+                // Combine date and time for the updated deadline ISO string
+                const deadlineDate = createDeadlineDate(dateString, timeString);
+                const deadlineISO = deadlineDate ? deadlineDate.toISOString() : null;
+                
                 await setDoc(doc(db, getCollectionPath('assignments'), id), {
                     title: title,
                     deadline: deadlineISO, 
@@ -291,8 +332,10 @@
         addFinishedAssignment: async (assignmentData) => {
             if (!db || !userId) return;
             try {
+                // assignmentData.deadline is already a Date object from the listener
                 await addDoc(collection(db, getCollectionPath('finished_assignments')), {
                     ...assignmentData,
+                    // Convert back to ISO string for storage
                     deadline: assignmentData.deadline instanceof Date ? assignmentData.deadline.toISOString() : assignmentData.deadline,
                     completedAt: new Date().toISOString()
                 });
@@ -426,11 +469,13 @@
 
             // Local Override for Mock Logic
             window.db = {
-                addAssignment: (title, deadlineDate) => {
+                addAssignment: (title, dateString, timeString) => {
+                    const time = timeString || '23:59';
+                    const deadlineDate = new Date(`${dateString}T${time}:00`);
                     assignments.push({ id: crypto.randomUUID(), title: `${title} (Mock)`, deadline: deadlineDate, createdAt: new Date(), notes: '' });
                     window.renderAssignments(assignments);
                 },
-                updateAssignment: (id, title, deadlineDate, notes) => { /* Update logic omitted for brevity in mock */ },
+                updateAssignment: (id, title, dateString, timeString, notes) => { /* Update logic omitted for brevity in mock */ },
                 deleteAssignment: (id) => {
                     assignments = assignments.filter(a => a.id !== id);
                     window.renderAssignments(assignments);
@@ -632,6 +677,19 @@
                 return domain.startsWith('www.') ? domain.substring(4) : domain;
             } catch (e) { return null; }
         };
+        
+        const formatDateForInput = (date) => {
+            if (!(date instanceof Date) || isNaN(date)) return '';
+            return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+        };
+
+        // Utility to format time for display (MODIFIED)
+        // This now explicitly returns '23:59' when it is the default, instead of hiding it.
+        const formatTimeForInput = (date) => {
+            if (!(date instanceof Date) || isNaN(date)) return '';
+            // Always return the time part for display (which will be '23:59' if defaulted)
+            return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+        };
 
         window.handleMarkAsDone = (id, elementId) => {
             const element = document.getElementById(elementId);
@@ -720,8 +778,17 @@
                 list.innerHTML = '<p class="text-white/50 text-center mt-4">No upcoming assignments. Add one!</p>';
             }
             assignments.forEach(assignment => {
-                const deadlineDate = assignment.deadline instanceof Date ? assignment.deadline : new Date(assignment.deadline);
-                const formattedDate = `${String(deadlineDate.getDate()).padStart(2, '0')}/${String(deadlineDate.getMonth() + 1).padStart(2, '0')}/${deadlineDate.getFullYear()}`;
+                const deadlineDate = assignment.deadline; // Already a Date object
+                
+                let dateDisplay = '';
+                if (deadlineDate instanceof Date && !isNaN(deadlineDate)) {
+                    const datePart = `${String(deadlineDate.getDate()).padStart(2, '0')}/${String(deadlineDate.getMonth() + 1).padStart(2, '0')}/${deadlineDate.getFullYear()}`;
+                    const timePart = formatTimeForInput(deadlineDate); // Get the time part, empty if it's the default 23:59
+                    dateDisplay = datePart + (timePart ? ` at ${timePart}` : '');
+                } else {
+                    dateDisplay = 'No Deadline';
+                }
+
                 const countdownHTML = `<div id="countdown-${assignment.id}" class="text-xs font-mono text-yellow-300 mt-1">Calculating...</div>`;
                 const itemID = `assignment-item-${assignment.id}`;
                 const item = document.createElement('div');
@@ -730,7 +797,7 @@
                 item.innerHTML = `
                     <div>
                         <p class="text-sm font-semibold text-white">${assignment.title}</p>
-                        <p class="text-xs text-white/70">${formattedDate}</p>
+                        <p class="text-xs text-white/70">${dateDisplay}</p>
                         ${countdownHTML}
                     </div>
                     <div class="flex space-x-2">
@@ -767,8 +834,12 @@
             finishedAssignments.forEach(assignment => {
                 const deadlineDate = assignment.deadline instanceof Date ? assignment.deadline : new Date(assignment.deadline);
                 const completedAtDate = assignment.completedAt instanceof Date ? assignment.completedAt : new Date(assignment.completedAt);
-                const formattedDate = `${String(deadlineDate.getDate()).padStart(2, '0')}/${String(deadlineDate.getMonth() + 1).padStart(2, '0')}/${deadlineDate.getFullYear()}`;
-                const formattedCompletedDate = `${String(completedAtDate.getDate()).padStart(2, '0')}/${String(completedAtDate.getMonth() + 1).padStart(2, '0')}/${completedAtDate.getFullYear()}`;
+                
+                const datePart = `${String(deadlineDate.getDate()).padStart(2, '0')}/${String(deadlineDate.getMonth() + 1).padStart(2, '0')}/${deadlineDate.getFullYear()}`;
+                const timePart = formatTimeForInput(deadlineDate); 
+                const formattedDate = datePart + (timePart ? ` at ${timePart}` : '');
+
+                const formattedCompletedDate = `${String(completedAtDate.getDate()).padStart(2, '0')}/${String(completedAtDate.getMonth() + 1).padStart(2, '0')}/${completedAtDate.getFullYear()} ${String(completedAtDate.getHours()).padStart(2, '0')}:${String(completedAtDate.getMinutes()).padStart(2, '0')}`;
                 
                 const item = document.createElement('div');
                 item.className = 'flex justify-between items-start p-3 rounded-lg bg-white/5 backdrop-blur-sm shadow-md transition-all duration-300 hover:bg-white/10 opacity-70 hover:opacity-100'; 
@@ -791,15 +862,32 @@
             assignments.forEach(assignment => {
                 const countdownEl = document.getElementById(`countdown-${assignment.id}`);
                 if (!countdownEl) return;
-                const deadlineDate = assignment.deadline instanceof Date ? assignment.deadline : new Date(assignment.deadline);
+                const deadlineDate = assignment.deadline; // Already a Date object
+                
+                if (!(deadlineDate instanceof Date) || isNaN(deadlineDate)) {
+                     countdownEl.innerHTML = '<span class="text-gray-400 font-semibold">No Deadline Set</span>';
+                     return;
+                }
+
                 const remaining = getTimeRemaining(deadlineDate);
                 const now = new Date();
+                
+                // Compare Date objects
+                if (deadlineDate.getTime() < now.getTime()) { 
+                    countdownEl.innerHTML = '<span class="text-red-500 font-bold">Deadline Passed</span>'; 
+                    return; 
+                }
+
+                // Check if due today (ignores time for the 'Due Today' message)
                 const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
                 const deadlineDay = new Date(deadlineDate.getFullYear(), deadlineDate.getMonth(), deadlineDate.getDate());
 
-                if (deadlineDay.getTime() === today.getTime()) { countdownEl.innerHTML = '<span class="text-green-400 font-semibold">Due Today</span>'; return; }
-                if (deadlineDay.getTime() < today.getTime()) { countdownEl.innerHTML = '<span class="text-red-500 font-bold">Deadline Passed</span>'; return; }
-
+                if (deadlineDay.getTime() === today.getTime() && deadlineDate.getTime() > now.getTime()) {
+                    countdownEl.innerHTML = '<span class="text-green-400 font-semibold">Due Today!</span>'; 
+                    return;
+                }
+                
+                // Normal countdown
                 countdownEl.innerHTML = `<span class="font-bold">${remaining.days}</span>d <span class="font-bold">${remaining.hours}</span>h <span class="font-bold">${remaining.minutes}</span>m <span class="font-bold">${remaining.seconds}</span>s`;
             });
         };
@@ -818,31 +906,65 @@
         const closeAssignmentModal = () => document.getElementById('assignment-modal').classList.add('opacity-0', 'pointer-events-none');
         const handleAddAssignment = async () => {
             const titleInput = document.getElementById('assignment-title');
-            const deadlineInput = document.getElementById('assignment-deadline');
-            if (!titleInput.value.trim() || !deadlineInput.value) return;
-            await window.db.addAssignment(titleInput.value.trim(), new Date(deadlineInput.value)); 
-            titleInput.value = ''; deadlineInput.value = ''; closeAssignmentModal();
+            const deadlineDateInput = document.getElementById('assignment-deadline-date');
+            const deadlineTimeInput = document.getElementById('assignment-deadline-time'); // New
+
+            if (!titleInput.value.trim() || !deadlineDateInput.value) return;
+
+            // Pass date string and optional time string
+            await window.db.addAssignment(
+                titleInput.value.trim(), 
+                deadlineDateInput.value, 
+                deadlineTimeInput.value || null 
+            ); 
+
+            titleInput.value = ''; 
+            deadlineDateInput.value = ''; 
+            deadlineTimeInput.value = ''; // Reset time input
+            closeAssignmentModal();
         };
 
-        let detailModal, detailIdInput, detailTitleInput, detailDeadlineInput, detailNoteInput;
-        const formatDateForInput = (date) => {
-            if (!(date instanceof Date) || isNaN(date)) return '';
-            return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-        };
+        let detailModal, detailIdInput, detailTitleInput, detailDeadlineDateInput, detailDeadlineTimeInput, detailNoteInput; // Updated names
+        
         const openAssignmentDetailModal = (assignment) => {
             detailIdInput.value = assignment.id;
             detailTitleInput.value = assignment.title;
-            detailDeadlineInput.value = formatDateForInput(assignment.deadline);
+            
+            // Extract date and time for input fields
+            if (assignment.deadline instanceof Date && !isNaN(assignment.deadline)) {
+                detailDeadlineDateInput.value = formatDateForInput(assignment.deadline);
+                detailDeadlineTimeInput.value = formatTimeForInput(assignment.deadline); // Use new formatTimeForInput
+            } else {
+                detailDeadlineDateInput.value = '';
+                detailDeadlineTimeInput.value = '';
+            }
+            
             detailNoteInput.value = assignment.notes || ''; 
             detailModal.classList.remove('opacity-0', 'pointer-events-none');
         };
         const closeAssignmentDetailModal = () => {
             detailModal.classList.add('opacity-0', 'pointer-events-none');
-            detailIdInput.value = ''; detailTitleInput.value = ''; detailDeadlineInput.value = ''; detailNoteInput.value = '';
+            detailIdInput.value = ''; 
+            detailTitleInput.value = ''; 
+            detailDeadlineDateInput.value = ''; 
+            detailDeadlineTimeInput.value = ''; // Reset time input
+            detailNoteInput.value = '';
         };
         const handleSaveDetailChanges = async () => {
-            const deadlineDate = detailDeadlineInput.value ? new Date(detailDeadlineInput.value) : null;
-            if (window.db && window.db.updateAssignment) await window.db.updateAssignment(detailIdInput.value, detailTitleInput.value.trim(), deadlineDate, detailNoteInput.value); 
+            const dateString = detailDeadlineDateInput.value;
+            const timeString = detailDeadlineTimeInput.value || null;
+            
+            if (!dateString) return; // Deadline date is mandatory if saving changes
+
+            if (window.db && window.db.updateAssignment) {
+                 await window.db.updateAssignment(
+                    detailIdInput.value, 
+                    detailTitleInput.value.trim(), 
+                    dateString, 
+                    timeString, 
+                    detailNoteInput.value
+                ); 
+            }
             closeAssignmentDetailModal();
         };
         const handleDeleteFromDetail = async () => {
@@ -891,7 +1013,8 @@
             detailModal = document.getElementById('assignment-detail-modal');
             detailIdInput = document.getElementById('detail-assignment-id');
             detailTitleInput = document.getElementById('detail-assignment-title');
-            detailDeadlineInput = document.getElementById('detail-assignment-deadline');
+            detailDeadlineDateInput = document.getElementById('detail-assignment-deadline-date'); // Updated name
+            detailDeadlineTimeInput = document.getElementById('detail-assignment-deadline-time'); // New element
             detailNoteInput = document.getElementById('detail-assignment-note');
 
             // Event Listeners
@@ -1094,8 +1217,12 @@
             <div class="space-y-4">
                 <input type="text" id="assignment-title" placeholder="Assignment Title"
                         class="w-full p-3 rounded-xl bg-gray-700 text-white placeholder-gray-400 border border-gray-600 focus:border-blue-500 outline-none transition-colors">
-                <input type="date" id="assignment-deadline"
-                        class="w-full p-3 rounded-xl bg-gray-700 text-white border border-gray-600 focus:border-blue-500 outline-none transition-colors">
+                <div class="flex space-x-2">
+                    <input type="date" id="assignment-deadline-date"
+                            class="w-1/2 p-3 rounded-xl bg-gray-700 text-white border border-gray-600 focus:border-blue-500 outline-none transition-colors">
+                    <input type="time" id="assignment-deadline-time" placeholder="Optional Time"
+                            class="w-1/2 p-3 rounded-xl bg-gray-700 text-white border border-gray-600 focus:border-blue-500 outline-none transition-colors">
+                </div>
             </div>
             <div class="flex justify-end space-x-4 mt-6">
                 <button id="close-assignment-modal-btn" class="px-5 py-2 rounded-xl bg-gray-600 text-white hover:bg-gray-500 transition-colors">Cancel</button>
@@ -1113,7 +1240,10 @@
                 <label class="block text-white/70 text-sm font-semibold">Title</label>
                 <input type="text" id="detail-assignment-title" class="w-full p-3 rounded-xl bg-gray-700 text-white placeholder-gray-400 border border-gray-600 focus:border-blue-500 outline-none">
                 <label class="block text-white/70 text-sm font-semibold">Deadline</label>
-                <input type="date" id="detail-assignment-deadline" class="w-full p-3 rounded-xl bg-gray-700 text-white border border-gray-600 focus:border-blue-500 outline-none">
+                <div class="flex space-x-2">
+                    <input type="date" id="detail-assignment-deadline-date" class="w-1/2 p-3 rounded-xl bg-gray-700 text-white border border-gray-600 focus:border-blue-500 outline-none">
+                    <input type="time" id="detail-assignment-deadline-time" class="w-1/2 p-3 rounded-xl bg-gray-700 text-white border border-gray-600 focus:border-blue-500 outline-none">
+                </div>
                 <label class="block text-white/70 text-sm font-semibold">Notes</label>
                 <textarea id="detail-assignment-note" rows="5" class="w-full p-3 rounded-xl bg-gray-700 text-white placeholder-gray-400 border border-gray-600 focus:border-blue-500 outline-none resize-none"></textarea>
             </div>
@@ -1190,7 +1320,7 @@
         <span data-lucide="square-menu" class="w-6 h-6 text-white"></span>
     </button>
 
-    <div id="version-timestamp">Last Update 28/11/2025 - 09:25</div>
+    <div id="version-timestamp">Last Update 28/11/2025 - 09:44</div>
     
     <style>
     /* Custom Scrollbar for horizontal scrolling */
