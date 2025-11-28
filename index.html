@@ -1107,16 +1107,13 @@
                  }
             });
 
+            // MODIFIED CODE (Forces everything to a Google Search)
             document.getElementById('search-form').addEventListener('submit', (e) => {
                 e.preventDefault();
                 const query = document.getElementById('search-input').value;
                 if (query) {
-                    if (query.includes('.') && !query.includes(' ')) {
-                        let url = query.startsWith('http') ? query : `https://${query}`;
-                        window.location.href = url;
-                    } else {
-                        window.location.href = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
-                    }
+                    // Simple logic: always search Google
+                    window.location.href = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
                 }
             });
         };
@@ -1320,7 +1317,7 @@
         <span data-lucide="square-menu" class="w-6 h-6 text-white"></span>
     </button>
 
-    <div id="version-timestamp">Last Update 28/11/2025 - 09:44</div>
+    <div id="version-timestamp">Last Update 28/11/2025 - 11:37</div>
     
     <style>
     /* Custom Scrollbar for horizontal scrolling */

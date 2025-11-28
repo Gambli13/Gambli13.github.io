@@ -1496,18 +1496,13 @@
 
 
             // Search functionality
+           // MODIFIED CODE (Forces everything to a Google Search)
             document.getElementById('search-form').addEventListener('submit', (e) => {
                 e.preventDefault();
                 const query = document.getElementById('search-input').value;
                 if (query) {
-                    // Check if it looks like a URL starting with a domain (e.g., google.com or https://google.com)
-                    if (query.includes('.') && !query.includes(' ')) {
-                        let url = query.startsWith('http') ? query : `https://${query}`;
-                        window.location.href = url;
-                    } else {
-                        // Use Google search URL
-                        window.location.href = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
-                    }
+                    // Simple logic: always search Google
+                    window.location.href = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
                 }
             });
 
@@ -1725,7 +1720,7 @@
         </div>
     </div>
     
-    <div id="version-timestamp" class="text-dark-secondary">Last Update 28/11/2025 - 11:21</div>
+    <div id="version-timestamp" class="text-dark-secondary">Last Update 28/11/2025 - 11:37</div>
     </body>
 
 </html>
