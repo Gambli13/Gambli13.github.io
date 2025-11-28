@@ -231,23 +231,19 @@
             }
 
             // 1. Assignments Listener
+            // 1. Assignments Listener
             onSnapshot(collection(db, getCollectionPath('assignments')), (snapshot) => {
                 const assignments = [];
                 snapshot.forEach(doc => {
                     const data = doc.data();
-                    let deadlineDate;
                     
-                    if (data.deadline && typeof data.deadline.toDate === 'function') {
-                        deadlineDate = data.deadline.toDate();
-                    } else if (data.deadline) {
-                        deadlineDate = new Date(data.deadline);
-                    } else {
-                        deadlineDate = null;
-                    }
+                    // NEW: Use the utility to parse the stored ISO string
+                    const deadlineDate = parseDeadlineISO(data.deadline); 
+                    
                     // Include all data fields, including 'notes' if it exists
                     assignments.push({ id: doc.id, ...data, deadline: deadlineDate });
                 });
-                
+                            
                 assignments.sort((a, b) => (a.deadline || 0) - (b.deadline || 0));
                 window.renderAssignments(assignments);
             }, (error) => {
@@ -315,28 +311,36 @@
         // --- Firebase Data Operations (Global Functions) ---
         window.db = {
             // Assignment CRUD (existing)
-            addAssignment: async (title, deadlineDate, notes = '') => {
+            addAssignment: async (title, dateString, timeString, notes = '') => {
                 if (!db || !userId || !isAuthReady) { console.error("Firestore not initialized for persistence."); return; }
+                if (!dateString) { console.error("No deadline date provided."); return; }
                 try {
+                    // NEW: Combine date and time to create the deadline Date object
+                    const deadlineDate = createDeadlineDate(dateString, timeString);
                     await addDoc(collection(db, getCollectionPath('assignments')), {
                         title: title,
-                        // Storing date as ISO string is better for cross-platform/language consistency in Firestore
+                        // Storing the combined date/time as ISO string
                         deadline: deadlineDate.toISOString(), 
-                        notes: notes, // Add notes field for future proofing/editing
+                        notes: notes, 
                         createdAt: new Date().toISOString()
                     });
                     console.log("Assignment added to Firestore successfully.");
                 } catch (e) { console.error("Error adding document: ", e); }
             },
-            // NEW: Function to update an existing assignment (now accepts notes)
-            updateAssignment: async (id, title, deadlineDate, notes = '') => {
+            // NEW: Function to update an existing assignment
+            // MODIFIED: Accepts dateString (YYYY-MM-DD) and timeString (HH:MM)
+            updateAssignment: async (id, title, dateString, timeString, notes = '') => {
                 if (!db || !userId || !isAuthReady) { console.error("Firestore not initialized for persistence."); return; }
+                if (!dateString) { console.error("No deadline date provided."); return; }
                 try {
-                    // Use setDoc with merge: true to update fields without replacing the entire document
+                    // NEW: Combine date and time to create the deadline Date object
+                    const deadlineDate = createDeadlineDate(dateString, timeString);
+                    const deadlineISO = deadlineDate ? deadlineDate.toISOString() : null;
+
                     await setDoc(doc(db, getCollectionPath('assignments'), id), {
                         title: title,
-                        deadline: deadlineDate.toISOString(), 
-                        notes: notes, // Pass notes
+                        deadline: deadlineISO, 
+                        notes: notes || '', // Pass notes
                         updatedAt: new Date().toISOString()
                     }, { merge: true }); 
                     console.log("Assignment updated in Firestore successfully.");
@@ -1061,15 +1065,22 @@
                 // Ensure deadline is a Date object before calculating
                 const deadlineDate = assignment.deadline instanceof Date ? assignment.deadline : new Date(assignment.deadline);
 
-                // START: MODIFICATION FOR DD/MM/YYYY FORMAT
+                // --- START: MODIFICATION FOR DD/MM/YYYY at HH:MM FORMAT ---
                 const day = String(deadlineDate.getDate()).padStart(2, '0');
                 const month = String(deadlineDate.getMonth() + 1).padStart(2, '0');
                 const year = deadlineDate.getFullYear();
-                const formattedDate = `${day}/${month}/${year}`; // European format (dd/mm/yyyy)
-                // END: MODIFICATION FOR DD/MM/YYYY FORMAT
+                
+                // NEW: Get Hours and Minutes
+                const hours = String(deadlineDate.getHours()).padStart(2, '0');
+                const minutes = String(deadlineDate.getMinutes()).padStart(2, '0');
+                
+                // NEW: Combine into the requested format
+                const formattedDate = `${day}/${month}/${year} at ${hours}:${minutes}`; // DD/MM/YYYY at HH:MM
+                // --- END: MODIFICATION FOR DD/MM/YYYY at HH:MM FORMAT ---
 
                 // Get the ISO date for the date input in the modal (for editing)
-                const deadlineISO = deadlineDate.toISOString().split('T')[0]; // YYYY-MM-DD for input type="date"
+                // We use the full ISO string here, which is split into date/time inside window.openAssignmentDetailModal
+                const deadlineISO = deadlineDate.toISOString(); 
                 
                 // MODIFIED: Text colors for countdown
                 const countdownHTML = `
@@ -1089,7 +1100,7 @@
                         onclick="window.openAssignmentDetailModal(
                             '${assignment.id}', 
                             '${assignment.title.replace(/'/g, "\\'")}', 
-                            '${deadlineISO}',
+                            '${deadlineISO}', // PASS THE FULL ISO STRING
                             '${(assignment.notes || '').replace(/'/g, "\\'")}'
                         )">
                         
@@ -1249,18 +1260,32 @@
         const openAssignmentModalUI = () => document.getElementById('assignment-modal').classList.remove('opacity-0', 'pointer-events-none');
         
         // NEW FUNCTIONALITY: Opens the modal for editing
+        // NEW FUNCTIONALITY: Opens the modal for editing
         window.openAssignmentDetailModal = (id, title, deadlineISO, notes) => {
             currentAssignmentId = id;
             isEditMode = true;
-            
             document.getElementById('assignment-title').value = title;
-            document.getElementById('assignment-deadline').value = deadlineISO;
-            document.getElementById('assignment-notes').value = notes; // NEW: Populate notes
             
-            // Update button text and title for Edit mode
-            document.querySelector('#assignment-modal h3').textContent = 'Edit Assignment';
-            document.getElementById('add-assignment-btn').textContent = 'Save Changes';
+            // NEW LOGIC: Split ISO string into local date (YYYY-MM-DD) and time (HH:MM)
+            if (deadlineISO) {
+                const deadlineDate = new Date(deadlineISO);
+                // Get local date part: YYYY-MM-DD
+                const datePart = deadlineDate.getFullYear() + '-' + 
+                                String(deadlineDate.getMonth() + 1).padStart(2, '0') + '-' + 
+                                String(deadlineDate.getDate()).padStart(2, '0');
+                // Get local time part: HH:MM
+                const timePart = String(deadlineDate.getHours()).padStart(2, '0') + ':' + 
+                                String(deadlineDate.getMinutes()).padStart(2, '0');
 
+                document.getElementById('assignment-deadline-date').value = datePart; // NEW ID
+                document.getElementById('assignment-deadline-time').value = timePart; // NEW ID
+            } else {
+                document.getElementById('assignment-deadline-date').value = '';
+                document.getElementById('assignment-deadline-time').value = '23:59'; // Default time
+            }
+            
+            document.getElementById('assignment-notes').value = notes;
+            document.getElementById('add-assignment-btn').textContent = 'Update Assignment';
             openAssignmentModalUI();
         };
 
@@ -1314,7 +1339,35 @@
             }
         };
         // Use a single function for the button's listener logic
-        const handleAddAssignment = handleAddOrEditAssignment; 
+        // ...
+        const handleAddAssignment = async () => {
+            const title = document.getElementById('assignment-title').value.trim();
+            // NEW: Get separate date and time values
+            const deadlineDateString = document.getElementById('assignment-deadline-date').value;
+            const deadlineTimeString = document.getElementById('assignment-deadline-time').value;
+            const notes = document.getElementById('assignment-notes').value.trim();
+            
+            if (!title || !deadlineDateString) {
+                alert('Please provide an assignment title and a deadline date.');
+                return;
+            }
+
+            if (isEditMode) {
+                // NEW: Pass the date and time strings to updateAssignment
+                await window.db.updateAssignment(currentAssignmentId, title, deadlineDateString, deadlineTimeString, notes); 
+            } else {
+                // NEW: Pass the date and time strings to addAssignment
+                await window.db.addAssignment(title, deadlineDateString, deadlineTimeString, notes);
+            }
+            
+            // Reset inputs and close modal
+            document.getElementById('assignment-title').value = '';
+            document.getElementById('assignment-deadline-date').value = '';
+            document.getElementById('assignment-deadline-time').value = '23:59'; // Reset time to default
+            document.getElementById('assignment-notes').value = '';
+            
+            closeAssignmentModal();
+        };
 
         // Bookmark Modal
         const openBookmarkModal = () => document.getElementById('bookmark-modal').classList.remove('opacity-0', 'pointer-events-none');
@@ -1461,6 +1514,43 @@
             // The data listeners are now initiated inside initFirebase on successful authentication.
         };
 
+        // --- NEW UTILITIES FOR DATE AND TIME HANDLING ---
+
+        const createDeadlineDate = (dateString, timeString) => {
+            if (!dateString) return null;
+
+            // CONFIRM: Default to end of day if no time is provided
+            const time = timeString || '23:59'; 
+            
+            // Parse date parts (YYYY-MM-DD)
+            const [year, month, day] = dateString.split('-').map(Number);
+            // Parse time parts (HH:MM)
+            const [hours, minutes] = time.split(':').map(Number);
+
+            // Create a new Date object using local time constructor (month is 0-indexed).
+            const deadlineDate = new Date(year, month - 1, day, hours, minutes);
+
+            if (isNaN(deadlineDate.getTime())) {
+                console.error("Invalid Date components provided.");
+                return null;
+            }
+
+            return deadlineDate;
+        };
+
+        // Utility to parse ISO string and return Date object
+        const parseDeadlineISO = (isoString) => {
+            if (!isoString) return null;
+            try {
+                const date = new Date(isoString);
+                return isNaN(date) ? null : date;
+            } catch (e) {
+                console.error("Error parsing deadline ISO:", e);
+                return null;
+            }
+        }
+
+        // --- END NEW UTILITIES ---
     </script>
 </head>
 <body class="bg-white">
@@ -1547,12 +1637,19 @@
         <div class="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-md border border-gray-200 transform transition-all duration-300 scale-100">
             <h3 class="text-2xl font-bold text-dark-primary mb-6">Add New Assignment</h3>
             <div class="space-y-4">
-                <input type="text" id="assignment-title" placeholder="Assignment Title (e.g., Final Paper)"
-                        class="w-full p-3 rounded-xl bg-gray-100 text-dark-primary placeholder-dark-tertiary border border-gray-300 focus:border-blue-500 outline-none transition-colors">
-                <input type="date" id="assignment-deadline"
-                        class="w-full p-3 rounded-xl bg-gray-100 text-dark-primary border border-gray-300 focus:border-blue-500 outline-none transition-colors">
-                <textarea id="assignment-notes" placeholder="Notes (optional)" rows="3"
-                    class="w-full p-3 rounded-xl bg-gray-100 text-dark-primary placeholder-dark-tertiary border border-gray-300 focus:border-blue-500 outline-none transition-colors"></textarea>
+                <input type="text" id="assignment-title" placeholder="Assignment Title"
+                    class="w-full p-3 rounded-xl bg-gray-100 text-dark-primary placeholder-dark-tertiary border border-gray-300 focus:border-green-500 outline-none transition-colors">
+                
+               <div class="flex space-x-2">
+                    <input type="date" id="assignment-deadline-date"
+                        class="w-1/2 p-3 rounded-xl bg-gray-100 text-dark-primary placeholder-dark-tertiary border border-gray-300 focus:border-green-500 outline-none transition-colors">
+                    
+                    <input type="time" id="assignment-deadline-time"
+                        class="w-1/2 p-3 rounded-xl bg-gray-100 text-dark-primary placeholder-dark-tertiary border border-gray-300 focus:border-green-500 outline-none transition-colors">
+                </div>
+                                
+                <textarea id="assignment-notes" placeholder="Optional notes..." rows="3"
+                    class="w-full p-3 rounded-xl bg-gray-100 text-dark-primary placeholder-dark-tertiary border border-gray-300 focus:border-green-500 outline-none resize-none transition-colors"></textarea>
             </div>
             <div class="flex justify-end space-x-4 mt-6">
                 <button id="close-assignment-modal-btn"
