@@ -583,12 +583,10 @@
                 { start: "11:00", end: "23:59", title: "END OF DAY", location: null },
             ],
             Wednesday: [
-                { start: "00:00", end: "14:00", title: "FREE DAY / Independent Study", location: null },
                 { start: "14:00", end: "16:00", title: "Film Studies", location: "Francis Ebejer Hall" },
                 { start: "16:00", end: "23:59", title: "END OF DAY", location: null },
             ],
             Thursday: [
-                { start: "09:00", end: "14:00", title: "FREE DAY / Independent Study", location: null },
                 { start: "14:00", end: "16:00", title: "Family Life", location: "Gateway Hall D1" },
                 { start: "16:00", end: "23:59", title: "END OF DAY", location: null },
             ],
@@ -1720,7 +1718,115 @@
         </div>
     </div>
     
-    <div id="version-timestamp" class="text-dark-secondary">Last Update 28/11/2025 - 11:37</div>
+    <div id="weekly-timetable-modal" class="fixed inset-0 bg-black/20 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition duration-300 z-50">
+        <div class="w-auto max-w-[95vw] p-6 rounded-2xl shadow-2xl border border-gray-200 overflow-x-auto overflow-y-hidden relative custom-scroll"
+             style="background-image: url('images/flowerBG.jpg'); background-size: cover; background-position: center;">
+            
+            <h2 class="text-2xl font-bold text-dark-primary mb-4 text-center sticky left-0 bg-white/80 backdrop-blur-md rounded-xl py-2 shadow-sm border border-white/50">
+                Weekly Timetable
+            </h2>
+            
+            <div id="weekly-timetable-content" class="flex flex-row gap-6 pb-4"></div>
+        </div>
+    </div>
+
+    <button id="open-weekly-timetable-btn"
+        class="fixed bottom-5 left-5 z-50 p-3 rounded-xl bg-white/80 backdrop-blur-md border border-gray-200 shadow-lg hover:bg-white hover:scale-105 transition flex items-center justify-center group">
+        <span data-lucide="calendar-range" class="w-6 h-6 text-dark-primary group-hover:text-blue-600 transition-colors"></span>
+    </button>
+
+    <div id="version-timestamp" class="text-dark-secondary">Last Update 01/12/2025 - 09:45</div>
     </body>
 
+    <style>
+        /* Custom Scrollbar for horizontal scrolling (Light Theme Adaptation) */
+        .custom-scroll::-webkit-scrollbar { height: 8px; }
+        .custom-scroll::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.05); border-radius: 4px; }
+        .custom-scroll::-webkit-scrollbar-thumb { background: rgba(74, 44, 44, 0.2); border-radius: 4px; } /* Using the dark-primary color at low opacity */
+        .custom-scroll::-webkit-scrollbar-thumb:hover { background: rgba(74, 44, 44, 0.4); }
+    </style>
+    <script>
+        // --- Weekly Timetable Logic (Updated: White Fridays, Blue Active) ---
+            document.getElementById('open-weekly-timetable-btn').addEventListener('click', () => {
+                const modal = document.getElementById("weekly-timetable-modal");
+                const content = document.getElementById("weekly-timetable-content");
+                
+                // Helper to format individual lessons
+                const formatLesson = (item, highlight) => {
+                    let baseClasses = "p-3 rounded-lg mb-2 transition-all duration-300 border shadow-sm";
+                    let bgClass, textTitleClass, subTextClass;
+
+                    if (highlight) {
+                        // --- CURRENTLY TAKING PLACE (Active) ---
+                        if (item.title === "BREAK") {
+                             // Keep breaks green to distinguish from lessons
+                             bgClass = 'bg-green-100 border-green-300 ring-2 ring-green-200';
+                             textTitleClass = 'text-green-800';
+                             subTextClass = 'text-green-700';
+                        } else {
+                             // ALL Active lessons turn BLUE
+                             bgClass = 'bg-blue-100 border-blue-300 ring-2 ring-blue-200';
+                             textTitleClass = 'text-blue-900';
+                             subTextClass = 'text-blue-700';
+                        }
+                    } else if (item.title === "END OF DAY" || item.title === "WEEKEND") {
+                        // End of Day / Weekend (Muted Gray)
+                        bgClass = 'bg-gray-100 border-transparent opacity-60';
+                        textTitleClass = 'text-gray-500 font-normal italic';
+                        subTextClass = 'text-gray-400';
+                    } else {
+                        // --- STANDARD STATE (Including Friday) ---
+                        // Clean White with Gray border
+                        bgClass = 'bg-white border-gray-200 hover:border-blue-300';
+                        textTitleClass = 'text-dark-primary';
+                        subTextClass = 'text-dark-secondary';
+                    }
+
+                    return `
+                    <div class="${baseClasses} ${bgClass}">
+                        <p class="font-semibold ${textTitleClass} text-sm">${item.title}</p>
+                        <p class="${subTextClass} text-xs mt-1">${item.start} - ${item.end}</p>
+                        <p class="${subTextClass} text-xs opacity-70">${item.location ?? ''}</p>
+                    </div>`;
+                };
+                
+                content.innerHTML = "";
+                const now = new Date();
+                const dayIndex = now.getDay();
+                const nowMinutes = now.getHours() * 60 + now.getMinutes();
+
+                for (const day of DAYS_OF_WEEK) {
+                    const lessons = TIMETABLE[day];
+                    if(!lessons) continue;
+
+                    // Create a column for the day
+                    let html = `
+                    <div class="min-w-[260px] w-[260px] flex-shrink-0 bg-white/80 p-4 rounded-xl border border-gray-200 backdrop-blur-md">
+                        <h3 class="text-lg font-bold text-dark-primary mb-4 border-b border-gray-200 pb-2 text-center uppercase tracking-wider">${day}</h3>
+                        <div class="space-y-2">`;
+                    
+                    lessons.forEach(item => {
+                        const start = timeToMinutes(item.start);
+                        const end = timeToMinutes(item.end);
+                        
+                        // Check if this specific lesson is currently active
+                        const isCurrent = day === DAYS_OF_WEEK[dayIndex] && nowMinutes >= start && nowMinutes < end && item.title !== "WEEKEND";
+                        
+                        // Pass 'isCurrent' to the formatter
+                        html += formatLesson(item, isCurrent);
+                    });
+                    
+                    html += "</div></div>";
+                    content.innerHTML += html;
+                }
+                modal.classList.remove("opacity-0", "pointer-events-none");
+            });
+
+            // Handle clicking outside the modal to close it
+            document.getElementById("weekly-timetable-modal").addEventListener('click', (e) => {
+                 if (e.target === e.currentTarget) {
+                     e.currentTarget.classList.add("opacity-0", "pointer-events-none");
+                 }
+            });
+    </script>
 </html>
