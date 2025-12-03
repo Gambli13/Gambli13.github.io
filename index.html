@@ -54,6 +54,25 @@
             object-fit: contain;
             filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.8));
         }
+        
+        /* NEW: Drag and Drop Styles for Bookmarks */
+        .bookmark-item-wrap {
+            cursor: grab; /* Show grab cursor */
+            transition: transform 0.2s, opacity 0.2s;
+        }
+        .bookmark-item-wrap:active {
+            cursor: grabbing;
+        }
+        .bookmark-item-wrap.dragging {
+            opacity: 0.4;
+            transform: scale(0.95);
+            border: 2px dashed rgba(255,255,255,0.3);
+            border-radius: 1rem;
+        }
+        .bookmark-item-wrap.drag-over {
+            transform: scale(1.05);
+            border-color: #3b82f6;
+        }
 
         .mcast-link-item {
             transition: background-color 0.3s, transform 0.3s;
@@ -141,6 +160,12 @@
             color: rgba(255, 255, 255, 0.5);
             text-decoration: line-through;
         }
+        
+        /* Custom Scrollbar for horizontal scrolling */
+        .custom-scroll::-webkit-scrollbar { height: 8px; }
+        .custom-scroll::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.05); border-radius: 4px; }
+        .custom-scroll::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.2); border-radius: 4px; }
+        .custom-scroll::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.4); }
     </style>
 
     <script>
@@ -158,7 +183,8 @@
     <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js";
     import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-auth.js";
-    import { getFirestore, doc, addDoc, deleteDoc, setDoc, onSnapshot, collection, setLogLevel } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore.js";
+    // ADDED writeBatch to imports for reordering
+    import { getFirestore, doc, addDoc, deleteDoc, setDoc, onSnapshot, collection, setLogLevel, writeBatch } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore.js";
 
     const STATIC_OVERRIDE_USER_ID = 'zNllEXqmHpaqNZffrgOhyPrSfBB3';
     const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
@@ -199,44 +225,25 @@
         }
     };
 
-    // Utility to combine Date and optional Time for proper Date object creation (FIXED)
-    // This uses local time components to avoid timezone misinterpretation, ensuring 23:59 is 23:59 local time.
     const createDeadlineDate = (dateString, timeString) => {
         if (!dateString) return null;
-
-        // Default to end of day if no time is provided
         const time = timeString || '23:59'; 
-        
-        // Parse date parts (YYYY-MM-DD)
         const [year, month, day] = dateString.split('-').map(Number);
-        // Parse time parts (HH:MM)
         const [hours, minutes] = time.split(':').map(Number);
-
-        // Create a new Date object using local time constructor (month is 0-indexed).
         const deadlineDate = new Date(year, month - 1, day, hours, minutes);
-
-        if (isNaN(deadlineDate.getTime())) {
-            console.error("Invalid Date components provided.");
-            return null;
-        }
-
+        if (isNaN(deadlineDate.getTime())) return null;
         return deadlineDate;
     };
-    
-    
 
-    // Utility to parse ISO string and return Date object
     const parseDeadlineISO = (isoString) => {
         if (!isoString) return null;
         try {
             const date = new Date(isoString);
             return isNaN(date) ? null : date;
         } catch (e) {
-            console.error("Error parsing deadline ISO:", e);
             return null;
         }
     }
-
 
     const setupDataListeners = () => {
         if (!db || !userId) return;
@@ -246,27 +253,22 @@
             const assignments = [];
             snapshot.forEach(doc => {
                 const data = doc.data();
-                // Determine the correct date object from stored deadline (which is an ISO string in firestore)
                 const deadlineDate = parseDeadlineISO(data.deadline);
-                
-                assignments.push({ 
-                    id: doc.id, 
-                    ...data, 
-                    // Pass the correctly parsed Date object
-                    deadline: deadlineDate 
-                });
+                assignments.push({ id: doc.id, ...data, deadline: deadlineDate });
             });
-            // Sort by the Date object
             assignments.sort((a, b) => (a.deadline || new Date(0)) - (b.deadline || new Date(0)));
             window.renderAssignments(assignments);
         });
 
-        // 2. Bookmarks Listener
+        // 2. Bookmarks Listener (UPDATED to support Order)
         onSnapshot(collection(db, getCollectionPath('bookmarks')), (snapshot) => {
             const bookmarks = [];
             snapshot.forEach(doc => {
-                bookmarks.push({ id: doc.id, ...doc.data() });
+                // Default order to 0 if missing (legacy support)
+                bookmarks.push({ id: doc.id, order: 0, ...doc.data() });
             });
+            // Sort bookmarks by the 'order' field
+            bookmarks.sort((a, b) => a.order - b.order);
             window.renderBookmarks(bookmarks);
         });
         
@@ -287,7 +289,6 @@
                 const data = doc.data();
                 let deadlineDate = parseDeadlineISO(data.deadline);
                 let completedAtDate = data.completedAt ? new Date(data.completedAt) : new Date();
-
                 finished.push({ id: doc.id, ...data, deadline: deadlineDate, completedAt: completedAtDate });
             });
             finished.sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
@@ -296,32 +297,25 @@
     };
 
     window.db = {
-        // Now accepts a date string (YYYY-MM-DD) and an optional time string (HH:MM)
         addAssignment: async (title, dateString, timeString) => {
             if (!db || !userId || !dateString) return;
             try {
                 const deadlineDate = createDeadlineDate(dateString, timeString);
                 await addDoc(collection(db, getCollectionPath('assignments')), {
                     title: title,
-                    // Store the combined ISO string in Firestore
                     deadline: deadlineDate.toISOString(), 
                     createdAt: new Date().toISOString(),
                     notes: '' 
                 });
             } catch (e) { console.error(e); }
         },
-        // Now accepts a date string (YYYY-MM-DD) and an optional time string (HH:MM)
         updateAssignment: async (id, title, dateString, timeString, notes) => {
             if (!db || !userId) return;
             try {
-                // Combine date and time for the updated deadline ISO string
                 const deadlineDate = createDeadlineDate(dateString, timeString);
                 const deadlineISO = deadlineDate ? deadlineDate.toISOString() : null;
-                
                 await setDoc(doc(db, getCollectionPath('assignments'), id), {
-                    title: title,
-                    deadline: deadlineISO, 
-                    notes: notes || '',
+                    title: title, deadline: deadlineISO, notes: notes || '',
                 }, { merge: true });
             } catch (e) { console.error(e); }
         },
@@ -332,10 +326,8 @@
         addFinishedAssignment: async (assignmentData) => {
             if (!db || !userId) return;
             try {
-                // assignmentData.deadline is already a Date object from the listener
                 await addDoc(collection(db, getCollectionPath('finished_assignments')), {
                     ...assignmentData,
-                    // Convert back to ISO string for storage
                     deadline: assignmentData.deadline instanceof Date ? assignmentData.deadline.toISOString() : assignmentData.deadline,
                     completedAt: new Date().toISOString()
                 });
@@ -345,15 +337,29 @@
             if (!db || !userId) return;
             try { await deleteDoc(doc(db, getCollectionPath('finished_assignments'), id)); } catch (e) { console.error(e); }
         },
-        addBookmark: async (name, url, icon) => {
+        // UPDATED: Now accepts 'order'
+        addBookmark: async (name, url, icon, order) => {
             if (!db || !userId) return;
             try {
-                await addDoc(collection(db, getCollectionPath('bookmarks')), { name, url, icon });
+                await addDoc(collection(db, getCollectionPath('bookmarks')), { name, url, icon, order: order || 0 });
             } catch (e) { console.error(e); }
         },
         deleteBookmark: async (id) => {
             if (!db || !userId) return;
             try { await deleteDoc(doc(db, getCollectionPath('bookmarks'), id)); } catch (e) { console.error(e); }
+        },
+        // NEW: Function to bulk update bookmark order
+        reorderBookmarks: async (items) => {
+            if (!db || !userId) return;
+            try {
+                const batch = writeBatch(db);
+                items.forEach((item, index) => {
+                    const ref = doc(db, getCollectionPath('bookmarks'), item.id);
+                    batch.update(ref, { order: index });
+                });
+                await batch.commit();
+                console.log("Bookmarks reordered successfully.");
+            } catch (e) { console.error("Error reordering:", e); }
         },
         addBackground: async (base64String, fileName) => {
             if (!db || !userId) return;
@@ -441,9 +447,9 @@
         window.setupMockData = () => {
             // Mock Bookmarks
             window.renderBookmarks([
-                { id: 'bm1', name: "Gemini", url: "https://gemini.google.com/", icon: "sparkles" },
-                { id: 'bm2', name: "GitHub", url: "https://github.com/", icon: "code" },
-                { id: 'bm4', name: "Mail", url: "https://mail.google.com/", icon: "mail" },
+                { id: 'bm1', name: "Gemini", url: "https://gemini.google.com/", icon: "sparkles", order: 0 },
+                { id: 'bm2', name: "GitHub", url: "https://github.com/", icon: "code", order: 1 },
+                { id: 'bm4', name: "Mail", url: "https://mail.google.com/", icon: "mail", order: 2 },
             ]);
 
             // Mock Assignments 
@@ -475,7 +481,7 @@
                     assignments.push({ id: crypto.randomUUID(), title: `${title} (Mock)`, deadline: deadlineDate, createdAt: new Date(), notes: '' });
                     window.renderAssignments(assignments);
                 },
-                updateAssignment: (id, title, dateString, timeString, notes) => { /* Update logic omitted for brevity in mock */ },
+                updateAssignment: (id, title, dateString, timeString, notes) => { /* Update logic omitted */ },
                 deleteAssignment: (id) => {
                     assignments = assignments.filter(a => a.id !== id);
                     window.renderAssignments(assignments);
@@ -486,8 +492,15 @@
                     window.renderFinishedAssignments([...window.finishedAssignments || [], { ...assignmentData, id: crypto.randomUUID() }]);
                 },
                 deleteFinishedAssignment: (id) => { /* */ },
-                addBookmark: (name, url, icon) => { /* */ },
-                deleteBookmark: (id) => { /* */ },
+                addBookmark: (name, url, icon, order) => { 
+                    bookmarks.push({id: crypto.randomUUID(), name, url, icon, order});
+                    window.renderBookmarks(bookmarks);
+                },
+                deleteBookmark: (id) => { 
+                    bookmarks = bookmarks.filter(b => b.id !== id);
+                    window.renderBookmarks(bookmarks);
+                },
+                reorderBookmarks: (items) => { console.log("Mock reorder", items); },
                 addBackground: (b, n) => { /* */ },
                 deleteBackground: (id) => { /* */ }
             };
@@ -683,11 +696,8 @@
             return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
         };
 
-        // Utility to format time for display (MODIFIED)
-        // This now explicitly returns '23:59' when it is the default, instead of hiding it.
         const formatTimeForInput = (date) => {
             if (!(date instanceof Date) || isNaN(date)) return '';
-            // Always return the time part for display (which will be '23:59' if defaulted)
             return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
         };
 
@@ -735,38 +745,122 @@
             lucide.createIcons(); 
         };
 
+        // --- DRAG AND DROP HANDLERS FOR BOOKMARKS ---
+        let dragSrcEl = null;
+
+        function handleDragStart(e) {
+            dragSrcEl = this;
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/html', this.innerHTML);
+            e.dataTransfer.setData('text/plain', this.getAttribute('data-id'));
+            
+            this.classList.add('dragging');
+        }
+
+        function handleDragOver(e) {
+            if (e.preventDefault) {
+                e.preventDefault(); 
+            }
+            e.dataTransfer.dropEffect = 'move';
+            this.classList.add('drag-over');
+            return false;
+        }
+
+        function handleDragEnter(e) {
+            this.classList.add('drag-over');
+        }
+
+        function handleDragLeave(e) {
+            this.classList.remove('drag-over');
+        }
+
+        function handleDrop(e) {
+            if (e.stopPropagation) {
+                e.stopPropagation();
+            }
+
+            const targetEl = this.closest('.bookmark-item-wrap');
+            
+            if (dragSrcEl !== targetEl) {
+                const srcId = dragSrcEl.getAttribute('data-id');
+                const targetId = targetEl.getAttribute('data-id');
+
+                const srcIndex = bookmarks.findIndex(b => b.id === srcId);
+                const targetIndex = bookmarks.findIndex(b => b.id === targetId);
+
+                if (srcIndex > -1 && targetIndex > -1) {
+                    // Reorder array locally
+                    const [movedItem] = bookmarks.splice(srcIndex, 1);
+                    bookmarks.splice(targetIndex, 0, movedItem);
+
+                    // Render UI immediately
+                    window.renderBookmarks(bookmarks);
+
+                    // Persist to DB
+                    if (window.db && window.db.reorderBookmarks) {
+                        window.db.reorderBookmarks(bookmarks);
+                    }
+                }
+            }
+            return false;
+        }
+
+        function handleDragEnd(e) {
+            this.classList.remove('dragging');
+            const items = document.querySelectorAll('.bookmark-item-wrap');
+            items.forEach(function (item) {
+                item.classList.remove('drag-over');
+            });
+        }
+        // --- END DRAG HANDLERS ---
+
         window.renderBookmarks = (newBookmarks) => {
             bookmarks = newBookmarks;
             const container = document.getElementById('bookmark-container');
-            container.innerHTML = bookmarks.map(b => {
+            const bookmarkItemsHTML = bookmarks.map(b => {
                 const domain = getBaseDomain(b.url);
                 const faviconUrl = domain ? `https://s2.googleusercontent.com/s2/favicons?domain=${domain}&sz=64` : null;
                 const iconContent = faviconUrl 
-                    ? `<img src="${faviconUrl}" alt="${b.name} Favicon" class="bookmark-favicon" onerror="this.outerHTML='<span data-lucide=${b.icon || 'link'} class=\\'w-6 h-6 text-white\\'></span>'"/>`
-                    : `<span data-lucide="${b.icon || 'link'}" class="w-6 h-6 text-white"></span>`;
+                    ? `<img src="${faviconUrl}" alt="${b.name} Favicon" class="bookmark-favicon pointer-events-none" onerror="this.outerHTML='<span data-lucide=${b.icon || 'link'} class=\\'w-6 h-6 text-white pointer-events-none\\'></span>'"/>`
+                    : `<span data-lucide="${b.icon || 'link'}" class="w-6 h-6 text-white pointer-events-none"></span>`;
 
                 return `
-                <div class="bookmark-item-wrap relative">
-                    <a href="${b.url}" rel="noopener noreferrer" title="${b.name}"
+                <div class="bookmark-item-wrap relative" draggable="true" data-id="${b.id}">
+                    <a href="${b.url}" rel="noopener noreferrer" title="${b.name}" draggable="false"
                         class="bookmark-icon flex flex-col items-center justify-center w-16 h-16 sm:w-20 sm:h-20 bg-white/10 border border-white/20 rounded-2xl hover:border-blue-400">
                         ${iconContent}
-                        <span class="text-xs text-white/80 mt-1 truncate max-w-full">${b.name}</span>
+                        <span class="text-xs text-white/80 mt-1 truncate max-w-full pointer-events-none">${b.name}</span>
                     </a>
                     <button onclick="window.db.deleteBookmark('${b.id}')"
                             class="delete-btn absolute top-[-5px] right-[-5px] w-6 h-6 flex items-center justify-center bg-white/20 text-white rounded-full p-0.5 shadow-md hover:bg-white/40 transition-colors">
-                        <span data-lucide="x" class="w-3 h-3"></span>
+                        <span data-lucide="x" class="w-3 h-3 pointer-events-none"></span>
                     </button>
                 </div>
                 `;
             }).join('');
-            container.innerHTML += `
+            
+            // Append button manually
+            container.innerHTML = bookmarkItemsHTML + `
                 <button id="open-bookmark-modal-btn"
                         class="flex flex-col items-center justify-center w-16 h-16 sm:w-20 sm:h-20 bg-white/5 border border-white/10 rounded-2xl text-white/50 hover:text-white hover:border-blue-500 transition-all duration-300">
-                    <span data-lucide="plus" class="w-8 h-8"></span>
-                    <span class="text-xs mt-1">Add</span>
+                    <span data-lucide="plus" class="w-8 h-8 pointer-events-none"></span>
+                    <span class="text-xs mt-1 pointer-events-none">Add</span>
                 </button>
             `;
+            
             document.getElementById('open-bookmark-modal-btn')?.addEventListener('click', openBookmarkModal);
+            
+            // Attach Drag Listeners
+            const items = container.querySelectorAll('.bookmark-item-wrap');
+            items.forEach(function(item) {
+                item.addEventListener('dragstart', handleDragStart, false);
+                item.addEventListener('dragenter', handleDragEnter, false);
+                item.addEventListener('dragover', handleDragOver, false);
+                item.addEventListener('dragleave', handleDragLeave, false);
+                item.addEventListener('drop', handleDrop, false);
+                item.addEventListener('dragend', handleDragEnd, false);
+            });
+            
             lucide.createIcons();
         };
 
@@ -778,12 +872,12 @@
                 list.innerHTML = '<p class="text-white/50 text-center mt-4">No upcoming assignments. Add one!</p>';
             }
             assignments.forEach(assignment => {
-                const deadlineDate = assignment.deadline; // Already a Date object
+                const deadlineDate = assignment.deadline; 
                 
                 let dateDisplay = '';
                 if (deadlineDate instanceof Date && !isNaN(deadlineDate)) {
                     const datePart = `${String(deadlineDate.getDate()).padStart(2, '0')}/${String(deadlineDate.getMonth() + 1).padStart(2, '0')}/${deadlineDate.getFullYear()}`;
-                    const timePart = formatTimeForInput(deadlineDate); // Get the time part, empty if it's the default 23:59
+                    const timePart = formatTimeForInput(deadlineDate); 
                     dateDisplay = datePart + (timePart ? ` at ${timePart}` : '');
                 } else {
                     dateDisplay = 'No Deadline';
@@ -872,13 +966,11 @@
                 const remaining = getTimeRemaining(deadlineDate);
                 const now = new Date();
                 
-                // Compare Date objects
                 if (deadlineDate.getTime() < now.getTime()) { 
                     countdownEl.innerHTML = '<span class="text-red-500 font-bold">Deadline Passed</span>'; 
                     return; 
                 }
 
-                // Check if due today (ignores time for the 'Due Today' message)
                 const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
                 const deadlineDay = new Date(deadlineDate.getFullYear(), deadlineDate.getMonth(), deadlineDate.getDate());
 
@@ -887,7 +979,6 @@
                     return;
                 }
                 
-                // Normal countdown
                 countdownEl.innerHTML = `<span class="font-bold">${remaining.days}</span>d <span class="font-bold">${remaining.hours}</span>h <span class="font-bold">${remaining.minutes}</span>m <span class="font-bold">${remaining.seconds}</span>s`;
             });
         };
@@ -907,11 +998,10 @@
         const handleAddAssignment = async () => {
             const titleInput = document.getElementById('assignment-title');
             const deadlineDateInput = document.getElementById('assignment-deadline-date');
-            const deadlineTimeInput = document.getElementById('assignment-deadline-time'); // New
+            const deadlineTimeInput = document.getElementById('assignment-deadline-time'); 
 
             if (!titleInput.value.trim() || !deadlineDateInput.value) return;
 
-            // Pass date string and optional time string
             await window.db.addAssignment(
                 titleInput.value.trim(), 
                 deadlineDateInput.value, 
@@ -920,20 +1010,19 @@
 
             titleInput.value = ''; 
             deadlineDateInput.value = ''; 
-            deadlineTimeInput.value = ''; // Reset time input
+            deadlineTimeInput.value = ''; 
             closeAssignmentModal();
         };
 
-        let detailModal, detailIdInput, detailTitleInput, detailDeadlineDateInput, detailDeadlineTimeInput, detailNoteInput; // Updated names
+        let detailModal, detailIdInput, detailTitleInput, detailDeadlineDateInput, detailDeadlineTimeInput, detailNoteInput; 
         
         const openAssignmentDetailModal = (assignment) => {
             detailIdInput.value = assignment.id;
             detailTitleInput.value = assignment.title;
             
-            // Extract date and time for input fields
             if (assignment.deadline instanceof Date && !isNaN(assignment.deadline)) {
                 detailDeadlineDateInput.value = formatDateForInput(assignment.deadline);
-                detailDeadlineTimeInput.value = formatTimeForInput(assignment.deadline); // Use new formatTimeForInput
+                detailDeadlineTimeInput.value = formatTimeForInput(assignment.deadline); 
             } else {
                 detailDeadlineDateInput.value = '';
                 detailDeadlineTimeInput.value = '';
@@ -947,14 +1036,14 @@
             detailIdInput.value = ''; 
             detailTitleInput.value = ''; 
             detailDeadlineDateInput.value = ''; 
-            detailDeadlineTimeInput.value = ''; // Reset time input
+            detailDeadlineTimeInput.value = ''; 
             detailNoteInput.value = '';
         };
         const handleSaveDetailChanges = async () => {
             const dateString = detailDeadlineDateInput.value;
             const timeString = detailDeadlineTimeInput.value || null;
             
-            if (!dateString) return; // Deadline date is mandatory if saving changes
+            if (!dateString) return; 
 
             if (window.db && window.db.updateAssignment) {
                  await window.db.updateAssignment(
@@ -981,7 +1070,11 @@
             const urlInput = document.getElementById('bookmark-url');
             if (!nameInput.value.trim() || !urlInput.value.trim()) return;
             const url = urlInput.value.trim().startsWith('http') ? urlInput.value.trim() : `https://${urlInput.value.trim()}`;
-            await window.db.addBookmark(nameInput.value.trim(), url, 'link');
+            
+            // NEW: Calculate order (add to end)
+            const newOrder = bookmarks.length;
+            await window.db.addBookmark(nameInput.value.trim(), url, 'link', newOrder);
+            
             nameInput.value = ''; urlInput.value = ''; closeBookmarkModal();
         };
 
@@ -1013,8 +1106,8 @@
             detailModal = document.getElementById('assignment-detail-modal');
             detailIdInput = document.getElementById('detail-assignment-id');
             detailTitleInput = document.getElementById('detail-assignment-title');
-            detailDeadlineDateInput = document.getElementById('detail-assignment-deadline-date'); // Updated name
-            detailDeadlineTimeInput = document.getElementById('detail-assignment-deadline-time'); // New element
+            detailDeadlineDateInput = document.getElementById('detail-assignment-deadline-date'); 
+            detailDeadlineTimeInput = document.getElementById('detail-assignment-deadline-time'); 
             detailNoteInput = document.getElementById('detail-assignment-note');
 
             // Event Listeners
@@ -1032,29 +1125,24 @@
             document.getElementById('close-background-gallery-modal-btn').addEventListener('click', closeBackgroundGalleryModal);
             document.getElementById('add-background-btn').addEventListener('click', handleAddBackground);
             
-            // Weekly Timetable Logic (Merged here for optimization)
-            // Weekly Timetable Logic (Horizontal + Gold + Click Outside)
+            // Weekly Timetable Logic 
             document.getElementById('open-weekly-timetable-btn').addEventListener('click', () => {
                 const modal = document.getElementById("weekly-timetable-modal");
                 const content = document.getElementById("weekly-timetable-content");
                 
-                // Helper to format individual lessons
                 const formatLesson = (item, highlight, isGoldContext) => {
                     let baseClasses = "p-3 rounded-lg mb-2 transition-all duration-300 border";
                     let bgClass, textTitleClass;
 
                     if (highlight) {
                         if (isGoldContext) {
-                            // Gold styling for Friday or End of Day
                             bgClass = 'bg-yellow-500/20 border-yellow-400 shadow-[0_0_15px_rgba(250,204,21,0.3)]';
                             textTitleClass = 'text-yellow-300';
                         } else {
-                            // Standard Purple styling
                             bgClass = 'bg-purple-800/40 border-purple-400';
                             textTitleClass = 'text-purple-300';
                         }
                     } else {
-                        // Inactive styling
                         bgClass = 'bg-white/5 border-transparent';
                         textTitleClass = 'text-blue-300';
                     }
@@ -1074,8 +1162,6 @@
 
                 for (const day of DAYS_OF_WEEK) {
                     const lessons = TIMETABLE[day];
-                    
-                    // Create a column for the day
                     let html = `
                     <div class="min-w-[280px] w-[280px] flex-shrink-0 bg-white/5 p-4 rounded-xl border border-white/10">
                         <h3 class="text-xl font-bold text-white mb-4 border-b border-white/10 pb-2 text-center uppercase tracking-wider">${day}</h3>
@@ -1084,13 +1170,8 @@
                     lessons.forEach(item => {
                         const start = timeToMinutes(item.start);
                         const end = timeToMinutes(item.end);
-                        
-                        // Check if this specific lesson is currently active
                         const isCurrent = day === DAYS_OF_WEEK[dayIndex] && nowMinutes >= start && nowMinutes < end && item.title !== "WEEKEND";
-                        
-                        // Condition for Gold Color: Either it is "END OF DAY" OR it is Friday
                         const isGoldContext = item.title === "END OF DAY" || day === "Friday";
-
                         html += formatLesson(item, isCurrent, isGoldContext);
                     });
                     
@@ -1100,19 +1181,16 @@
                 modal.classList.remove("opacity-0", "pointer-events-none");
             });
 
-            // Handle clicking outside the modal to close it
             document.getElementById("weekly-timetable-modal").addEventListener('click', (e) => {
                  if (e.target === e.currentTarget) {
                      e.currentTarget.classList.add("opacity-0", "pointer-events-none");
                  }
             });
 
-            // MODIFIED CODE (Forces everything to a Google Search)
             document.getElementById('search-form').addEventListener('submit', (e) => {
                 e.preventDefault();
                 const query = document.getElementById('search-input').value;
                 if (query) {
-                    // Simple logic: always search Google
                     window.location.href = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
                 }
             });
@@ -1317,15 +1395,13 @@
         <span data-lucide="square-menu" class="w-6 h-6 text-white"></span>
     </button>
 
-    <div id="version-timestamp">Last Update 28/11/2025 - 11:37</div>
+    <div id="version-timestamp">Last Update 03/12/2025 - 13:23</div>
     
     <style>
-    /* Custom Scrollbar for horizontal scrolling */
         .custom-scroll::-webkit-scrollbar { height: 8px; }
         .custom-scroll::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.05); border-radius: 4px; }
         .custom-scroll::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.2); border-radius: 4px; }
         .custom-scroll::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.4); }
-    
     </style>
 
 </body>
