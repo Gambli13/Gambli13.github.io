@@ -259,6 +259,7 @@
             // Sort by the Date object
             assignments.sort((a, b) => (a.deadline || new Date(0)) - (b.deadline || new Date(0)));
             window.renderAssignments(assignments);
+            window.renderCalendar(); // Re-render calendar when assignments change
         });
 
         // 2. Bookmarks Listener
@@ -378,6 +379,114 @@
         let currentBackgroundId = localStorage.getItem(CURRENT_BG_KEY) || null;
         let backgroundContainer;
 
+        // --- Calendar Logic Variables & Functions (MOVED TO GLOBAL SCOPE) ---
+        // Initialize this globally, but we'll reset it on modal open.
+        let currentCalendarDate = new Date(); 
+
+        const openCalendarModal = () => {
+            const modal = document.getElementById('calendar-modal');
+            
+            // --- FIX APPLIED HERE ---
+            // Reset the calendar date to the current month/day/year every time the modal opens.
+            currentCalendarDate = new Date(); 
+            // -------------------------
+
+            modal.classList.remove('opacity-0', 'pointer-events-none');
+            renderCalendar();
+        };
+
+        const closeCalendarModal = (e) => {
+            // Close if clicking the background overlay (id="calendar-modal")
+            if (e.target.id === 'calendar-modal') {
+                e.target.classList.add('opacity-0', 'pointer-events-none');
+            }
+        };
+
+        const renderCalendar = () => {
+            const grid = document.getElementById('calendar-grid');
+            const monthYearTitle = document.getElementById('calendar-month-year');
+            
+            const year = currentCalendarDate.getFullYear();
+            const month = currentCalendarDate.getMonth();
+            
+            // Update Header
+            monthYearTitle.textContent = new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' }).format(currentCalendarDate);
+
+            // Date Calculations
+            const firstDay = new Date(year, month, 1).getDay();
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+            const today = new Date();
+
+            grid.innerHTML = '';
+
+            // Empty slots for previous month
+            for (let i = 0; i < firstDay; i++) {
+                const emptyCell = document.createElement('div');
+                emptyCell.className = "bg-gray-900/90 min-h-[120px] p-2 border border-white/5 opacity-50";
+                grid.appendChild(emptyCell);
+            }
+
+            // Days of current month
+            for (let day = 1; day <= daysInMonth; day++) {
+                const dateObj = new Date(year, month, day);
+                const isToday = dateObj.getDate() === today.getDate() && 
+                                dateObj.getMonth() === today.getMonth() && 
+                                dateObj.getFullYear() === today.getFullYear();
+                
+                // Find assignments for this specific day
+                const dayAssignments = assignments.filter(a => {
+                    if(!a.deadline) return false;
+                    const d = a.deadline instanceof Date ? a.deadline : new Date(a.deadline);
+                    return d.getDate() === day && d.getMonth() === month && d.getFullYear() === year;
+                });
+
+                const cell = document.createElement('div');
+                cell.className = `bg-gray-900 min-h-[120px] p-2 border border-white/5 flex flex-col relative group transition-colors hover:bg-gray-800 ${isToday ? 'ring-2 ring-inset ring-blue-500 bg-blue-900/10' : ''}`;
+                
+                // Day Number
+                let dayNumberHTML = `<span class="font-bold text-sm mb-1 ${isToday ? 'text-blue-400' : 'text-white/70'}">${day}</span>`;
+                
+                // Assignments Content
+                let contentHTML = '';
+                
+                if (dayAssignments.length > 0) {
+                    if (dayAssignments.length <= 2) {
+                        // Show 1 or 2 distinct red boxes
+                        contentHTML = dayAssignments.map(a => `
+                            <div class="mt-1 p-1.5 rounded bg-red-600/80 hover:bg-red-500 text-white text-xs truncate shadow-sm cursor-pointer" 
+                                onclick="openAssignmentDetailModal(assignments.find(x => x.id === '${a.id}')); document.getElementById('calendar-modal').classList.add('opacity-0', 'pointer-events-none'); event.stopPropagation();"
+                                title="${a.title}">
+                                ${a.title}
+                            </div>
+                        `).join('');
+                    } else {
+                        // Show "X Assignments" dropdown
+                        const hiddenListId = `dropdown-${year}-${month}-${day}`;
+                        contentHTML = `
+                            <div class="mt-1 p-1.5 rounded bg-red-600/80 hover:bg-red-500 text-white text-xs font-bold text-center cursor-pointer shadow-sm select-none"
+                                onclick="document.getElementById('${hiddenListId}').classList.toggle('hidden'); event.stopPropagation();">
+                                ${dayAssignments.length} Assignments
+                            </div>
+                            <div id="${hiddenListId}" class="hidden absolute top-full left-0 right-0 z-10 bg-gray-800 border border-gray-600 rounded-lg shadow-xl mt-1 overflow-hidden">
+                                ${dayAssignments.map(a => `
+                                    <div class="p-2 border-b border-gray-700 hover:bg-gray-700 text-xs text-white cursor-pointer truncate"
+                                        onclick="openAssignmentDetailModal(assignments.find(x => x.id === '${a.id}')); document.getElementById('calendar-modal').classList.add('opacity-0', 'pointer-events-none'); event.stopPropagation();">
+                                        ${a.title}
+                                    </div>
+                                `).join('')}
+                            </div>
+                        `;
+                    }
+                }
+
+                cell.innerHTML = dayNumberHTML + contentHTML;
+                grid.appendChild(cell);
+            }
+            lucide.createIcons();
+        };
+
+        // --- End Calendar Logic Functions ---
+
         window.setUserBackgrounds = (newBackgrounds) => {
             USER_BACKGROUNDS = newBackgrounds;
             const isCurrentValid = USER_BACKGROUNDS.some(bg => bg.id === currentBackgroundId);
@@ -447,11 +556,11 @@
             ]);
 
             // Mock Assignments 
-            let assignments = [
+            let mockAssignments = [
                 { id: 'mock1', title: 'Database Design Exam (Mock)', deadline: new Date(new Date().getTime() + 86400000), createdAt: new Date(), notes: '' },
                 { id: 'mock2', title: 'Physics Lab Report (Mock)', deadline: new Date(new Date().getTime() + 7 * 86400000), createdAt: new Date(), notes: '' },
             ];
-            window.renderAssignments(assignments);
+            window.renderAssignments(mockAssignments);
             
             // Mock Finished
             window.renderFinishedAssignments([
@@ -472,17 +581,17 @@
                 addAssignment: (title, dateString, timeString) => {
                     const time = timeString || '23:59';
                     const deadlineDate = new Date(`${dateString}T${time}:00`);
-                    assignments.push({ id: crypto.randomUUID(), title: `${title} (Mock)`, deadline: deadlineDate, createdAt: new Date(), notes: '' });
-                    window.renderAssignments(assignments);
+                    mockAssignments.push({ id: crypto.randomUUID(), title: `${title} (Mock)`, deadline: deadlineDate, createdAt: new Date(), notes: '' });
+                    window.renderAssignments(mockAssignments);
                 },
                 updateAssignment: (id, title, dateString, timeString, notes) => { /* Update logic omitted for brevity in mock */ },
                 deleteAssignment: (id) => {
-                    assignments = assignments.filter(a => a.id !== id);
-                    window.renderAssignments(assignments);
+                    mockAssignments = mockAssignments.filter(a => a.id !== id);
+                    window.renderAssignments(mockAssignments);
                 },
                 addFinishedAssignment: (assignmentData) => {
-                    assignments = assignments.filter(a => a.id !== assignmentData.id);
-                    window.renderAssignments(assignments);
+                    mockAssignments = mockAssignments.filter(a => a.id !== assignmentData.id);
+                    window.renderAssignments(mockAssignments);
                     window.renderFinishedAssignments([...window.finishedAssignments || [], { ...assignmentData, id: crypto.randomUUID() }]);
                 },
                 deleteFinishedAssignment: (id) => { /* */ },
@@ -1002,7 +1111,7 @@
             } catch (error) { console.error("Error:", error); }
         };
 
-
+        
         window.onload = () => {
             changeBackground(currentBackgroundId); 
             window.renderMCASTLinks(); 
@@ -1032,6 +1141,24 @@
             document.getElementById('close-background-gallery-modal-btn').addEventListener('click', closeBackgroundGalleryModal);
             document.getElementById('add-background-btn').addEventListener('click', handleAddBackground);
             
+            // Calendar Event Listeners (NOW CALLING GLOBAL FUNCTIONS)
+            document.getElementById('open-calendar-btn').addEventListener('click', openCalendarModal);
+            document.getElementById('calendar-modal').addEventListener('click', closeCalendarModal);
+            
+            document.getElementById('prev-month-btn').addEventListener('click', () => {
+                currentCalendarDate.setMonth(currentCalendarDate.getMonth() - 1);
+                renderCalendar();
+            });
+            
+            document.getElementById('next-month-btn').addEventListener('click', () => {
+                currentCalendarDate.setMonth(currentCalendarDate.getMonth() + 1);
+                renderCalendar();
+            });
+
+            document.getElementById('today-btn').addEventListener('click', () => {
+                currentCalendarDate = new Date();
+                renderCalendar();
+            });
             // Weekly Timetable Logic (Merged here for optimization)
             // Weekly Timetable Logic (Horizontal + Gold + Click Outside)
             document.getElementById('open-weekly-timetable-btn').addEventListener('click', () => {
@@ -1180,7 +1307,9 @@
     
             <div class="flex justify-between items-center mb-4">
                 <h2 class="text-xl font-semibold text-white flex items-center">
-                    <span data-lucide="clipboard-list" class="w-6 h-6 mr-2 text-green-400"></span>
+                    <button id="open-calendar-btn" class="hover:bg-black/0 rounded-lg p-1 transition-all duration-200 group" title="Open Calendar View">
+                        <span data-lucide="clipboard-list" class="w-6 h-6 text-green-400 group-hover:scale-110 transition-transform"></span>
+                    </button>
                     Upcoming Assignments
                 </h2>
                 <button id="open-assignment-modal-btn"
@@ -1317,7 +1446,40 @@
         <span data-lucide="square-menu" class="w-6 h-6 text-white"></span>
     </button>
 
-    <div id="version-timestamp">Last Update 28/11/2025 - 11:37</div>
+    <div id="calendar-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition-opacity duration-300 z-50">
+        <div class="bg-gray-900 w-full max-w-5xl rounded-2xl shadow-2xl border border-gray-700 flex flex-col max-h-[90vh]">
+            
+            <div class="flex items-center justify-between p-6 border-b border-gray-700 bg-gray-800/50 rounded-t-2xl">
+                <h3 id="calendar-month-year" class="text-2xl font-bold text-white capitalize">December 2025</h3>
+                <div class="flex space-x-2">
+                    <button id="prev-month-btn" class="p-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-white transition-colors">
+                        <span data-lucide="chevron-left" class="w-5 h-5"></span>
+                    </button>
+                    <button id="today-btn" class="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold transition-colors">
+                        Today
+                    </button>
+                    <button id="next-month-btn" class="p-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-white transition-colors">
+                        <span data-lucide="chevron-right" class="w-5 h-5"></span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-7 bg-gray-800/30 border-b border-gray-700">
+                <div class="p-3 text-center text-gray-400 font-semibold text-sm">Sun</div>
+                <div class="p-3 text-center text-gray-400 font-semibold text-sm">Mon</div>
+                <div class="p-3 text-center text-gray-400 font-semibold text-sm">Tue</div>
+                <div class="p-3 text-center text-gray-400 font-semibold text-sm">Wed</div>
+                <div class="p-3 text-center text-gray-400 font-semibold text-sm">Thu</div>
+                <div class="p-3 text-center text-gray-400 font-semibold text-sm">Fri</div>
+                <div class="p-3 text-center text-gray-400 font-semibold text-sm">Sat</div>
+            </div>
+
+            <div id="calendar-grid" class="grid grid-cols-7 auto-rows-fr gap-px bg-gray-700 overflow-y-auto custom-scroll p-px">
+                </div>
+        </div>
+    </div>
+
+    <div id="version-timestamp">Last Update 09/12/2025 - 11:17</div>
     
     <style>
     /* Custom Scrollbar for horizontal scrolling */
