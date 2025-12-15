@@ -434,11 +434,19 @@
                                 dateObj.getFullYear() === today.getFullYear();
                 
                 // Find assignments for this specific day
-                const dayAssignments = assignments.filter(a => {
-                    if(!a.deadline) return false;
+                const dayAssignments = [
+                    ...assignments.map(a => ({ ...a, isFinished: false })),
+                    ...finishedAssignments.map(a => ({ ...a, isFinished: true }))
+                ].filter(a => {
+                    if (!a.deadline) return false;
                     const d = a.deadline instanceof Date ? a.deadline : new Date(a.deadline);
-                    return d.getDate() === day && d.getMonth() === month && d.getFullYear() === year;
+                    return (
+                        d.getDate() === day &&
+                        d.getMonth() === month &&
+                        d.getFullYear() === year
+                    );
                 });
+
 
                 const cell = document.createElement('div');
                 cell.className = `bg-gray-900 min-h-[120px] p-2 border border-white/5 flex flex-col relative group transition-colors hover:bg-gray-800 ${isToday ? 'ring-2 ring-inset ring-blue-500 bg-blue-900/10' : ''}`;
@@ -453,8 +461,16 @@
                     if (dayAssignments.length <= 2) {
                         // Show 1 or 2 distinct red boxes
                         contentHTML = dayAssignments.map(a => `
-                            <div class="mt-1 p-1.5 rounded bg-red-600/80 hover:bg-red-500 text-white text-xs truncate shadow-sm cursor-pointer" 
-                                onclick="openAssignmentDetailModal(assignments.find(x => x.id === '${a.id}')); document.getElementById('calendar-modal').classList.add('opacity-0', 'pointer-events-none'); event.stopPropagation();"
+                            <div
+                                class="mt-1 p-1.5 rounded text-xs truncate shadow-sm
+                                ${a.isFinished
+                                    ? 'bg-gray-600/40 text-white/50 line-through cursor-default'
+                                    : 'bg-red-600/80 hover:bg-red-500 text-white cursor-pointer'}"
+                                ${!a.isFinished ? `
+                                    onclick="openAssignmentDetailModal(assignments.find(x => x.id === '${a.id}'));
+                                    document.getElementById('calendar-modal').classList.add('opacity-0', 'pointer-events-none');
+                                    event.stopPropagation();"
+                                ` : ''}
                                 title="${a.title}">
                                 ${a.title}
                             </div>
@@ -470,10 +486,13 @@
                             <div id="${hiddenListId}" class="hidden absolute top-full left-0 right-0 z-10 bg-gray-800 border border-gray-600 rounded-lg shadow-xl mt-1 overflow-hidden">
                                 ${dayAssignments.map(a => `
                                     <div class="p-2 border-b border-gray-700 hover:bg-gray-700 text-xs text-white cursor-pointer truncate"
-                                        onclick="openAssignmentDetailModal(assignments.find(x => x.id === '${a.id}')); document.getElementById('calendar-modal').classList.add('opacity-0', 'pointer-events-none'); event.stopPropagation();">
+                                        onclick="openAssignmentDetailModal(assignments.find(x => x.id === '${a.id}'));
+                                        document.getElementById('calendar-modal').classList.add('opacity-0', 'pointer-events-none');
+                                        event.stopPropagation();">
                                         ${a.title}
                                     </div>
                                 `).join('')}
+
                             </div>
                         `;
                     }
@@ -1479,7 +1498,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 09/12/2025 - 11:28</div>
+    <div id="version-timestamp">Last Update 15/12/2025 - 12:12</div>
     
     <style>
     /* Custom Scrollbar for horizontal scrolling */

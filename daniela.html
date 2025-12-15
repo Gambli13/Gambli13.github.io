@@ -365,11 +365,15 @@
                                 dateObj.getFullYear() === today.getFullYear();
                 
                 // Find assignments for this specific day
-                const dayAssignments = assignments.filter(a => {
-                    if(!a.deadline) return false;
+                const dayAssignments = [
+                    ...assignments.map(a => ({ ...a, isFinished: false })),
+                    ...finishedAssignments.map(a => ({ ...a, isFinished: true }))
+                ].filter(a => {
+                    if (!a.deadline) return false;
                     const d = a.deadline instanceof Date ? a.deadline : new Date(a.deadline);
                     return d.getDate() === day && d.getMonth() === month && d.getFullYear() === year;
                 });
+
 
                 const cell = document.createElement('div');
                 // Clean white cell with subtle hover effect
@@ -392,12 +396,21 @@
                             const safeDeadline = a.deadline instanceof Date ? a.deadline.toISOString() : a.deadline;
 
                             return `
-                            <div class="mt-1 p-1.5 rounded bg-red-100 hover:bg-red-200 text-red-700 text-xs truncate shadow-sm cursor-pointer border border-red-200" 
-                                onclick="window.openAssignmentDetailModal('${a.id}', '${safeTitle}', '${safeDeadline}', '${safeNotes}'); document.getElementById('calendar-modal').classList.add('opacity-0', 'pointer-events-none'); event.stopPropagation();"
+                            <div
+                                class="mt-1 p-1.5 rounded text-xs truncate shadow-sm border
+                                ${a.isFinished
+                                    ? 'bg-gray-200 text-gray-400 line-through cursor-default border-gray-300'
+                                    : 'bg-red-100 hover:bg-red-200 text-red-700 cursor-pointer border-red-200'}"
+                                ${!a.isFinished ? `
+                                    onclick="window.openAssignmentDetailModal('${a.id}', '${safeTitle}', '${safeDeadline}', '${safeNotes}');
+                                    document.getElementById('calendar-modal').classList.add('opacity-0', 'pointer-events-none');
+                                    event.stopPropagation();"
+                                ` : ''}
                                 title="${a.title}">
                                 ${a.title}
                             </div>
-                        `}).join('');
+                            `;
+                            }).join('');
                     } else {
                         // Show "X Assignments" dropdown
                         const hiddenListId = `dropdown-${year}-${month}-${day}`;
@@ -412,10 +425,19 @@
                                     const safeNotes = (a.notes || '').replace(/'/g, "\\'");
                                     const safeDeadline = a.deadline instanceof Date ? a.deadline.toISOString() : a.deadline;
                                     return `
-                                    <div class="p-2 border-b border-gray-100 hover:bg-gray-50 text-xs text-dark-primary cursor-pointer truncate"
-                                        onclick="window.openAssignmentDetailModal('${a.id}', '${safeTitle}', '${safeDeadline}', '${safeNotes}'); document.getElementById('calendar-modal').classList.add('opacity-0', 'pointer-events-none'); event.stopPropagation();">
+                                    <div
+                                        class="p-2 border-b border-gray-100 text-xs truncate
+                                        ${a.isFinished
+                                            ? 'text-gray-400 line-through cursor-default'
+                                            : 'text-dark-primary hover:bg-gray-50 cursor-pointer'}"
+                                        ${!a.isFinished ? `
+                                            onclick="window.openAssignmentDetailModal('${a.id}', '${safeTitle}', '${safeDeadline}', '${safeNotes}');
+                                            document.getElementById('calendar-modal').classList.add('opacity-0', 'pointer-events-none');
+                                            event.stopPropagation();"
+                                        ` : ''}>
                                         ${a.title}
                                     </div>
+
                                 `}).join('')}
                             </div>
                         `;
@@ -1338,7 +1360,7 @@
         <span data-lucide="calendar-range" class="w-6 h-6 text-dark-primary group-hover:text-blue-600 transition-colors"></span>
     </button>
 
-    <div id="version-timestamp" class="text-dark-secondary">Last Update 15/12/2025 - 12:03</div>
+    <div id="version-timestamp" class="text-dark-secondary">Last Update 15/12/2025 - 12:12</div>
     </body>
 
     <style>
