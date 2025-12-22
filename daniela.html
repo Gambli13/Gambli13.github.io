@@ -661,7 +661,7 @@
             let locationPrefix = 'Location: ';
 
             if (isCurrent && totalSeconds > 0) {
-                 statusClass = title === "BREAK" ? "text-green-600" : "text-purple-600";
+                 statusClass = title === "BREAK" ? "text-pink-400" : "text-purple-600";
                  icon = title === "BREAK" ? "coffee" : "hourglass";
                  subText = `<span class="text-dark-secondary">Currently in:</span> <span class="font-bold text-dark-primary">${title}</span>`;
                  countdownHTML = `<span class="font-bold">${hours}</span>h <span class="font-bold">${minutes}</span>m left`;
@@ -885,7 +885,7 @@
                 const minutes = String(deadlineDate.getMinutes()).padStart(2, '0');
                 const formattedDate = `${day}/${month}/${year} at ${hours}:${minutes}`;
                 const deadlineISO = deadlineDate.toISOString(); 
-                const countdownHTML = `<div id="countdown-${assignment.id}" class="text-xs font-mono text-yellow-700 mt-1">Calculating...</div>`;
+                const countdownHTML = `<div id="countdown-${assignment.id}" class="text-xs font-mono text-pink-300 mt-1">Calculating...</div>`;
                 const itemWrap = document.createElement('div');
                 itemWrap.id = `assignment-item-wrap-${assignment.id}`;
                 itemWrap.className = 'relative mb-3 group'; 
@@ -896,7 +896,7 @@
                         data-id="${assignment.id}"
                         onclick="window.openAssignmentDetailModal('${assignment.id}', '${assignment.title.replace(/'/g, "\\'")}', '${deadlineISO}', '${(assignment.notes || '').replace(/'/g, "\\'")}')">
                         <div class="flex-grow pr-4">
-                            <p class="text-sm font-semibold text-dark-primary">${assignment.title}</p>
+                            <p class="text-sm font-semibold text-pink-500 text-dark-primary">${assignment.title}</p>
                             <p class="text-xs text-dark-secondary">${formattedDate}</p>
                             ${countdownHTML}
                         </div>
@@ -1151,7 +1151,7 @@
             <div class="lg:col-span-2 p-6 bg-white/70 rounded-3xl backdrop-blur-xl shadow-2xl h-fit border border-gray-100">
                 <div class="flex justify-between items-center mb-4">
                     <h2 class="text-xl font-bold text-dark-primary flex items-center">
-                        <span data-lucide="graduation-cap" class="w-6 h-6 mr-2 text-blue-600 icon-dark-primary"></span>
+                        <span data-lucide="graduation-cap" class="w-6 h-6 mr-2 text-red-600 icon-dark-primary"></span>
                         UoM Links
                     </h2>
                     </div>
@@ -1166,7 +1166,7 @@
                 </div>
                 <form id="search-form" class="w-full max-w-2xl relative">
                     <input type="text" id="search-input" placeholder="Search Google or type a URL..."
-                            class="w-full p-4 pl-12 bg-white/90 text-dark-primary border-2 border-transparent focus:border-blue-500 rounded-full shadow-lg outline-none transition-all duration-300"
+                            class="w-full p-4 pl-12 bg-white/90 text-dark-primary border-2 border-transparent focus:border-pink-400 rounded-full shadow-lg outline-none transition-all duration-300"
                             autofocus>
                     <span data-lucide="search" class="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-dark-secondary icon-dark-primary"></span>
                     <button type="submit" class="hidden">Search</button>
@@ -1190,12 +1190,12 @@
              <div class="flex justify-between items-center mb-4">
                  <h2 class="text-xl font-bold text-dark-primary flex items-center">
                     <button id="open-calendar-btn" class="hover:bg-gray-0 rounded-lg p-1 transition-all duration-200 group mr-1" title="Open Calendar View">
-                        <span data-lucide="clipboard-list" class="w-6 h-6 text-green-600 group-hover:scale-110 transition-transform"></span>
+                        <span data-lucide="clipboard-list" class="w-6 h-6 text-pink-400 group-hover:scale-110 transition-transform"></span>
                     </button>
                      Upcoming Assignments
                  </h2>
                  <button id="open-assignment-modal-btn"
-                         class="w-8 h-8 flex items-center justify-center bg-green-500 text-white rounded-full shadow-lg hover:bg-green-600 transition-transform transform hover:scale-110"
+                         class="w-8 h-8 flex items-center justify-center bg-pink-300 text-white rounded-full shadow-lg hover:bg-pink-400 transition-transform transform hover:scale-110"
                          title="Add New Assignment">
                      <span data-lucide="plus" class="w-5 h-5 icon-dark-primary"></span>
                  </button>
@@ -1360,7 +1360,7 @@
         <span data-lucide="calendar-range" class="w-6 h-6 text-dark-primary group-hover:text-blue-600 transition-colors"></span>
     </button>
 
-    <div id="version-timestamp" class="text-dark-secondary">Last Update 15/12/2025 - 12:12</div>
+    <div id="version-timestamp" class="text-dark-secondary">Last Update 22/12/2025 - 14:06</div>
     </body>
 
     <style>
@@ -1377,8 +1377,8 @@
                     let baseClasses = "p-3 rounded-lg mb-2 transition-all duration-300 border shadow-sm";
                     let bgClass, textTitleClass, subTextClass;
                     if (highlight) {
-                        if (item.title === "BREAK") { bgClass = 'bg-green-100 border-green-300 ring-2 ring-green-200'; textTitleClass = 'text-green-800'; subTextClass = 'text-green-700'; } 
-                        else { bgClass = 'bg-blue-100 border-blue-300 ring-2 ring-blue-200'; textTitleClass = 'text-blue-900'; subTextClass = 'text-blue-700'; }
+                        if (item.title === "BREAK") { bgClass = 'bg-pink-100 border-pink-300 ring-2 ring-pink-200'; textTitleClass = 'text-pink-800'; subTextClass = 'text-pink-700'; } 
+                        else { bgClass = 'bg-purple-100 border-purple-300 ring-2 ring-purple-200'; textTitleClass = 'text-purple-900'; subTextClass = 'text-purple-700'; }
                     } else if (item.title === "END OF DAY" || item.title === "WEEKEND") { bgClass = 'bg-gray-100 border-transparent opacity-60'; textTitleClass = 'text-gray-500 font-normal italic'; subTextClass = 'text-gray-400'; } 
                     else { bgClass = 'bg-white border-gray-200 hover:border-blue-300'; textTitleClass = 'text-dark-primary'; subTextClass = 'text-dark-secondary'; }
                     return `
