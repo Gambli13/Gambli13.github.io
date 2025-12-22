@@ -547,6 +547,7 @@
 
         const MCAST_LINKS = [
             { name: "UoM VLE", url: "https://accounts.um.edu.mt/sign-in/go/vle/my/", icon: "school" },
+            { name: "Citation Generator", url: "https://www.mybib.com/tools/apa-citation-generator", icon: "quote" },
         ];
 
         const TIMETABLE = {
@@ -661,7 +662,7 @@
             let locationPrefix = 'Location: ';
 
             if (isCurrent && totalSeconds > 0) {
-                 statusClass = title === "BREAK" ? "text-pink-400" : "text-purple-600";
+                 statusClass = title === "BREAK" ? "text-pink-300" : "text-pink-400";
                  icon = title === "BREAK" ? "coffee" : "hourglass";
                  subText = `<span class="text-dark-secondary">Currently in:</span> <span class="font-bold text-dark-primary">${title}</span>`;
                  countdownHTML = `<span class="font-bold">${hours}</span>h <span class="font-bold">${minutes}</span>m left`;
@@ -1378,7 +1379,7 @@
                     let bgClass, textTitleClass, subTextClass;
                     if (highlight) {
                         if (item.title === "BREAK") { bgClass = 'bg-pink-100 border-pink-300 ring-2 ring-pink-200'; textTitleClass = 'text-pink-800'; subTextClass = 'text-pink-700'; } 
-                        else { bgClass = 'bg-purple-100 border-purple-300 ring-2 ring-purple-200'; textTitleClass = 'text-purple-900'; subTextClass = 'text-purple-700'; }
+                        else { bgClass = 'bg-pink-100 border-pink-300 ring-2 ring-pink-200'; textTitleClass = 'text-pink-800'; subTextClass = 'text-pink-700'; }
                     } else if (item.title === "END OF DAY" || item.title === "WEEKEND") { bgClass = 'bg-gray-100 border-transparent opacity-60'; textTitleClass = 'text-gray-500 font-normal italic'; subTextClass = 'text-gray-400'; } 
                     else { bgClass = 'bg-white border-gray-200 hover:border-blue-300'; textTitleClass = 'text-dark-primary'; subTextClass = 'text-dark-secondary'; }
                     return `
