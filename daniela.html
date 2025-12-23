@@ -212,11 +212,21 @@
                 window.renderBookmarks(bookmarks);
             });
             
+            // 3. Backgrounds Listener (FIXED: Added Sorting by Date)
             onSnapshot(collection(db, getCollectionPath('backgrounds')), (snapshot) => {
                 const userBackgrounds = [];
                 snapshot.forEach(doc => {
-                    userBackgrounds.push({ id: doc.id, name: doc.data().name || 'Background', base64: doc.data().base64 });
+                    userBackgrounds.push({ 
+                        id: doc.id, 
+                        name: doc.data().name || 'Background', 
+                        base64: doc.data().base64,
+                        uploadedAt: doc.data().uploadedAt || new Date(0).toISOString() // Ensure date exists
+                    });
                 });
+                
+                // SORT: Newest uploads first
+                userBackgrounds.sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
+                
                 window.setUserBackgrounds(userBackgrounds);
                 window.renderBackgroundGallery(userBackgrounds);
             });
@@ -235,6 +245,7 @@
             });
         };
 
+        
         window.db = {
             addAssignment: async (title, dateString, timeString, notes = '') => {
                 if (!db || !userId) return;
@@ -290,13 +301,21 @@
                 if (!db || !userId) return;
                 try { await deleteDoc(doc(db, getCollectionPath('bookmarks'), id)); } catch (e) { console.error(e); }
             },
+            // FIXED: Returns the new ID so we can select it immediately
             addBackground: async (base64String, fileName) => {
-                if (!db || !userId) return;
+                if (!db || !userId) return null;
                 try {
-                    await addDoc(collection(db, getCollectionPath('backgrounds')), {
-                        base64: base64String, name: fileName, uploadedAt: new Date().toISOString()
+                    const docRef = await addDoc(collection(db, getCollectionPath('backgrounds')), {
+                        base64: base64String, 
+                        name: fileName, 
+                        uploadedAt: new Date().toISOString()
                     });
-                } catch (e) { console.error(e); }
+                    return docRef.id;
+                } catch (e) { 
+                    console.error("Firebase Upload Error:", e); 
+                    alert("Failed to upload. The image might be too large even after compression.");
+                    return null;
+                }
             },
             deleteBackground: async (id) => {
                 if (!db || !userId) return;
@@ -454,6 +473,7 @@
         window.setUserBackgrounds = (newBackgrounds) => {
             USER_BACKGROUNDS = newBackgrounds;
             const isCurrentValid = USER_BACKGROUNDS.some(bg => bg.id === currentBackgroundId);
+            
             if (!isCurrentValid && USER_BACKGROUNDS.length > 0) {
                  currentBackgroundId = USER_BACKGROUNDS[0].id;
                  localStorage.setItem(CURRENT_BG_KEY, currentBackgroundId);
@@ -1062,20 +1082,86 @@
             document.getElementById('background-gallery-modal').classList.add('opacity-0', 'pointer-events-none');
         }
 
+        // NEW UTILITY: Compress image to ensure it fits in Firestore (Limit ~1MB)
+        const resizeAndCompressImage = (file, maxWidth = 1920, quality = 0.8) => {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = (event) => {
+                    const img = new Image();
+                    img.src = event.target.result;
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        let width = img.width;
+                        let height = img.height;
+
+                        // Calculate new dimensions (maintain aspect ratio)
+                        if (width > maxWidth) {
+                            height = Math.round((height * maxWidth) / width);
+                            width = maxWidth;
+                        }
+
+                        canvas.width = width;
+                        canvas.height = height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, width, height);
+
+                        // Recursively reduce quality if file is still too big
+                        const attemptCompression = (q) => {
+                            const dataUrl = canvas.toDataURL('image/jpeg', q);
+                            // Target < 1,000,000 characters for Base64 string
+                            if (dataUrl.length > 1000000 && q > 0.1) {
+                                attemptCompression(q - 0.1);
+                            } else {
+                                resolve(dataUrl);
+                            }
+                        };
+                        attemptCompression(quality);
+                    };
+                    img.onerror = (error) => reject(error);
+                };
+                reader.onerror = (error) => reject(error);
+            });
+        };
+
+        // FIXED: Compresses image and auto-selects the new background
         const handleAddBackground = async () => {
             const fileInput = document.getElementById('background-image-file');
             const file = fileInput.files[0];
             const fileNameInput = document.getElementById('background-file-name');
-            const fileName = fileNameInput.value.trim() || file.name;
-            if (!file) { console.error('Validation Error: Please select an image file.'); return; }
-            if (!file.type.startsWith('image/')) { console.error('Validation Error: File must be an image.'); return; }
-            const MAX_SIZE = 2 * 1024 * 1024; 
-            if (file.size > MAX_SIZE) { alert('Image file is too large. Please upload an image under 2MB.'); return; }
+            const fileName = fileNameInput.value.trim() || file?.name;
+            const btn = document.getElementById('add-background-btn');
+
+            if (!file) { alert('Please select a file.'); return; }
+            if (!file.type.startsWith('image/')) { alert('File must be an image.'); return; }
+
+            // Visual Feedback
+            const originalText = btn.textContent;
+            btn.textContent = "Compressing & Uploading...";
+            btn.disabled = true;
+
             try {
-                const base64String = await fileToBase64(file);
-                await window.db.addBackground(base64String, fileName);
-                fileInput.value = ''; fileNameInput.value = '';
-            } catch (error) { console.error("Failed to add background:", error); alert("An error occurred during upload. Check console for details."); }
+                // Use new compressor instead of raw fileToBase64
+                const base64String = await resizeAndCompressImage(file);
+                
+                // Upload and get new ID
+                const newId = await window.db.addBackground(base64String, fileName);
+                
+                if (newId) {
+                    // Auto-select the new background
+                    currentBackgroundId = newId;
+                    localStorage.setItem(CURRENT_BG_KEY, newId);
+                    
+                    fileInput.value = ''; 
+                    fileNameInput.value = '';
+                }
+            } catch (error) { 
+                console.error("Failed to add background:", error); 
+                alert("An error occurred during upload."); 
+            } finally {
+                btn.textContent = originalText;
+                btn.disabled = false;
+            }
         };
 
         window.onload = () => {
@@ -1361,7 +1447,7 @@
         <span data-lucide="calendar-range" class="w-6 h-6 text-dark-primary group-hover:text-blue-600 transition-colors"></span>
     </button>
 
-    <div id="version-timestamp" class="text-dark-secondary">Last Update 22/12/2025 - 14:06</div>
+    <div id="version-timestamp" class="text-dark-secondary">Last Update 23/12/2025 - 13:31</div>
     </body>
 
     <style>
