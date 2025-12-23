@@ -271,16 +271,26 @@
             window.renderBookmarks(bookmarks);
         });
         
-        // 3. Backgrounds Listener
+        // 3. Backgrounds Listener (FIXED: Added Sorting)
         onSnapshot(collection(db, getCollectionPath('backgrounds')), (snapshot) => {
             const userBackgrounds = [];
             snapshot.forEach(doc => {
-                userBackgrounds.push({ id: doc.id, name: doc.data().name || 'Background', base64: doc.data().base64 });
+                userBackgrounds.push({ 
+                    id: doc.id, 
+                    name: doc.data().name || 'Background', 
+                    base64: doc.data().base64,
+                    uploadedAt: doc.data().uploadedAt || new Date(0).toISOString() // Ensure date exists
+                });
             });
+
+            // SORTING FIX: Always sort by Newest Uploaded first. 
+            // This prevents the order from jumping around based on alphabetical names.
+            userBackgrounds.sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
+
             window.setUserBackgrounds(userBackgrounds);
             window.renderBackgroundGallery(userBackgrounds);
         });
-        
+            
         // 4. Finished Assignments Listener
         onSnapshot(collection(db, getCollectionPath('finished_assignments')), (snapshot) => {
             const finished = [];
@@ -356,13 +366,21 @@
             if (!db || !userId) return;
             try { await deleteDoc(doc(db, getCollectionPath('bookmarks'), id)); } catch (e) { console.error(e); }
         },
+        // FIXED: Now returns the ID of the new doc so we can select it immediately
         addBackground: async (base64String, fileName) => {
-            if (!db || !userId) return;
+            if (!db || !userId) return null;
             try {
-                await addDoc(collection(db, getCollectionPath('backgrounds')), {
-                    base64: base64String, name: fileName, uploadedAt: new Date().toISOString()
+                const docRef = await addDoc(collection(db, getCollectionPath('backgrounds')), {
+                    base64: base64String, 
+                    name: fileName, 
+                    uploadedAt: new Date().toISOString()
                 });
-            } catch (e) { console.error(e); }
+                return docRef.id; // Return the new ID
+            } catch (e) { 
+                console.error("Firebase Upload Error:", e); 
+                alert("Failed to upload. The image might still be too large even after compression.");
+                return null;
+            }
         },
         deleteBackground: async (id) => {
             if (!db || !userId) return;
@@ -370,6 +388,7 @@
         },
     };
 
+    
     initFirebase();
 </script>
 
@@ -508,14 +527,21 @@
 
         window.setUserBackgrounds = (newBackgrounds) => {
             USER_BACKGROUNDS = newBackgrounds;
+            
+            // Check if the currently saved ID actually exists in the new list
             const isCurrentValid = USER_BACKGROUNDS.some(bg => bg.id === currentBackgroundId);
+            
             if (!isCurrentValid && USER_BACKGROUNDS.length > 0) {
+                 // If the saved background was deleted (or we are initializing), default to the newest one (index 0 because we sorted it)
                  currentBackgroundId = USER_BACKGROUNDS[0].id;
                  localStorage.setItem(CURRENT_BG_KEY, currentBackgroundId);
             } else if (USER_BACKGROUNDS.length === 0) {
+                 // No backgrounds available
                  currentBackgroundId = null;
                  localStorage.removeItem(CURRENT_BG_KEY);
             }
+            
+            // Apply the background
             changeBackground(currentBackgroundId);
         }
 
@@ -1118,16 +1144,94 @@
             document.getElementById('background-image-file').value = ''; 
             document.getElementById('background-gallery-modal').classList.add('opacity-0', 'pointer-events-none');
         }
+        // NEW UTILITY: Compress image to ensure it fits in Firestore (Limit ~1MB)
+        const resizeAndCompressImage = (file, maxWidth = 1920, quality = 0.8) => {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = (event) => {
+                    const img = new Image();
+                    img.src = event.target.result;
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        let width = img.width;
+                        let height = img.height;
+
+                        // Calculate new dimensions (maintain aspect ratio)
+                        if (width > maxWidth) {
+                            height = Math.round((height * maxWidth) / width);
+                            width = maxWidth;
+                        }
+
+                        canvas.width = width;
+                        canvas.height = height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, width, height);
+
+                        // Recursively reduce quality if file is still too big (aiming for < 900KB)
+                        // Firestore limit is 1MB (1,048,576 bytes). Base64 adds ~33% overhead.
+                        // Safe target for Base64 string length is ~1,000,000 chars.
+                        
+                        const attemptCompression = (q) => {
+                            const dataUrl = canvas.toDataURL('image/jpeg', q);
+                            if (dataUrl.length > 1000000 && q > 0.1) {
+                                attemptCompression(q - 0.1);
+                            } else {
+                                resolve(dataUrl);
+                            }
+                        };
+                        
+                        attemptCompression(quality);
+                    };
+                    img.onerror = (error) => reject(error);
+                };
+                reader.onerror = (error) => reject(error);
+            });
+        };
+
+        // FIXED: handleAddBackground now compresses image and auto-selects it
         const handleAddBackground = async () => {
             const fileInput = document.getElementById('background-image-file');
             const file = fileInput.files[0];
-            const fileName = document.getElementById('background-file-name').value.trim() || file?.name;
-            if (!file || !file.type.startsWith('image/') || file.size > 2*1024*1024) return alert('Invalid file.');
+            const nameInput = document.getElementById('background-file-name');
+            const fileName = nameInput.value.trim() || file?.name;
+            const btn = document.getElementById('add-background-btn');
+
+            if (!file) return alert('Please select a file.');
+            if (!file.type.startsWith('image/')) return alert('File must be an image.');
+            
+            // Visual feedback
+            const originalText = btn.textContent;
+            btn.textContent = "Compressing & Uploading...";
+            btn.disabled = true;
+
             try {
-                const base64String = await fileToBase64(file);
-                await window.db.addBackground(base64String, fileName);
-                fileInput.value = ''; document.getElementById('background-file-name').value = '';
-            } catch (error) { console.error("Error:", error); }
+                // Use the new compressor instead of raw fileToBase64
+                // This prevents the "Disappearing" bug caused by large files
+                const base64String = await resizeAndCompressImage(file);
+                
+                // Upload and get the new ID
+                const newId = await window.db.addBackground(base64String, fileName);
+                
+                if (newId) {
+                    // AUTO-APPLY FIX: Immediately set this as the current background
+                    currentBackgroundId = newId;
+                    localStorage.setItem(CURRENT_BG_KEY, newId);
+                    
+                    // Clear inputs
+                    fileInput.value = ''; 
+                    nameInput.value = '';
+                    
+                    // The onSnapshot listener will fire shortly and redraw the gallery,
+                    // but since we updated localStorage, it will pick the correct one.
+                }
+            } catch (error) { 
+                console.error("Error:", error); 
+                alert("An error occurred processing the image.");
+            } finally {
+                btn.textContent = originalText;
+                btn.disabled = false;
+            }
         };
 
         
@@ -1498,7 +1602,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 15/12/2025 - 12:12</div>
+    <div id="version-timestamp">Last Update 23/12/2025 - 11:08</div>
     
     <style>
     /* Custom Scrollbar for horizontal scrolling */
