@@ -76,6 +76,42 @@
             opacity: 1;
         }
 
+        .assignment-item-done {
+            position: relative;
+            z-index: 1;
+            transition: opacity 0.5s ease-out,
+                        height 0.5s ease-out,
+                        padding 0.5s ease-out,
+                        margin 0.5s ease-out;
+        }
+
+        .assignment-item-done::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 0;
+            height: 100%;
+            background: linear-gradient(90deg, #97ffa0, #74ec3c);
+            border-radius: 0.5rem;
+            transition: width 0.5s ease-in-out;
+            z-index: -1;
+        }
+
+        .assignment-item-done.swipe-active::before {
+            width: 100%;
+        }
+
+        .assignment-item.swipe-to-delete {
+            opacity: 0;
+            height: 0;
+            padding-top: 0;
+            padding-bottom: 0;
+            margin-top: 0;
+            margin-bottom: 0;
+        }
+
+
         .background-thumbnail {
             width: 100%;
             padding-top: 56.25%; 
@@ -826,16 +862,30 @@
             } catch (e) { return null; }
         };
 
-        window.handleAssignmentDone = (id) => {
+        window.handleAssignmentDone = async (id) => {
+            // find the assignment object
             const assignment = assignments.find(a => a.id === id);
             if (!assignment) return;
-            window.db.addFinishedAssignment({
-                id: assignment.id,
-                title: assignment.title,
-                deadline: assignment.deadline instanceof Date ? assignment.deadline.toISOString() : assignment.deadline,
-                notes: assignment.notes || '' 
-            });
+
+            // get the DOM row (the one you already render)
+            const item = document.getElementById(`assignment-item-${id}`);
+            if (!item) {
+                // fallback: still mark done even if element not found
+                await window.db.addFinishedAssignment(assignment);
+                return;
+            }
+
+            // start green swipe animation
+            item.classList.add('assignment-item-done');
+            void item.offsetWidth; // force reflow so the animation triggers
+            item.classList.add('swipe-active');
+
+            // after animation finishes, move it to finished in Firebase
+            setTimeout(async () => {
+                await window.db.addFinishedAssignment(assignment);
+            }, 500);
         };
+
         
         window.handleAssignmentDelete = (id) => { window.db.deleteAssignment(id); };
 
@@ -1447,7 +1497,7 @@
         <span data-lucide="calendar-range" class="w-6 h-6 text-dark-primary group-hover:text-blue-600 transition-colors"></span>
     </button>
 
-    <div id="version-timestamp" class="text-dark-secondary">Last Update 23/12/2025 - 13:31</div>
+    <div id="version-timestamp" class="text-dark-secondary">Last Update 02/01/2026 - 11:54</div>
     </body>
 
     <style>
