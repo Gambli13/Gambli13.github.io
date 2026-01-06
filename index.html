@@ -547,14 +547,23 @@
 
         const changeBackground = (backgroundId) => {
             if (!backgroundContainer) backgroundContainer = document.getElementById('background-container');
+            
+            // FIX: If data hasn't loaded yet (length is 0), DO NOT delete the preference.
+            // We just return early and wait for Firebase to load the list.
+            if (USER_BACKGROUNDS.length === 0 && backgroundId) return;
+
             const selectedBackground = USER_BACKGROUNDS.find(bg => bg.id === backgroundId);
+            
             if (selectedBackground) {
                 currentBackgroundId = selectedBackground.id;
                 localStorage.setItem(CURRENT_BG_KEY, currentBackgroundId);
                 backgroundContainer.style.backgroundImage = `url('${selectedBackground.base64}')`;
             } else {
-                currentBackgroundId = null;
-                localStorage.removeItem(CURRENT_BG_KEY);
+                // Only clear the preference if we actually have data loaded, implying the specific background was deleted.
+                if (USER_BACKGROUNDS.length > 0) {
+                    currentBackgroundId = null;
+                    localStorage.removeItem(CURRENT_BG_KEY);
+                }
                 backgroundContainer.style.backgroundImage = `url('data:image/svg+xml,%3Csvg xmlns=\\'http://www.w3.org/2000/svg\\' viewBox=\\'0 0 1 1\\'%3E%3Crect width=\\'1\\' height=\\'1\\' fill=\\'%230f172a\\'/%3E%3C/svg%3E')`; 
             }
         };
@@ -1236,7 +1245,8 @@
 
         
         window.onload = () => {
-            changeBackground(currentBackgroundId); 
+            // changeBackground(currentBackgroundId); 
+            
             window.renderMCASTLinks(); 
             renderScheduleWidget(); 
             if (nextLessonInterval) clearInterval(nextLessonInterval);
@@ -1602,7 +1612,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 23/12/2025 - 11:08</div>
+    <div id="version-timestamp">Last Update 06/01/2025 - 08:24</div>
     
     <style>
     /* Custom Scrollbar for horizontal scrolling */
