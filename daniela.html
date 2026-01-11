@@ -712,7 +712,7 @@
 
             let countdownHTML;
             let icon = "calendar";
-            let statusClass = "text-blue-600"; 
+            let statusClass = "text-pink-600"; 
             let subText = `<span class="text-dark-secondary">Next Up:</span> <span class="font-bold text-dark-primary">${title}</span>`; 
             let timeRangeToDisplay = '';
             let locationPrefix = 'Location: ';
@@ -731,7 +731,7 @@
                 timeRangeToDisplay = `${start} - ${end}`;
             } else if (totalSeconds > 0) {
                 countdownHTML = `<span class="font-bold">${hours}</span>h <span class="font-bold">${minutes}</span>m`;
-                if (title === "BREAK") { icon = "coffee"; statusClass = "text-green-600"; } else { icon = "clock"; statusClass = "text-blue-600"; }
+                if (title === "BREAK") { icon = "coffee"; statusClass = "text-pink-300"; } else { icon = "clock"; statusClass = "text-pink-600"; }
                 timeRangeToDisplay = `${start} - ${end}`;
             } else {
                 countdownHTML = "Finished";
@@ -785,17 +785,20 @@
                     window.renderAssignments(assignments);
                     window.renderCalendar(); // Render calendar in mock mode
                 },
-                updateAssignment: (id, title, deadlineDate, notes = '') => {
-                    const index = assignments.findIndex(a => a.id === id);
-                    if (index !== -1) {
-                        assignments[index].title = `${title} (Mock Updated)`;
-                        assignments[index].deadline = deadlineDate;
-                        assignments[index].notes = notes; 
-                        assignments[index].updatedAt = new Date();
-                        assignments.sort((a, b) => (a.deadline || 0) - (b.deadline || 0));
-                        window.renderAssignments(assignments);
-                        window.renderCalendar(); // Render calendar in mock mode
-                    }
+                updateAssignment: async (id, title, dateString, timeString, notes, subtasks) => {
+                    if (!db || !userId) return;
+                    try {
+                        const deadlineDate = createDeadlineDate(dateString, timeString);
+                        const deadlineISO = deadlineDate ? deadlineDate.toISOString() : null;
+                        
+                        await setDoc(doc(db, getCollectionPath('assignments'), id), {
+                            title: title,
+                            deadline: deadlineISO, 
+                            notes: notes || '',
+                            subtasks: subtasks || [], // Save the subtasks
+                            updatedAt: new Date().toISOString()
+                        }, { merge: true }); 
+                    } catch (e) { console.error(e); }
                 },
                 deleteAssignment: (id) => {
                     assignments = assignments.filter(a => a.id !== id);
@@ -1065,37 +1068,18 @@
             });
         };
 
-        const openAssignmentModalUI = () => document.getElementById('assignment-modal').classList.remove('opacity-0', 'pointer-events-none');
-        
-        window.openAssignmentDetailModal = (id, title, deadlineISO, notes) => {
-            currentAssignmentId = id;
-            isEditMode = true;
-            document.getElementById('assignment-title').value = title;
-            if (deadlineISO) {
-                const deadlineDate = new Date(deadlineISO);
-                const datePart = deadlineDate.getFullYear() + '-' + String(deadlineDate.getMonth() + 1).padStart(2, '0') + '-' + String(deadlineDate.getDate()).padStart(2, '0');
-                const timePart = String(deadlineDate.getHours()).padStart(2, '0') + ':' + String(deadlineDate.getMinutes()).padStart(2, '0');
-                document.getElementById('assignment-deadline-date').value = datePart; 
-                document.getElementById('assignment-deadline-time').value = timePart;
-            } else {
-                document.getElementById('assignment-deadline-date').value = '';
-                document.getElementById('assignment-deadline-time').value = '23:59';
-            }
-            document.getElementById('assignment-notes').value = notes;
-            document.getElementById('add-assignment-btn').textContent = 'Update Assignment';
-            openAssignmentModalUI();
-        };
-
-        const closeAssignmentModal = () => {
-            document.getElementById('assignment-modal').classList.add('opacity-0', 'pointer-events-none');
-            document.querySelector('#assignment-modal h3').textContent = 'Add New Assignment';
-            document.getElementById('add-assignment-btn').textContent = 'Save Assignment';
+        // --- ADD MODAL LOGIC (Simple) ---
+        const openAssignmentModalUI = () => {
+            document.getElementById('assignment-modal').classList.remove('opacity-0', 'pointer-events-none');
+            // Reset "Add" inputs
             document.getElementById('assignment-title').value = '';
             document.getElementById('assignment-deadline-date').value = '';
-            document.getElementById('assignment-deadline-time').value = '23:59'; 
+            document.getElementById('assignment-deadline-time').value = ''; 
             document.getElementById('assignment-notes').value = '';
-            currentAssignmentId = null;
-            isEditMode = false;
+        };
+        
+        const closeAssignmentModal = () => {
+            document.getElementById('assignment-modal').classList.add('opacity-0', 'pointer-events-none');
         };
 
         const handleAddAssignment = async () => {
@@ -1103,10 +1087,138 @@
             const deadlineDateString = document.getElementById('assignment-deadline-date').value;
             const deadlineTimeString = document.getElementById('assignment-deadline-time').value;
             const notes = document.getElementById('assignment-notes').value.trim();
+            
             if (!title || !deadlineDateString) { alert('Please provide an assignment title and a deadline date.'); return; }
-            if (isEditMode) { await window.db.updateAssignment(currentAssignmentId, title, deadlineDateString, deadlineTimeString, notes); } 
-            else { await window.db.addAssignment(title, deadlineDateString, deadlineTimeString, notes); }
+            
+            await window.db.addAssignment(title, deadlineDateString, deadlineTimeString, notes);
             closeAssignmentModal();
+        };
+
+        // --- DETAIL MODAL LOGIC (With Sub-tasks) ---
+        let detailModal, detailIdInput, detailTitleInput, detailDeadlineDateInput, detailDeadlineTimeInput, detailNoteInput;
+        let currentSubtasks = [];
+
+        const renderSubtaskUI = () => {
+            const container = document.getElementById('subtask-list-container');
+            container.innerHTML = '';
+
+            currentSubtasks.forEach((task, index) => {
+                const row = document.createElement('div');
+                row.className = 'flex items-center space-x-2 mb-2 animate-fadeIn';
+                
+                // 1. Checkbox (Green accent)
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.checked = task.done;
+                checkbox.className = "w-5 h-5 rounded border-gray-300 accent-green-500 cursor-pointer flex-shrink-0";
+                checkbox.onchange = () => {
+                    task.done = checkbox.checked;
+                    renderSubtaskUI();
+                };
+
+                // 2. Text Input (Styled for Daniela)
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.value = task.text;
+                input.placeholder = "Sub-task details...";
+                
+                // Green background if done, otherwise light gray
+                const bgClass = task.done 
+                    ? 'bg-green-50 text-green-700 border-green-200 line-through decoration-green-500/30' 
+                    : 'bg-gray-50 text-dark-primary border-gray-200 focus:bg-white';
+                
+                input.className = `flex-1 p-2 rounded-lg border outline-none focus:border-pink-300 transition-all duration-300 ${bgClass}`;
+                
+                input.oninput = (e) => { task.text = e.target.value; };
+
+                // 3. Delete Button
+                const delBtn = document.createElement('button');
+                delBtn.innerHTML = '<span data-lucide="x" class="w-4 h-4"></span>';
+                delBtn.className = "text-red-400 hover:text-red-600 p-1.5 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0";
+                delBtn.onclick = () => {
+                    currentSubtasks.splice(index, 1);
+                    renderSubtaskUI();
+                };
+
+                row.appendChild(checkbox);
+                row.appendChild(input);
+                row.appendChild(delBtn);
+                container.appendChild(row);
+            });
+            lucide.createIcons();
+        };
+
+        const addSubtask = () => {
+            currentSubtasks.push({ text: '', done: false });
+            renderSubtaskUI();
+            
+            // Auto-scroll logic
+            const container = document.querySelector('#assignment-detail-modal .overflow-y-auto');
+            setTimeout(() => {
+                if(container) container.scrollTop = container.scrollHeight;
+                const inputs = document.querySelectorAll('#subtask-list-container input[type="text"]');
+                if(inputs.length > 0) inputs[inputs.length - 1].focus();
+            }, 50);
+        };
+
+        // This replaces the old Open function
+        window.openAssignmentDetailModal = (id, title, deadlineISO, notes) => {
+            // Retrieve full assignment object to get subtasks
+            const assignment = assignments.find(a => a.id === id);
+            
+            detailIdInput.value = id;
+            detailTitleInput.value = title;
+            
+            if (deadlineISO) {
+                const deadlineDate = new Date(deadlineISO);
+                const yyyy = deadlineDate.getFullYear();
+                const mm = String(deadlineDate.getMonth() + 1).padStart(2, '0');
+                const dd = String(deadlineDate.getDate()).padStart(2, '0');
+                const hh = String(deadlineDate.getHours()).padStart(2, '0');
+                const min = String(deadlineDate.getMinutes()).padStart(2, '0');
+                
+                detailDeadlineDateInput.value = `${yyyy}-${mm}-${dd}`;
+                detailDeadlineTimeInput.value = `${hh}:${min}`;
+            } else {
+                detailDeadlineDateInput.value = '';
+                detailDeadlineTimeInput.value = '';
+            }
+            
+            detailNoteInput.value = notes || '';
+
+            // Load Subtasks
+            currentSubtasks = assignment && assignment.subtasks ? JSON.parse(JSON.stringify(assignment.subtasks)) : [];
+            renderSubtaskUI();
+
+            detailModal.classList.remove('opacity-0', 'pointer-events-none');
+        };
+
+        const closeAssignmentDetailModal = () => {
+            detailModal.classList.add('opacity-0', 'pointer-events-none');
+            currentSubtasks = [];
+        };
+
+        const handleSaveDetailChanges = async () => {
+            const dateString = detailDeadlineDateInput.value;
+            const timeString = detailDeadlineTimeInput.value || null;
+            if (!dateString) return; 
+
+            await window.db.updateAssignment(
+                detailIdInput.value, 
+                detailTitleInput.value.trim(), 
+                dateString, 
+                timeString, 
+                detailNoteInput.value,
+                currentSubtasks
+            );
+            closeAssignmentDetailModal();
+        };
+
+        const handleDeleteFromDetail = async () => {
+            if (confirm("Are you sure you want to delete this task?")) {
+                await window.db.deleteAssignment(detailIdInput.value);
+                closeAssignmentDetailModal();
+            }
         };
 
         const openBookmarkModal = () => document.getElementById('bookmark-modal').classList.remove('opacity-0', 'pointer-events-none');
@@ -1237,6 +1349,19 @@
                 const query = document.getElementById('search-input').value;
                 if (query) window.location.href = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
             });
+
+            detailModal = document.getElementById('assignment-detail-modal');
+            detailIdInput = document.getElementById('detail-assignment-id');
+            detailTitleInput = document.getElementById('detail-assignment-title');
+            detailDeadlineDateInput = document.getElementById('detail-assignment-deadline-date');
+            detailDeadlineTimeInput = document.getElementById('detail-assignment-deadline-time');
+            detailNoteInput = document.getElementById('detail-assignment-note');
+
+
+            document.getElementById('close-detail-modal-btn').addEventListener('click', closeAssignmentDetailModal);
+            document.getElementById('save-assignment-detail-btn').addEventListener('click', handleSaveDetailChanges);
+            document.getElementById('delete-from-detail-btn').addEventListener('click', handleDeleteFromDetail);
+            document.getElementById('add-subtask-btn').addEventListener('click', addSubtask);
 
             // CALENDAR EVENT LISTENERS (NEW)
             document.getElementById('open-calendar-btn').addEventListener('click', openCalendarModal);
@@ -1388,6 +1513,75 @@
         </div>
     </div>
 
+    <div id="assignment-detail-modal"
+         class="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center p-4 transition-opacity duration-300 opacity-0 pointer-events-none z-50">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg border border-gray-200 transform transition-all duration-300 scale-100 flex flex-col max-h-[85vh]">
+            
+            <div class="p-6 pb-2 flex-shrink-0">
+                <h3 class="text-2xl font-bold text-dark-primary">Task Details</h3>
+            </div>
+            
+            <div class="p-6 pt-2 overflow-y-auto custom-scroll space-y-4 flex-grow">
+                <input type="hidden" id="detail-assignment-id">
+                
+                <div>
+                    <label class="block text-dark-secondary text-sm font-semibold mb-1">Title</label>
+                    <input type="text" id="detail-assignment-title" 
+                           class="w-full p-3 rounded-xl bg-gray-50 text-dark-primary border border-gray-200 focus:border-pink-300 outline-none transition-colors">
+                </div>
+                
+                <div>
+                    <label class="block text-dark-secondary text-sm font-semibold mb-1">Deadline</label>
+                    <div class="flex space-x-2">
+                        <input type="date" id="detail-assignment-deadline-date" 
+                               class="w-1/2 p-3 rounded-xl bg-gray-50 text-dark-primary border border-gray-200 focus:border-pink-300 outline-none transition-colors">
+                        <input type="time" id="detail-assignment-deadline-time" 
+                               class="w-1/2 p-3 rounded-xl bg-gray-50 text-dark-primary border border-gray-200 focus:border-pink-300 outline-none transition-colors">
+                    </div>
+                </div>
+
+                <div class="border-t border-gray-200 pt-4">
+                    <div class="flex justify-between items-center mb-3">
+                        <label class="text-dark-secondary text-sm font-semibold">Sub-tasks</label>
+                        <button id="add-subtask-btn" 
+                                class="flex items-center text-xs bg-pink-100 hover:bg-pink-200 text-pink-700 px-3 py-1.5 rounded-lg transition-colors border border-pink-200 shadow-sm">
+                            <span data-lucide="plus" class="w-3 h-3 mr-1"></span> Add
+                        </button>
+                    </div>
+                    
+                    <div id="subtask-list-container" class="flex flex-col w-full">
+                        </div>
+                </div>
+
+                <div>
+                    <label class="block text-dark-secondary text-sm font-semibold mb-1">Notes</label>
+                    <textarea id="detail-assignment-note" rows="4" 
+                              class="w-full p-3 rounded-xl bg-gray-50 text-dark-primary border border-gray-200 focus:border-pink-300 outline-none resize-none transition-colors"></textarea>
+                </div>
+            </div>
+
+            <div class="p-6 border-t border-gray-200 bg-gray-50 rounded-b-2xl flex-shrink-0">
+                <div class="flex justify-between space-x-4">
+                    <button id="delete-from-detail-btn" 
+                            class="px-4 py-2 rounded-xl bg-red-100 text-red-600 hover:bg-red-200 font-semibold transition-colors text-sm border border-red-200">
+                        Delete Task
+                    </button>
+                    <div class="flex space-x-3">
+                        <button id="close-detail-modal-btn" 
+                                class="px-4 py-2 rounded-xl bg-gray-200 text-dark-primary hover:bg-gray-300 transition-colors text-sm">
+                            Cancel
+                        </button>
+                        <button id="save-assignment-detail-btn" 
+                                class="px-4 py-2 rounded-xl bg-blue-500 text-white font-semibold hover:bg-blue-600 transition-colors text-sm shadow-md">
+                            Save Changes
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
     <div id="bookmark-modal"
          class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 transition-opacity duration-300 opacity-0 pointer-events-none z-50">
         <div class="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-md border border-gray-200 transform transition-all duration-300 scale-100">
@@ -1497,7 +1691,7 @@
         <span data-lucide="calendar-range" class="w-6 h-6 text-dark-primary group-hover:text-blue-600 transition-colors"></span>
     </button>
 
-    <div id="version-timestamp" class="text-dark-secondary">Last Update 02/01/2026 - 11:54</div>
+    <div id="version-timestamp" class="text-dark-secondary">Last Update 11/01/2026 - 19:13</div>
     </body>
 
     <style>

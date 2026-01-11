@@ -322,10 +322,9 @@
             } catch (e) { console.error(e); }
         },
         // Now accepts a date string (YYYY-MM-DD) and an optional time string (HH:MM)
-        updateAssignment: async (id, title, dateString, timeString, notes) => {
+        updateAssignment: async (id, title, dateString, timeString, notes, subtasks) => {
             if (!db || !userId) return;
             try {
-                // Combine date and time for the updated deadline ISO string
                 const deadlineDate = createDeadlineDate(dateString, timeString);
                 const deadlineISO = deadlineDate ? deadlineDate.toISOString() : null;
                 
@@ -333,6 +332,8 @@
                     title: title,
                     deadline: deadlineISO, 
                     notes: notes || '',
+                    // Save the subtasks array (default to empty array if null)
+                    subtasks: subtasks || [] 
                 }, { merge: true });
             } catch (e) { console.error(e); }
         },
@@ -1064,17 +1065,17 @@
         };
 
 
-        // --- Modal Logic ---
+       // --- Modal Logic ---
         const openAssignmentModal = () => document.getElementById('assignment-modal').classList.remove('opacity-0', 'pointer-events-none');
         const closeAssignmentModal = () => document.getElementById('assignment-modal').classList.add('opacity-0', 'pointer-events-none');
+        
         const handleAddAssignment = async () => {
             const titleInput = document.getElementById('assignment-title');
             const deadlineDateInput = document.getElementById('assignment-deadline-date');
-            const deadlineTimeInput = document.getElementById('assignment-deadline-time'); // New
+            const deadlineTimeInput = document.getElementById('assignment-deadline-time');
 
             if (!titleInput.value.trim() || !deadlineDateInput.value) return;
 
-            // Pass date string and optional time string
             await window.db.addAssignment(
                 titleInput.value.trim(), 
                 deadlineDateInput.value, 
@@ -1083,41 +1084,125 @@
 
             titleInput.value = ''; 
             deadlineDateInput.value = ''; 
-            deadlineTimeInput.value = ''; // Reset time input
+            deadlineTimeInput.value = ''; 
             closeAssignmentModal();
         };
 
-        let detailModal, detailIdInput, detailTitleInput, detailDeadlineDateInput, detailDeadlineTimeInput, detailNoteInput; // Updated names
+        // --- SUB-TASK LOGIC & DETAIL MODAL ---
+        let detailModal, detailIdInput, detailTitleInput, detailDeadlineDateInput, detailDeadlineTimeInput, detailNoteInput; 
         
+        // Local state to hold subtasks while the modal is open
+        let currentSubtasks = []; 
+
+        const renderSubtaskUI = () => {
+            const container = document.getElementById('subtask-list-container');
+            container.innerHTML = '';
+
+            currentSubtasks.forEach((task, index) => {
+                const row = document.createElement('div');
+                row.className = 'flex items-center space-x-2 mb-2 animate-fadeIn';
+                
+                // 1. Checkbox
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.checked = task.done;
+                checkbox.className = "w-5 h-5 rounded border-gray-500 accent-green-500 cursor-pointer flex-shrink-0";
+                checkbox.onchange = () => {
+                    task.done = checkbox.checked;
+                    renderSubtaskUI(); // Re-render to apply green color
+                };
+
+                // 2. Text Input
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.value = task.text;
+                input.placeholder = "Sub-task details...";
+                
+                // CONDITIONAL STYLING: Greenish if done, standard gray if not
+                const bgClass = task.done 
+                    ? 'bg-green-900/40 text-green-200 border-green-700/50 line-through decoration-green-500/50' 
+                    : 'bg-gray-700 text-white border-gray-600';
+                
+                input.className = `flex-1 p-2 rounded-lg border focus:border-blue-500 outline-none transition-all duration-300 ${bgClass}`;
+                
+                // Update local data on typing (don't re-render here to keep focus)
+                input.oninput = (e) => {
+                    task.text = e.target.value;
+                };
+
+                // 3. Delete Button
+                const delBtn = document.createElement('button');
+                delBtn.innerHTML = '<span data-lucide="x" class="w-4 h-4"></span>';
+                delBtn.className = "text-red-400 hover:text-red-500 p-1.5 hover:bg-red-500/10 rounded-lg transition-colors flex-shrink-0";
+                delBtn.onclick = () => {
+                    currentSubtasks.splice(index, 1);
+                    renderSubtaskUI();
+                };
+
+                row.appendChild(checkbox);
+                row.appendChild(input);
+                row.appendChild(delBtn);
+                container.appendChild(row);
+            });
+            lucide.createIcons();
+        };
+
+        const addSubtask = () => {
+            // Add empty task to local state
+            currentSubtasks.push({ text: '', done: false });
+            renderSubtaskUI();
+            
+            // Auto-scroll to bottom of the list
+            const container = document.getElementById('subtask-list-container');
+            // Small timeout to ensure DOM is updated before scrolling
+            setTimeout(() => {
+                const lastInput = container.lastElementChild?.querySelector('input[type="text"]');
+                if(lastInput) lastInput.focus();
+                // Scroll the PARENT container (the modal body), not just the list div
+                const scrollParent = document.querySelector('#assignment-detail-modal .overflow-y-auto');
+                if(scrollParent) scrollParent.scrollTop = scrollParent.scrollHeight;
+            }, 50);
+        };
+
         const openAssignmentDetailModal = (assignment) => {
             detailIdInput.value = assignment.id;
             detailTitleInput.value = assignment.title;
             
-            // Extract date and time for input fields
             if (assignment.deadline instanceof Date && !isNaN(assignment.deadline)) {
                 detailDeadlineDateInput.value = formatDateForInput(assignment.deadline);
-                detailDeadlineTimeInput.value = formatTimeForInput(assignment.deadline); // Use new formatTimeForInput
+                detailDeadlineTimeInput.value = formatTimeForInput(assignment.deadline); 
             } else {
                 detailDeadlineDateInput.value = '';
                 detailDeadlineTimeInput.value = '';
             }
             
             detailNoteInput.value = assignment.notes || ''; 
+
+            // DEEP COPY existing subtasks to local state (or empty array)
+            // JSON.parse/stringify ensures we don't modify the main array by reference until saved
+            currentSubtasks = assignment.subtasks ? JSON.parse(JSON.stringify(assignment.subtasks)) : [];
+            
+            renderSubtaskUI();
+
             detailModal.classList.remove('opacity-0', 'pointer-events-none');
         };
+
         const closeAssignmentDetailModal = () => {
             detailModal.classList.add('opacity-0', 'pointer-events-none');
+            // Clear inputs
             detailIdInput.value = ''; 
             detailTitleInput.value = ''; 
             detailDeadlineDateInput.value = ''; 
-            detailDeadlineTimeInput.value = ''; // Reset time input
+            detailDeadlineTimeInput.value = ''; 
             detailNoteInput.value = '';
+            currentSubtasks = []; 
         };
+
         const handleSaveDetailChanges = async () => {
             const dateString = detailDeadlineDateInput.value;
             const timeString = detailDeadlineTimeInput.value || null;
             
-            if (!dateString) return; // Deadline date is mandatory if saving changes
+            if (!dateString) return; 
 
             if (window.db && window.db.updateAssignment) {
                  await window.db.updateAssignment(
@@ -1125,11 +1210,14 @@
                     detailTitleInput.value.trim(), 
                     dateString, 
                     timeString, 
-                    detailNoteInput.value
+                    detailNoteInput.value,
+                    currentSubtasks // Pass the updated subtasks array
                 ); 
             }
             closeAssignmentDetailModal();
         };
+
+
         const handleDeleteFromDetail = async () => {
             if (confirm("Are you sure?")) {
                 if (window.db && window.db.deleteAssignment) await window.db.deleteAssignment(detailIdInput.value);
@@ -1273,7 +1361,8 @@
             document.getElementById('open-background-gallery-btn').addEventListener('click', openBackgroundGalleryModal);
             document.getElementById('close-background-gallery-modal-btn').addEventListener('click', closeBackgroundGalleryModal);
             document.getElementById('add-background-btn').addEventListener('click', handleAddBackground);
-            
+            document.getElementById('add-subtask-btn').addEventListener('click', addSubtask);
+
             // Calendar Event Listeners (NOW CALLING GLOBAL FUNCTIONS)
             document.getElementById('open-calendar-btn').addEventListener('click', openCalendarModal);
             document.getElementById('calendar-modal').addEventListener('click', closeCalendarModal);
@@ -1492,27 +1581,56 @@
 
     <div id="assignment-detail-modal"
          class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 transition-opacity duration-300 opacity-0 pointer-events-none z-50">
-        <div class="bg-gray-800 p-8 rounded-2xl shadow-2xl w-full max-w-lg border border-gray-700 transform transition-all duration-300 scale-100">
-            <h3 class="text-2xl font-bold text-white mb-6">Task Details</h3>
-            <input type="hidden" id="detail-assignment-id">
-            <div class="space-y-4">
-                <label class="block text-white/70 text-sm font-semibold">Title</label>
-                <input type="text" id="detail-assignment-title" class="w-full p-3 rounded-xl bg-gray-700 text-white placeholder-gray-400 border border-gray-600 focus:border-blue-500 outline-none">
-                <label class="block text-white/70 text-sm font-semibold">Deadline</label>
-                <div class="flex space-x-2">
-                    <input type="date" id="detail-assignment-deadline-date" class="w-1/2 p-3 rounded-xl bg-gray-700 text-white border border-gray-600 focus:border-blue-500 outline-none">
-                    <input type="time" id="detail-assignment-deadline-time" class="w-1/2 p-3 rounded-xl bg-gray-700 text-white border border-gray-600 focus:border-blue-500 outline-none">
-                </div>
-                <label class="block text-white/70 text-sm font-semibold">Notes</label>
-                <textarea id="detail-assignment-note" rows="5" class="w-full p-3 rounded-xl bg-gray-700 text-white placeholder-gray-400 border border-gray-600 focus:border-blue-500 outline-none resize-none"></textarea>
+        <div class="bg-gray-800 rounded-2xl shadow-2xl w-full max-w-lg border border-gray-700 transform transition-all duration-300 scale-100 flex flex-col max-h-[85vh]">
+            
+            <div class="p-6 pb-2 flex-shrink-0">
+                <h3 class="text-2xl font-bold text-white">Task Details</h3>
             </div>
-            <div class="flex justify-between space-x-4 mt-6 border-t border-gray-700 pt-4">
-                <button id="delete-from-detail-btn" class="px-5 py-2 rounded-xl bg-red-600 text-white hover:bg-red-700 font-semibold transition-colors">Delete Task</button>
-                <div class="flex space-x-4">
-                    <button id="close-detail-modal-btn" class="px-5 py-2 rounded-xl bg-gray-600 text-white hover:bg-gray-500 transition-colors">Cancel</button>
-                    <button id="save-assignment-btn" class="px-5 py-2 rounded-xl bg-blue-500 text-white font-semibold hover:bg-blue-600 transition-colors">Save Changes</button>
+            
+            <div class="p-6 pt-2 overflow-y-auto custom-scroll space-y-4 flex-grow">
+                <input type="hidden" id="detail-assignment-id">
+                
+                <div>
+                    <label class="block text-white/70 text-sm font-semibold mb-1">Title</label>
+                    <input type="text" id="detail-assignment-title" class="w-full p-3 rounded-xl bg-gray-700 text-white placeholder-gray-400 border border-gray-600 focus:border-blue-500 outline-none">
+                </div>
+                
+                <div>
+                    <label class="block text-white/70 text-sm font-semibold mb-1">Deadline</label>
+                    <div class="flex space-x-2">
+                        <input type="date" id="detail-assignment-deadline-date" class="w-1/2 p-3 rounded-xl bg-gray-700 text-white border border-gray-600 focus:border-blue-500 outline-none">
+                        <input type="time" id="detail-assignment-deadline-time" class="w-1/2 p-3 rounded-xl bg-gray-700 text-white border border-gray-600 focus:border-blue-500 outline-none">
+                    </div>
+                </div>
+
+                <div class="border-t border-gray-700 pt-4">
+                    <div class="flex justify-between items-center mb-3">
+                        <label class="text-white/70 text-sm font-semibold">Sub-tasks</label>
+                        <button id="add-subtask-btn" class="flex items-center text-xs bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg transition-colors shadow-lg">
+                            <span data-lucide="plus" class="w-3 h-3 mr-1"></span> Add
+                        </button>
+                    </div>
+                    
+                    <div id="subtask-list-container" class="flex flex-col w-full">
+                        </div>
+                </div>
+
+                <div>
+                    <label class="block text-white/70 text-sm font-semibold mb-1">Notes</label>
+                    <textarea id="detail-assignment-note" rows="4" class="w-full p-3 rounded-xl bg-gray-700 text-white placeholder-gray-400 border border-gray-600 focus:border-blue-500 outline-none resize-none"></textarea>
                 </div>
             </div>
+
+            <div class="p-6 border-t border-gray-700 bg-gray-800 rounded-b-2xl flex-shrink-0">
+                <div class="flex justify-between space-x-4">
+                    <button id="delete-from-detail-btn" class="px-4 py-2 rounded-xl bg-red-600 text-white hover:bg-red-700 font-semibold transition-colors text-sm">Delete Task</button>
+                    <div class="flex space-x-3">
+                        <button id="close-detail-modal-btn" class="px-4 py-2 rounded-xl bg-gray-600 text-white hover:bg-gray-500 transition-colors text-sm">Cancel</button>
+                        <button id="save-assignment-btn" class="px-4 py-2 rounded-xl bg-blue-500 text-white font-semibold hover:bg-blue-600 transition-colors text-sm">Save Changes</button>
+                    </div>
+                </div>
+            </div>
+
         </div>
     </div>
 
@@ -1612,7 +1730,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 06/01/2025 - 08:24</div>
+    <div id="version-timestamp">Last Update 11/01/2025 - 19:13</div>
     
     <style>
     /* Custom Scrollbar for horizontal scrolling */
