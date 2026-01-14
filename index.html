@@ -1865,7 +1865,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 14/01/2025 - 16:33</div>
+    <div id="version-timestamp">Last Update 14/01/2025 - 16:39</div>
     
     <style>
     /* Custom Scrollbar for horizontal scrolling */
@@ -1902,6 +1902,32 @@
         transform: scale(1.1);
         border-color: #3b82f6; 
         box-shadow: 0 0 15px rgba(59, 130, 246, 0.5);
+    }
+    textarea, .custom-scroll {
+        /* For Firefox */
+        scrollbar-width: thin;
+        scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
+    }
+
+    /* 2. WebKit Scrollbar Styling (Chrome, Edge, Safari) */
+
+    /* The total width of the scrollbar */
+    textarea::-webkit-scrollbar, 
+    .custom-scroll::-webkit-scrollbar {
+        width: 6px; /* Match the thin look in your reference */
+    }
+
+    /* The background of the scrollbar (the track) */
+    textarea::-webkit-scrollbar-track, 
+    .custom-scroll::-webkit-scrollbar-track {
+        background: transparent; /* Makes the track invisible like in your reference */
+    }
+
+    /* The moving part of the scrollbar (the thumb) */
+    textarea::-webkit-scrollbar-thumb, 
+    .custom-scroll::-webkit-scrollbar-thumb {
+        background-color: rgba(255, 255, 255, 0.3); /* Grey/White semi-transparent color */
+        border-radius: 3px; /* Rounds the edges */
     }
         
     </style>
