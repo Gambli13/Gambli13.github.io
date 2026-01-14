@@ -1006,7 +1006,7 @@
         };
 
         window.renderBookmarks = (newBookmarks) => {
-            // 1. Sort bookmarks by 'order' property
+            // Sort bookmarks by 'order'
             bookmarks = newBookmarks.sort((a, b) => (a.order || 0) - (b.order || 0));
             
             const container = document.getElementById('bookmark-container');
@@ -1030,7 +1030,7 @@
                      ondrop="window.handleDrop(event, '${b.id}')">
                      
                     <a href="${b.url}" rel="noopener noreferrer" title="${b.name}" draggable="false"
-                        class="bookmark-icon flex flex-col items-center justify-center w-16 h-16 sm:w-20 sm:h-20 bg-white/10 border border-white/20 rounded-2xl hover:border-blue-400 select-none cursor-grab active:cursor-grabbing">
+                        class="bookmark-icon flex flex-col items-center justify-center w-16 h-16 sm:w-20 sm:h-20 bg-white/10 border border-white/20 rounded-2xl hover:border-blue-400 select-none">
                         ${iconContent}
                         <span class="text-xs text-white/80 mt-1 truncate max-w-full pointer-events-none">${b.name}</span>
                     </a>
@@ -1043,6 +1043,7 @@
                 `;
             }).join('');
 
+            
             if (bookmarks.length < 8) {
                 container.innerHTML = htmlContent + `
                     <button id="open-bookmark-modal-btn"
@@ -1864,7 +1865,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 14/01/2025 - 13:26</div>
+    <div id="version-timestamp">Last Update 14/01/2025 - 16:33</div>
     
     <style>
     /* Custom Scrollbar for horizontal scrolling */
@@ -1874,29 +1875,34 @@
         .custom-scroll::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.4); }
     
     /* --- Drag & Drop Animations --- */
-        .bookmark-item-wrap {
-            transition: transform 0.2s cubic-bezier(0.2, 0, 0.2, 1), opacity 0.2s;
-            touch-action: none;
-        }
-        /* Style for the original item while it is being dragged (fade it out) */
-        .dragging {
-            opacity: 0.01; /* Almost invisible so the ghost image stands out */
-        }
-        /* Style for the item being hovered over (scaling effect) */
-        .drag-over .bookmark-icon {
-            transform: scale(1.1);
-            border-color: #3b82f6; 
-            box-shadow: 0 0 15px rgba(59, 130, 246, 0.5);
-        }
-        .bookmark-item-wrap:active {
-            cursor: grabbing;
-        }
+       /* --- Drag & Drop Styles --- */
+    .bookmark-item-wrap {
+        transition: transform 0.2s cubic-bezier(0.2, 0, 0.2, 1), opacity 0.2s;
+        /* Force the "Button Hand" cursor */
+        cursor: pointer !important; 
+        touch-action: none;
+    }
+    
+    /* Ensure the inner icon also shows the hand */
+    .bookmark-icon {
+        cursor: pointer !important;
+    }
 
-        /* The item being hovered over (the drop target) */
-        .drag-over {
-            transform: scale(1.15);
-            z-index: 10;
-        }
+    /* Only show the "Grabbing" (closed hand) when actually clicking/dragging */
+    .bookmark-item-wrap:active,
+    .bookmark-item-wrap:active .bookmark-icon {
+        cursor: grabbing !important;
+    }
+
+    .dragging {
+        opacity: 0.01;
+    }
+
+    .drag-over .bookmark-icon {
+        transform: scale(1.1);
+        border-color: #3b82f6; 
+        box-shadow: 0 0 15px rgba(59, 130, 246, 0.5);
+    }
         
     </style>
 
