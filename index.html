@@ -902,7 +902,9 @@
         window.renderBookmarks = (newBookmarks) => {
             bookmarks = newBookmarks;
             const container = document.getElementById('bookmark-container');
-            container.innerHTML = bookmarks.map(b => {
+            
+            // Generate HTML for existing bookmarks
+            let htmlContent = bookmarks.map(b => {
                 const domain = getBaseDomain(b.url);
                 const faviconUrl = domain ? `https://s2.googleusercontent.com/s2/favicons?domain=${domain}&sz=64` : null;
                 const iconContent = faviconUrl 
@@ -923,14 +925,26 @@
                 </div>
                 `;
             }).join('');
-            container.innerHTML += `
-                <button id="open-bookmark-modal-btn"
-                        class="flex flex-col items-center justify-center w-16 h-16 sm:w-20 sm:h-20 bg-white/5 border border-white/10 rounded-2xl text-white/50 hover:text-white hover:border-blue-500 transition-all duration-300">
-                    <span data-lucide="plus" class="w-8 h-8"></span>
-                    <span class="text-xs mt-1">Add</span>
-                </button>
-            `;
-            document.getElementById('open-bookmark-modal-btn')?.addEventListener('click', openBookmarkModal);
+
+            // Only append the "Add" button if there are fewer than 8 bookmarks
+            if (bookmarks.length < 8) {
+                htmlContent += `
+                    <button id="open-bookmark-modal-btn"
+                            class="flex flex-col items-center justify-center w-16 h-16 sm:w-20 sm:h-20 bg-white/5 border border-white/10 rounded-2xl text-white/50 hover:text-white hover:border-blue-500 transition-all duration-300">
+                        <span data-lucide="plus" class="w-8 h-8"></span>
+                        <span class="text-xs mt-1">Add</span>
+                    </button>
+                `;
+            }
+
+            container.innerHTML = htmlContent;
+
+            // Safely attach event listener only if the button exists
+            const addBtn = document.getElementById('open-bookmark-modal-btn');
+            if (addBtn) {
+                addBtn.addEventListener('click', openBookmarkModal);
+            }
+            
             lucide.createIcons();
         };
 
@@ -1228,6 +1242,13 @@
         const openBookmarkModal = () => document.getElementById('bookmark-modal').classList.remove('opacity-0', 'pointer-events-none');
         const closeBookmarkModal = () => document.getElementById('bookmark-modal').classList.add('opacity-0', 'pointer-events-none');
         const handleAddBookmark = async () => {
+            // Stop if limit reached
+            if (bookmarks.length >= 8) {
+                alert("Maximum limit of 8 bookmarks reached.");
+                closeBookmarkModal();
+                return;
+            }
+
             const nameInput = document.getElementById('bookmark-name');
             const urlInput = document.getElementById('bookmark-url');
             if (!nameInput.value.trim() || !urlInput.value.trim()) return;
@@ -1730,7 +1751,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 11/01/2025 - 19:13</div>
+    <div id="version-timestamp">Last Update 14/01/2025 - 13:11</div>
     
     <style>
     /* Custom Scrollbar for horizontal scrolling */
