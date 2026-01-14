@@ -264,11 +264,14 @@
 
         // 2. Bookmarks Listener
         onSnapshot(collection(db, getCollectionPath('bookmarks')), (snapshot) => {
-            const bookmarks = [];
+            const loadedBookmarks = [];
             snapshot.forEach(doc => {
-                bookmarks.push({ id: doc.id, ...doc.data() });
+                loadedBookmarks.push({ id: doc.id, ...doc.data() });
             });
-            window.renderBookmarks(bookmarks);
+            // Sort by 'order' immediately upon loading
+            loadedBookmarks.sort((a, b) => (a.order || 0) - (b.order || 0));
+            
+            window.renderBookmarks(loadedBookmarks);
         });
         
         // 3. Backgrounds Listener (FIXED: Added Sorting)
@@ -360,12 +363,34 @@
         addBookmark: async (name, url, icon) => {
             if (!db || !userId) return;
             try {
-                await addDoc(collection(db, getCollectionPath('bookmarks')), { name, url, icon });
+                // Calculate new order index based on current count
+                const currentCount = window.bookmarks ? window.bookmarks.length : 0;
+                await addDoc(collection(db, getCollectionPath('bookmarks')), { 
+                    name, 
+                    url, 
+                    icon,
+                    order: currentCount // Save the order
+                });
             } catch (e) { console.error(e); }
         },
         deleteBookmark: async (id) => {
             if (!db || !userId) return;
             try { await deleteDoc(doc(db, getCollectionPath('bookmarks'), id)); } catch (e) { console.error(e); }
+        },
+        // NEW: Batch update function for reordering
+        reorderBookmarks: async (newBookmarkArray) => {
+            if (!db || !userId) return;
+            try {
+                // We don't want to fire 8 separate network requests if we can avoid it,
+                // but for simplicity in this setup, we will loop updates.
+                // In a production app, you would use a Firebase Batch Write.
+                const promises = newBookmarkArray.map((bm, index) => {
+                    return setDoc(doc(db, getCollectionPath('bookmarks'), bm.id), {
+                        order: index
+                    }, { merge: true });
+                });
+                await Promise.all(promises);
+            } catch (e) { console.error("Reorder failed", e); }
         },
         // FIXED: Now returns the ID of the new doc so we can select it immediately
         addBackground: async (base64String, fileName) => {
@@ -899,25 +924,117 @@
             lucide.createIcons(); 
         };
 
+        // --- Drag and Drop Logic ---
+        let draggedItem = null;
+
+        window.handleDragStart = (e, id) => {
+            draggedItem = bookmarks.find(b => b.id === id);
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.dropEffect = 'move';
+
+            // 1. Set the "Floating Square" as the drag image
+            const dragIcon = e.currentTarget.querySelector('.bookmark-icon');
+            if (dragIcon) {
+                // Center the ghost image on the mouse
+                e.dataTransfer.setDragImage(dragIcon, dragIcon.offsetWidth / 2, dragIcon.offsetHeight / 2);
+            }
+
+            // 2. Fade out the original element slightly
+            setTimeout(() => {
+                const el = document.getElementById(`bookmark-wrap-${id}`);
+                if(el) el.classList.add('dragging');
+            }, 0);
+        };
+
+        window.handleDragEnd = (e, id) => {
+            const el = document.getElementById(`bookmark-wrap-${id}`);
+            if(el) el.classList.remove('dragging');
+            
+            // Clean up any leftover 'drag-over' classes
+            document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+            draggedItem = null;
+        };
+
+        window.handleDragEnter = (e, targetId) => {
+            e.preventDefault();
+            // Don't highlight if hovering over itself
+            if (draggedItem && draggedItem.id !== targetId) {
+                const el = document.getElementById(`bookmark-wrap-${targetId}`);
+                if(el) el.classList.add('drag-over');
+            }
+        };
+
+        window.handleDragLeave = (e, targetId) => {
+            const el = document.getElementById(`bookmark-wrap-${targetId}`);
+            // Only remove if we are actually leaving the element rect
+            // (Simple check: just remove it, dragEnter adds it back quickly if still there)
+            if(el) el.classList.remove('drag-over');
+        };
+
+        window.handleDragOver = (e) => {
+            e.preventDefault(); // Necessary to allow dropping
+            e.dataTransfer.dropEffect = 'move';
+        };
+
+        window.handleDrop = async (e, targetId) => {
+            e.preventDefault();
+            document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+            
+            if (!draggedItem || draggedItem.id === targetId) return;
+
+            // 1. Reorder the array locally
+            const oldIndex = bookmarks.findIndex(b => b.id === draggedItem.id);
+            const newIndex = bookmarks.findIndex(b => b.id === targetId);
+
+            if (oldIndex === -1 || newIndex === -1) return;
+
+            // Remove from old position
+            const [movedItem] = bookmarks.splice(oldIndex, 1);
+            // Insert at new position
+            bookmarks.splice(newIndex, 0, movedItem);
+
+            // 2. CRITICAL FIX: Update the 'order' property on ALL items immediately
+            bookmarks.forEach((bm, index) => {
+                bm.order = index;
+            });
+
+            // 3. Render immediately with the new order
+            window.renderBookmarks(bookmarks);
+
+            // 4. Save new order to Database (Persist on refresh)
+            await window.db.reorderBookmarks(bookmarks);
+        };
+
         window.renderBookmarks = (newBookmarks) => {
-            bookmarks = newBookmarks;
+            // 1. Sort bookmarks by 'order' property
+            bookmarks = newBookmarks.sort((a, b) => (a.order || 0) - (b.order || 0));
+            
             const container = document.getElementById('bookmark-container');
             
-            // Generate HTML for existing bookmarks
-            let htmlContent = bookmarks.map(b => {
+            const htmlContent = bookmarks.map(b => {
                 const domain = getBaseDomain(b.url);
                 const faviconUrl = domain ? `https://s2.googleusercontent.com/s2/favicons?domain=${domain}&sz=64` : null;
                 const iconContent = faviconUrl 
-                    ? `<img src="${faviconUrl}" alt="${b.name} Favicon" class="bookmark-favicon" onerror="this.outerHTML='<span data-lucide=${b.icon || 'link'} class=\\'w-6 h-6 text-white\\'></span>'"/>`
+                    ? `<img src="${faviconUrl}" alt="${b.name}" draggable="false" class="bookmark-favicon" onerror="this.outerHTML='<span data-lucide=${b.icon || 'link'} class=\\'w-6 h-6 text-white\\'></span>'"/>`
                     : `<span data-lucide="${b.icon || 'link'}" class="w-6 h-6 text-white"></span>`;
 
                 return `
-                <div class="bookmark-item-wrap relative">
-                    <a href="${b.url}" rel="noopener noreferrer" title="${b.name}"
-                        class="bookmark-icon flex flex-col items-center justify-center w-16 h-16 sm:w-20 sm:h-20 bg-white/10 border border-white/20 rounded-2xl hover:border-blue-400">
+                <div id="bookmark-wrap-${b.id}" 
+                     class="bookmark-item-wrap relative"
+                     draggable="true"
+                     ondragstart="window.handleDragStart(event, '${b.id}')"
+                     ondragend="window.handleDragEnd(event, '${b.id}')"
+                     ondragenter="window.handleDragEnter(event, '${b.id}')"
+                     ondragleave="window.handleDragLeave(event, '${b.id}')"
+                     ondragover="window.handleDragOver(event)"
+                     ondrop="window.handleDrop(event, '${b.id}')">
+                     
+                    <a href="${b.url}" rel="noopener noreferrer" title="${b.name}" draggable="false"
+                        class="bookmark-icon flex flex-col items-center justify-center w-16 h-16 sm:w-20 sm:h-20 bg-white/10 border border-white/20 rounded-2xl hover:border-blue-400 select-none cursor-grab active:cursor-grabbing">
                         ${iconContent}
-                        <span class="text-xs text-white/80 mt-1 truncate max-w-full">${b.name}</span>
+                        <span class="text-xs text-white/80 mt-1 truncate max-w-full pointer-events-none">${b.name}</span>
                     </a>
+                    
                     <button onclick="window.db.deleteBookmark('${b.id}')"
                             class="delete-btn absolute top-[-5px] right-[-5px] w-6 h-6 flex items-center justify-center bg-white/20 text-white rounded-full p-0.5 shadow-md hover:bg-white/40 transition-colors">
                         <span data-lucide="x" class="w-3 h-3"></span>
@@ -926,24 +1043,20 @@
                 `;
             }).join('');
 
-            // Only append the "Add" button if there are fewer than 8 bookmarks
             if (bookmarks.length < 8) {
-                htmlContent += `
+                container.innerHTML = htmlContent + `
                     <button id="open-bookmark-modal-btn"
                             class="flex flex-col items-center justify-center w-16 h-16 sm:w-20 sm:h-20 bg-white/5 border border-white/10 rounded-2xl text-white/50 hover:text-white hover:border-blue-500 transition-all duration-300">
                         <span data-lucide="plus" class="w-8 h-8"></span>
                         <span class="text-xs mt-1">Add</span>
                     </button>
                 `;
+            } else {
+                container.innerHTML = htmlContent;
             }
 
-            container.innerHTML = htmlContent;
-
-            // Safely attach event listener only if the button exists
             const addBtn = document.getElementById('open-bookmark-modal-btn');
-            if (addBtn) {
-                addBtn.addEventListener('click', openBookmarkModal);
-            }
+            if (addBtn) addBtn.addEventListener('click', openBookmarkModal);
             
             lucide.createIcons();
         };
@@ -1751,7 +1864,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 14/01/2025 - 13:11</div>
+    <div id="version-timestamp">Last Update 14/01/2025 - 13:26</div>
     
     <style>
     /* Custom Scrollbar for horizontal scrolling */
@@ -1760,6 +1873,31 @@
         .custom-scroll::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.2); border-radius: 4px; }
         .custom-scroll::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.4); }
     
+    /* --- Drag & Drop Animations --- */
+        .bookmark-item-wrap {
+            transition: transform 0.2s cubic-bezier(0.2, 0, 0.2, 1), opacity 0.2s;
+            touch-action: none;
+        }
+        /* Style for the original item while it is being dragged (fade it out) */
+        .dragging {
+            opacity: 0.01; /* Almost invisible so the ghost image stands out */
+        }
+        /* Style for the item being hovered over (scaling effect) */
+        .drag-over .bookmark-icon {
+            transform: scale(1.1);
+            border-color: #3b82f6; 
+            box-shadow: 0 0 15px rgba(59, 130, 246, 0.5);
+        }
+        .bookmark-item-wrap:active {
+            cursor: grabbing;
+        }
+
+        /* The item being hovered over (the drop target) */
+        .drag-over {
+            transform: scale(1.15);
+            z-index: 10;
+        }
+        
     </style>
 
 </body>
