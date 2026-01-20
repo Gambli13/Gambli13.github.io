@@ -397,25 +397,20 @@
             // Update Header
             monthYearTitle.textContent = new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' }).format(currentCalendarDate);
 
-            // Date Calculations
-            const firstDay = new Date(year, month, 1).getDay();
+            // 1. Calculate Monday-Start alignment
+            const firstDayRaw = new Date(year, month, 1).getDay();
+            const firstDayIndex = (firstDayRaw === 0) ? 6 : firstDayRaw - 1; // 0 = Mon, 6 = Sun
+
             const daysInMonth = new Date(year, month + 1, 0).getDate();
+            const prevMonthLastDate = new Date(year, month, 0).getDate();
             const today = new Date();
 
             grid.innerHTML = '';
 
-            // Empty slots for previous month (Styled for Light Theme)
-            for (let i = 0; i < firstDay; i++) {
-                const emptyCell = document.createElement('div');
-                // Light gray, slightly opaque
-                emptyCell.className = "bg-gray-50/50 min-h-[120px] p-2"; 
-                grid.appendChild(emptyCell);
-            }
-
-            // Days of current month
-            for (let day = 1; day <= daysInMonth; day++) {
-                const dateObj = new Date(year, month, day);
-                const isToday = dateObj.getDate() === today.getDate() && 
+            // --- HELPER: Renders a single cell (Adapted for Light/Pink Theme) ---
+            const createDayCell = (dateObj, isCurrentMonth) => {
+                const isToday = isCurrentMonth && 
+                                dateObj.getDate() === today.getDate() && 
                                 dateObj.getMonth() === today.getMonth() && 
                                 dateObj.getFullYear() === today.getFullYear();
                 
@@ -426,36 +421,55 @@
                 ].filter(a => {
                     if (!a.deadline) return false;
                     const d = a.deadline instanceof Date ? a.deadline : new Date(a.deadline);
-                    return d.getDate() === day && d.getMonth() === month && d.getFullYear() === year;
+                    return d.getDate() === dateObj.getDate() && 
+                           d.getMonth() === dateObj.getMonth() && 
+                           d.getFullYear() === dateObj.getFullYear();
                 });
 
+                // THEME LOGIC:
+                // Current Month: bg-pink-50 (Your original style)
+                // Off-Month: bg-gray-50/50 (Lighter, faded)
+                const bgClass = isCurrentMonth ? 'bg-pink-50' : 'bg-gray-50/40';
+                
+                // Text Color:
+                // Today: Red-600 (Bold)
+                // Current Month: Dark-Secondary
+                // Off-Month: Gray-300 (Faded)
+                const textClass = isCurrentMonth 
+                    ? (isToday ? 'text-red-600' : 'text-dark-secondary/70') 
+                    : 'text-gray-300';
+                
+                // Today Highlight
+                const ringClass = isToday ? 'ring-2 ring-inset ring-red-300 bg-blue-50/30' : '';
 
                 const cell = document.createElement('div');
-                // Clean white cell with subtle hover effect
-                // "Today" gets a soft blue highlight and border
-                cell.className = `bg-pink-50 min-h-[120px] p-2 flex flex-col relative group transition-colors hover:bg-pink-100 ${isToday ? 'ring-2 ring-inset ring-red-300 bg-blue-50/30' : ''}`;
+                cell.className = `${bgClass} min-h-[120px] p-2 flex flex-col relative group transition-colors hover:bg-pink-100 ${ringClass}`;
                 
-                // Day Number styling
-                let dayNumberHTML = `<span class="font-bold text-sm mb-1 ${isToday ? 'text-red-600' : 'text-dark-secondary/70'}">${day}</span>`;
+                // Day Number
+                let dayNumberHTML = `<span class="font-bold text-sm mb-1 ${textClass}">${dateObj.getDate()}</span>`;
                 
                 // Assignments Content
                 let contentHTML = '';
                 
                 if (dayAssignments.length > 0) {
+                    // Assignment Colors:
+                    // Current Month: bg-red-100 / text-red-700 (Original)
+                    // Off-Month: bg-gray-100 / text-gray-400 (Faded)
+                    const assignBg = isCurrentMonth ? 'bg-pink-100 hover:bg-pink-200 border-pink-200' : 'bg-gray-100 border-gray-100 opacity-60';
+                    const assignText = isCurrentMonth ? 'text-pink-700' : 'text-gray-400';
+
                     if (dayAssignments.length <= 2) {
-                        // Show 1 or 2 distinct red/pink pastel boxes
                         contentHTML = dayAssignments.map(a => {
-                            // Escape single quotes for the onclick handler
                             const safeTitle = a.title.replace(/'/g, "\\'");
                             const safeNotes = (a.notes || '').replace(/'/g, "\\'");
                             const safeDeadline = a.deadline instanceof Date ? a.deadline.toISOString() : a.deadline;
 
+                            // If finished, use gray strikethrough. If active, use the theme colors calculated above.
+                            const finalBg = a.isFinished ? 'bg-gray-200 border-gray-300' : assignBg;
+                            const finalText = a.isFinished ? 'text-gray-400 line-through' : assignText;
+
                             return `
-                            <div
-                                class="mt-1 p-1.5 rounded text-xs truncate shadow-sm border
-                                ${a.isFinished
-                                    ? 'bg-gray-200 text-gray-400 line-through cursor-default border-gray-300'
-                                    : 'bg-red-100 hover:bg-red-200 text-red-700 cursor-pointer border-red-200'}"
+                            <div class="mt-1 p-1.5 rounded text-xs truncate shadow-sm border ${finalBg} ${finalText} cursor-pointer"
                                 ${!a.isFinished ? `
                                     onclick="window.openAssignmentDetailModal('${a.id}', '${safeTitle}', '${safeDeadline}', '${safeNotes}');
                                     document.getElementById('calendar-modal').classList.add('opacity-0', 'pointer-events-none');
@@ -465,12 +479,12 @@
                                 ${a.title}
                             </div>
                             `;
-                            }).join('');
+                        }).join('');
                     } else {
-                        // Show "X Assignments" dropdown
-                        const hiddenListId = `dropdown-${year}-${month}-${day}`;
+                        // Dropdown Logic
+                        const hiddenListId = `dropdown-${dateObj.getFullYear()}-${dateObj.getMonth()}-${dateObj.getDate()}`;
                         contentHTML = `
-                            <div class="mt-1 p-1.5 rounded bg-red-100 hover:bg-red-200 text-red-700 text-xs font-bold text-center cursor-pointer shadow-sm select-none border border-red-200"
+                            <div class="mt-1 p-1.5 rounded text-xs font-bold text-center cursor-pointer shadow-sm select-none border ${assignBg} ${assignText}"
                                 onclick="document.getElementById('${hiddenListId}').classList.toggle('hidden'); event.stopPropagation();">
                                 ${dayAssignments.length} Assignments
                             </div>
@@ -480,19 +494,13 @@
                                     const safeNotes = (a.notes || '').replace(/'/g, "\\'");
                                     const safeDeadline = a.deadline instanceof Date ? a.deadline.toISOString() : a.deadline;
                                     return `
-                                    <div
-                                        class="p-2 border-b border-gray-100 text-xs truncate
-                                        ${a.isFinished
-                                            ? 'text-gray-400 line-through cursor-default'
-                                            : 'text-dark-primary hover:bg-gray-50 cursor-pointer'}"
-                                        ${!a.isFinished ? `
-                                            onclick="window.openAssignmentDetailModal('${a.id}', '${safeTitle}', '${safeDeadline}', '${safeNotes}');
-                                            document.getElementById('calendar-modal').classList.add('opacity-0', 'pointer-events-none');
-                                            event.stopPropagation();"
-                                        ` : ''}>
+                                    <div class="p-2 border-b border-gray-100 text-xs truncate
+                                        ${a.isFinished ? 'text-gray-400 line-through' : 'text-dark-primary hover:bg-gray-50'}"
+                                        onclick="window.openAssignmentDetailModal('${a.id}', '${safeTitle}', '${safeDeadline}', '${safeNotes}');
+                                        document.getElementById('calendar-modal').classList.add('opacity-0', 'pointer-events-none');
+                                        event.stopPropagation();">
                                         ${a.title}
                                     </div>
-
                                 `}).join('')}
                             </div>
                         `;
@@ -500,8 +508,31 @@
                 }
 
                 cell.innerHTML = dayNumberHTML + contentHTML;
-                grid.appendChild(cell);
+                return cell;
+            };
+
+            // 2. Render Previous Month padding days
+            for (let i = firstDayIndex - 1; i >= 0; i--) {
+                const dayNum = prevMonthLastDate - i;
+                const dateObj = new Date(year, month - 1, dayNum);
+                grid.appendChild(createDayCell(dateObj, false));
             }
+
+            // 3. Render Current Month days
+            for (let day = 1; day <= daysInMonth; day++) {
+                const dateObj = new Date(year, month, day);
+                grid.appendChild(createDayCell(dateObj, true));
+            }
+
+            // 4. Render Next Month padding days
+            const totalCellsFilled = firstDayIndex + daysInMonth;
+            const remainingCells = (7 - (totalCellsFilled % 7)) % 7;
+            
+            for (let i = 1; i <= remainingCells; i++) {
+                const dateObj = new Date(year, month + 1, i);
+                grid.appendChild(createDayCell(dateObj, false));
+            }
+
             lucide.createIcons();
         };
         // --- CALENDAR LOGIC END ---
@@ -1672,13 +1703,13 @@
             </div>
 
             <div class="grid grid-cols-7 bg-pink-100 border-b border-gray-200">
-                <div class="p-3 text-center text-dark-secondary font-semibold text-sm">Sun</div>
                 <div class="p-3 text-center text-dark-secondary font-semibold text-sm">Mon</div>
                 <div class="p-3 text-center text-dark-secondary font-semibold text-sm">Tue</div>
                 <div class="p-3 text-center text-dark-secondary font-semibold text-sm">Wed</div>
                 <div class="p-3 text-center text-dark-secondary font-semibold text-sm">Thu</div>
                 <div class="p-3 text-center text-dark-secondary font-semibold text-sm">Fri</div>
                 <div class="p-3 text-center text-Scrodark-secondary font-semibold text-sm">Sat</div>
+                <div class="p-3 text-center text-Scrodark-secondary font-semibold text-sm">Sun</div>
             </div>
 
             <div id="calendar-grid" class="grid grid-cols-7 auto-rows-fr gap-px bg-pink-200 overflow-y-auto custom-scroll p-px">
@@ -1691,7 +1722,7 @@
         <span data-lucide="calendar-range" class="w-6 h-6 text-dark-primary group-hover:text-blue-600 transition-colors"></span>
     </button>
 
-    <div id="version-timestamp" class="text-dark-secondary">Last Update 11/01/2026 - 19:13</div>
+    <div id="version-timestamp" class="text-dark-secondary">Last Update 20/01/2026 - 22:15</div>
     </body>
 
     <style>
