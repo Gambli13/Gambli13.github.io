@@ -436,11 +436,11 @@
                 // Current Month: Dark-Secondary
                 // Off-Month: Gray-300 (Faded)
                 const textClass = isCurrentMonth 
-                    ? (isToday ? 'text-red-600' : 'text-dark-secondary/70') 
+                    ? (isToday ? 'text-pink-400' : 'text-dark-secondary/70') 
                     : 'text-gray-300';
                 
                 // Today Highlight
-                const ringClass = isToday ? 'ring-2 ring-inset ring-red-300 bg-blue-50/30' : '';
+                const ringClass = isToday ? 'ring-2 ring-inset ring-pink-300 bg-blue-50/30' : '';
 
                 const cell = document.createElement('div');
                 cell.className = `${bgClass} min-h-[120px] p-2 flex flex-col relative group transition-colors hover:bg-pink-100 ${ringClass}`;
@@ -1722,7 +1722,7 @@
         <span data-lucide="calendar-range" class="w-6 h-6 text-dark-primary group-hover:text-blue-600 transition-colors"></span>
     </button>
 
-    <div id="version-timestamp" class="text-dark-secondary">Last Update 20/01/2026 - 22:15</div>
+    <div id="version-timestamp" class="text-dark-secondary">Last Update 20/01/2026 - 22:24</div>
     </body>
 
     <style>
