@@ -457,28 +457,24 @@
             // Update Header
             monthYearTitle.textContent = new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' }).format(currentCalendarDate);
 
-            // Date Calculations
-            const firstDay = new Date(year, month, 1).getDay();
+            // 1. Calculate Monday-Start alignment
+            const firstDayRaw = new Date(year, month, 1).getDay();
+            const firstDayIndex = (firstDayRaw === 0) ? 6 : firstDayRaw - 1; // 0 = Mon, 6 = Sun
+
             const daysInMonth = new Date(year, month + 1, 0).getDate();
+            const prevMonthLastDate = new Date(year, month, 0).getDate();
             const today = new Date();
 
             grid.innerHTML = '';
 
-            // Empty slots for previous month
-            for (let i = 0; i < firstDay; i++) {
-                const emptyCell = document.createElement('div');
-                emptyCell.className = "bg-gray-900/90 min-h-[120px] p-2 border border-white/5 opacity-50";
-                grid.appendChild(emptyCell);
-            }
-
-            // Days of current month
-            for (let day = 1; day <= daysInMonth; day++) {
-                const dateObj = new Date(year, month, day);
-                const isToday = dateObj.getDate() === today.getDate() && 
+            // --- HELPER: Renders a single cell for any given date ---
+            const createDayCell = (dateObj, isCurrentMonth) => {
+                const isToday = isCurrentMonth && 
+                                dateObj.getDate() === today.getDate() && 
                                 dateObj.getMonth() === today.getMonth() && 
                                 dateObj.getFullYear() === today.getFullYear();
                 
-                // Find assignments for this specific day
+                // Filter assignments for this specific date
                 const dayAssignments = [
                     ...assignments.map(a => ({ ...a, isFinished: false })),
                     ...finishedAssignments.map(a => ({ ...a, isFinished: true }))
@@ -486,31 +482,41 @@
                     if (!a.deadline) return false;
                     const d = a.deadline instanceof Date ? a.deadline : new Date(a.deadline);
                     return (
-                        d.getDate() === day &&
-                        d.getMonth() === month &&
-                        d.getFullYear() === year
+                        d.getDate() === dateObj.getDate() &&
+                        d.getMonth() === dateObj.getMonth() &&
+                        d.getFullYear() === dateObj.getFullYear()
                     );
                 });
 
+                // Styling logic based on whether it is the current month
+                // Off-month: Darker background, gray text. Current: Normal background.
+                const bgClass = isCurrentMonth ? 'bg-gray-900' : 'bg-gray-900/40';
+                const textClass = isCurrentMonth ? (isToday ? 'text-blue-400' : 'text-white/70') : 'text-gray-600';
+                const borderClass = isCurrentMonth ? 'border-white/5' : 'border-white/5';
+                const ringClass = isToday ? 'ring-2 ring-inset ring-blue-500 bg-blue-900/10' : '';
 
                 const cell = document.createElement('div');
-                cell.className = `bg-gray-900 min-h-[120px] p-2 border border-white/5 flex flex-col relative group transition-colors hover:bg-gray-800 ${isToday ? 'ring-2 ring-inset ring-blue-500 bg-blue-900/10' : ''}`;
+                cell.className = `${bgClass} min-h-[120px] p-2 border ${borderClass} flex flex-col relative group transition-colors hover:bg-gray-800 ${ringClass}`;
                 
                 // Day Number
-                let dayNumberHTML = `<span class="font-bold text-sm mb-1 ${isToday ? 'text-blue-400' : 'text-white/70'}">${day}</span>`;
+                let dayNumberHTML = `<span class="font-bold text-sm mb-1 ${textClass}">${dateObj.getDate()}</span>`;
                 
                 // Assignments Content
                 let contentHTML = '';
                 
                 if (dayAssignments.length > 0) {
+                    // Muted Red styling for off-month assignments
+                    const assignmentBg = isCurrentMonth 
+                        ? 'bg-red-600/80 hover:bg-red-500 text-white' 
+                        : 'bg-blue-900/40 text-blue-200/50 hover:bg-blue-900/60'; // Dimmed red
+
                     if (dayAssignments.length <= 2) {
-                        // Show 1 or 2 distinct red boxes
                         contentHTML = dayAssignments.map(a => `
                             <div
                                 class="mt-1 p-1.5 rounded text-xs truncate shadow-sm
                                 ${a.isFinished
                                     ? 'bg-gray-600/40 text-white/50 line-through cursor-default'
-                                    : 'bg-red-600/80 hover:bg-red-500 text-white cursor-pointer'}"
+                                    : `${assignmentBg} cursor-pointer`}"
                                 ${!a.isFinished ? `
                                     onclick="openAssignmentDetailModal(assignments.find(x => x.id === '${a.id}'));
                                     document.getElementById('calendar-modal').classList.add('opacity-0', 'pointer-events-none');
@@ -521,10 +527,9 @@
                             </div>
                         `).join('');
                     } else {
-                        // Show "X Assignments" dropdown
-                        const hiddenListId = `dropdown-${year}-${month}-${day}`;
+                        const hiddenListId = `dropdown-${dateObj.getFullYear()}-${dateObj.getMonth()}-${dateObj.getDate()}`;
                         contentHTML = `
-                            <div class="mt-1 p-1.5 rounded bg-red-600/80 hover:bg-red-500 text-white text-xs font-bold text-center cursor-pointer shadow-sm select-none"
+                            <div class="mt-1 p-1.5 rounded ${assignmentBg} text-xs font-bold text-center cursor-pointer shadow-sm select-none"
                                 onclick="document.getElementById('${hiddenListId}').classList.toggle('hidden'); event.stopPropagation();">
                                 ${dayAssignments.length} Assignments
                             </div>
@@ -537,15 +542,39 @@
                                         ${a.title}
                                     </div>
                                 `).join('')}
-
                             </div>
                         `;
                     }
                 }
 
                 cell.innerHTML = dayNumberHTML + contentHTML;
-                grid.appendChild(cell);
+                return cell;
+            };
+
+            // 2. Render Previous Month padding days
+            for (let i = firstDayIndex - 1; i >= 0; i--) {
+                const dayNum = prevMonthLastDate - i;
+                // Create date object for prev month (JS handles month - 1 rolling back year automatically)
+                const dateObj = new Date(year, month - 1, dayNum);
+                grid.appendChild(createDayCell(dateObj, false));
             }
+
+            // 3. Render Current Month days
+            for (let day = 1; day <= daysInMonth; day++) {
+                const dateObj = new Date(year, month, day);
+                grid.appendChild(createDayCell(dateObj, true));
+            }
+
+            // 4. Render Next Month padding days (to fill the grid row)
+            const totalCellsFilled = firstDayIndex + daysInMonth;
+            const remainingCells = (7 - (totalCellsFilled % 7)) % 7;
+            
+            // If you want a fixed 6-row grid, change logic here. currently it just fills the week.
+            for (let i = 1; i <= remainingCells; i++) {
+                const dateObj = new Date(year, month + 1, i);
+                grid.appendChild(createDayCell(dateObj, false));
+            }
+
             lucide.createIcons();
         };
 
@@ -1851,13 +1880,13 @@
             </div>
 
             <div class="grid grid-cols-7 bg-gray-800/30 border-b border-gray-700">
-                <div class="p-3 text-center text-gray-400 font-semibold text-sm">Sun</div>
                 <div class="p-3 text-center text-gray-400 font-semibold text-sm">Mon</div>
                 <div class="p-3 text-center text-gray-400 font-semibold text-sm">Tue</div>
                 <div class="p-3 text-center text-gray-400 font-semibold text-sm">Wed</div>
                 <div class="p-3 text-center text-gray-400 font-semibold text-sm">Thu</div>
                 <div class="p-3 text-center text-gray-400 font-semibold text-sm">Fri</div>
                 <div class="p-3 text-center text-gray-400 font-semibold text-sm">Sat</div>
+                <div class="p-3 text-center text-gray-400 font-semibold text-sm">Sun</div>
             </div>
 
             <div id="calendar-grid" class="grid grid-cols-7 auto-rows-fr gap-px bg-gray-700 overflow-y-auto custom-scroll p-px">
@@ -1865,7 +1894,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 14/01/2025 - 16:39</div>
+    <div id="version-timestamp">Last Update 20/01/2025 - 22:08</div>
     
     <style>
     /* Custom Scrollbar for horizontal scrolling */
