@@ -960,20 +960,82 @@
             }, 500);
         };
 
-        // --- Renders ---
-        const MCAST_LINKS = [
-            { name: "MCAST VLE", url: "https://vle.mcast.edu.mt/my/", icon: "graduation-cap" },
-            { name: "MCAST Classter", url: "https://mcast.classter.com", icon: "school" },
-            { name: "Dissertations & SOI", url: "https://vle.mcast.edu.mt/course/view.php?id=2892 ", icon: "book-open-text"} ,
-            { name: "Systems Programming", url: "https://vle.mcast.edu.mt/course/view.php?id=5314", icon: "laptop" },
-            { name: "Image Processing & Computer Vision", url: "https://vle.mcast.edu.mt/course/view.php?id=57", icon: "image" },
-            { name: "Data Structures & Algorithms II", url: "https://vle.mcast.edu.mt/course/view.php?id=127", icon: "git-branch" },
-            { name: "Statistics for Computer Science", url: "https://vle.mcast.edu.mt/course/view.php?id=133", icon: "bar-chart-2" },
-        ];
+        // 1. Defined Link Groups
+        const LINK_DATA = {
+            semester1: [
+                { name: "MCAST VLE", url: "https://vle.mcast.edu.mt/my/", icon: "graduation-cap" },
+                { name: "MCAST Classter", url: "https://mcast.classter.com", icon: "school" },
+                { name: "Dissertations & SOI", url: "https://vle.mcast.edu.mt/course/view.php?id=2892 ", icon: "book-open-text"} ,
+                { name: "Systems Programming", url: "https://vle.mcast.edu.mt/course/view.php?id=5314", icon: "laptop" },
+                { name: "Image Processing & Computer Vision", url: "https://vle.mcast.edu.mt/course/view.php?id=57", icon: "image" },
+                { name: "Data Structures & Algorithms II", url: "https://vle.mcast.edu.mt/course/view.php?id=127", icon: "git-branch" },
+                { name: "Statistics for Computer Science", url: "https://vle.mcast.edu.mt/course/view.php?id=133", icon: "bar-chart-2" },
+            ],
+            semester2: [
+                { name: "MCAST VLE", url: "https://vle.mcast.edu.mt/my/", icon: "graduation-cap" },
+                { name: "MCAST Classter", url: "https://mcast.classter.com", icon: "school" },
+                { name: "Dissertations & SOI", url: "https://vle.mcast.edu.mt/course/view.php?id=2892 ", icon: "book-open-text"} ,
+                { name: "Research Design II", url: "https://vle.mcast.edu.mt/course/view.php?id=3606", icon: "book-open-text" },
+                { name: "Business Intelligence & Reporting", url: "https://vle.mcast.edu.mt/course/view.php?id=5462", icon: "pie-chart" },
+                { name: "Programming for the Cloud", url: "#", icon: "cloud" },
+                { name: "Distributed Programming", url: "#", icon: "network" },
+            ]
+        };
 
+        // Initialize from LocalStorage or default to 'semester1'
+        let currentLinkMode = localStorage.getItem('mcastLinkMode') || 'semester1';
+
+        // 2. The Toggle Function with Animation
+        window.toggleMcastLinks = () => {
+            const container = document.getElementById('mcast-link-list');
+            const titleSpan = document.getElementById('mcast-section-title');
+            const icon = document.getElementById('swap-icon');
+
+            // 1. Slide OUT to the left
+            container.classList.add('opacity-0', '-translate-x-10');
+            
+            // Optional: Rotate the icon
+            if(icon) icon.classList.add('rotate-180');
+
+            setTimeout(() => {
+                // 2. Switch Data & Save to LocalStorage
+                currentLinkMode = currentLinkMode === 'semester1' ? 'semester2' : 'semester1';
+                localStorage.setItem('mcastLinkMode', currentLinkMode);
+                
+                // 3. Update Title Text
+                if(titleSpan) titleSpan.textContent = currentLinkMode === 'semester1' ? 'MCAST Semester 1' : 'MCAST Semester 2';
+
+                // 4. Render New Items
+                renderMCASTLinks();
+
+                // 5. Prepare for Slide IN (Move to right side invisibly)
+                container.classList.remove('-translate-x-10');
+                container.classList.add('translate-x-10');
+
+                // 6. Force Reflow (Browser needs to realize element moved)
+                void container.offsetWidth; 
+
+                // 7. Slide IN to center
+                container.classList.remove('opacity-0', 'translate-x-10');
+                if(icon) icon.classList.remove('rotate-180');
+
+            }, 300); // Wait 300ms for the slide-out animation to finish
+        };
+
+        // 3. The Render Function
         window.renderMCASTLinks = () => {
             const container = document.getElementById('mcast-link-list');
-            container.innerHTML = MCAST_LINKS.map(link => `
+            const titleSpan = document.getElementById('mcast-section-title');
+            
+            // Ensure title matches current mode on load
+            if(titleSpan) titleSpan.textContent = currentLinkMode === 'semester1' ? 'MCAST Semester 1' : 'MCAST Semester 2';
+
+            const linksToRender = LINK_DATA[currentLinkMode];
+            
+            // Reset container style for base state
+            container.className = "space-y-3 transition-all duration-300 ease-in-out transform";
+
+            container.innerHTML = linksToRender.map(link => `
                 <div class="mcast-link-item-wrap relative flex items-center group">
                     <a href="${link.url}" rel="noopener noreferrer" title="${link.name}"
                        class="mcast-link-item block w-full text-left p-3 pr-4 rounded-xl bg-white/10 text-white hover:bg-white/20 backdrop-blur-sm transition-all duration-300">
@@ -1673,14 +1735,21 @@
         <div class="grid grid-cols-1 lg:grid-cols-7 gap-8 w-full max-w-7xl pt-16 lg:pt-0 pb-16">
 
             <div class="lg:col-span-2 p-6 bg-white/10 rounded-3xl backdrop-blur-xl shadow-2xl h-fit">
-                <div class="flex justify-between items-center mb-4">
+                <div class="flex justify-between items-center mb-4 border-b border-white/10 pb-2">
                     <h2 class="text-xl font-bold text-white flex items-center">
                         <span data-lucide="graduation-cap" class="w-6 h-6 mr-2 text-blue-400"></span>
-                        MCAST Links
+                        <span id="mcast-section-title">MCAST Semester</span>
                     </h2>
-                    </div>
-                <div id="mcast-link-list" class="space-y-3">
-                    </div>
+                    
+                    <button onclick="window.toggleMcastLinks()" 
+                            class="group p-2 rounded-lg bg-white/5 hover:bg-white/10 hover:text-blue-400 text-white transition-all duration-300"
+                            title="Switch Link List">
+                        <span id="swap-icon" data-lucide="arrow-left-right" class="w-5 h-5 transition-transform duration-500"></span>
+                    </button>
+                </div>
+                
+                <div id="mcast-link-list" class="space-y-3 transition-all duration-300 ease-in-out">
+                </div>
             </div>
 
             <div class="lg:col-span-3 flex flex-col items-center justify-center p-6 space-y-8">
@@ -1926,7 +1995,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 04/02/2025 - 17:30</div>
+    <div id="version-timestamp">Last Update 09/02/2025 - 13:16</div>
     
     <style>
     /* Custom Scrollbar for horizontal scrolling */
