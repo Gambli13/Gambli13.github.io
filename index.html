@@ -246,20 +246,16 @@
             const assignments = [];
             snapshot.forEach(doc => {
                 const data = doc.data();
-                // Determine the correct date object from stored deadline (which is an ISO string in firestore)
                 const deadlineDate = parseDeadlineISO(data.deadline);
-                
-                assignments.push({ 
-                    id: doc.id, 
-                    ...data, 
-                    // Pass the correctly parsed Date object
-                    deadline: deadlineDate 
-                });
+                assignments.push({ id: doc.id, ...data, deadline: deadlineDate });
             });
-            // Sort by the Date object
             assignments.sort((a, b) => (a.deadline || new Date(0)) - (b.deadline || new Date(0)));
             window.renderAssignments(assignments);
-            window.renderCalendar(); // Re-render calendar when assignments change
+            
+            // FIX: Check if function exists before calling to prevent startup error
+            if (typeof window.renderCalendar === 'function') {
+                window.renderCalendar(); 
+            }
         });
 
         // 2. Bookmarks Listener
@@ -360,17 +356,30 @@
             if (!db || !userId) return;
             try { await deleteDoc(doc(db, getCollectionPath('finished_assignments'), id)); } catch (e) { console.error(e); }
         },
-        addBookmark: async (name, url, icon) => {
+        addBookmark: async (name, urlOrData, type = 'link') => {
             if (!db || !userId) return;
             try {
-                // Calculate new order index based on current count
                 const currentCount = window.bookmarks ? window.bookmarks.length : 0;
-                await addDoc(collection(db, getCollectionPath('bookmarks')), { 
-                    name, 
-                    url, 
-                    icon,
-                    order: currentCount // Save the order
-                });
+                
+                let docData = {
+                    name: name,
+                    order: currentCount,
+                    type: type
+                };
+
+                if (type === 'folder') {
+                    // urlOrData is the array of children objects
+                    docData.children = urlOrData;
+                    docData.icon = 'folder'; 
+                    docData.url = ''; // Folders don't have a main URL
+                } else {
+                    // urlOrData is the string URL
+                    docData.url = urlOrData;
+                    docData.icon = 'link'; 
+                    docData.children = [];
+                }
+
+                await addDoc(collection(db, getCollectionPath('bookmarks')), docData);
             } catch (e) { console.error(e); }
         },
         deleteBookmark: async (id) => {
@@ -1066,18 +1075,24 @@
             await window.db.reorderBookmarks(bookmarks);
         };
 
-        window.renderBookmarks = (newBookmarks) => {
-            // Sort bookmarks by 'order'
+       window.renderBookmarks = (newBookmarks) => {
             bookmarks = newBookmarks.sort((a, b) => (a.order || 0) - (b.order || 0));
-            
             const container = document.getElementById('bookmark-container');
             
             const htmlContent = bookmarks.map(b => {
-                const domain = getBaseDomain(b.url);
-                const faviconUrl = domain ? `https://s2.googleusercontent.com/s2/favicons?domain=${domain}&sz=64` : null;
-                const iconContent = faviconUrl 
-                    ? `<img src="${faviconUrl}" alt="${b.name}" draggable="false" class="bookmark-favicon" onerror="this.outerHTML='<span data-lucide=${b.icon || 'link'} class=\\'w-6 h-6 text-white\\'></span>'"/>`
-                    : `<span data-lucide="${b.icon || 'link'}" class="w-6 h-6 text-white"></span>`;
+                const isFolder = b.type === 'folder';
+                
+                // Icon Logic: If folder, use folder icon. If link, try favicon.
+                let iconContent;
+                if (isFolder) {
+                    iconContent = `<span data-lucide="folder" class="w-8 h-8 text-yellow-400 fill-yellow-400/20"></span>`;
+                } else {
+                    const domain = getBaseDomain(b.url);
+                    const faviconUrl = domain ? `https://s2.googleusercontent.com/s2/favicons?domain=${domain}&sz=64` : null;
+                    iconContent = faviconUrl 
+                        ? `<img src="${faviconUrl}" alt="${b.name}" draggable="false" class="bookmark-favicon" onerror="this.outerHTML='<span data-lucide=${b.icon || 'link'} class=\\'w-6 h-6 text-white\\'></span>'"/>`
+                        : `<span data-lucide="${b.icon || 'link'}" class="w-6 h-6 text-white"></span>`;
+                }
 
                 return `
                 <div id="bookmark-wrap-${b.id}" 
@@ -1090,22 +1105,25 @@
                      ondragover="window.handleDragOver(event)"
                      ondrop="window.handleDrop(event, '${b.id}')">
                      
-                    <a href="${b.url}" rel="noopener noreferrer" title="${b.name}" draggable="false"
-                        class="bookmark-icon flex flex-col items-center justify-center w-16 h-16 sm:w-20 sm:h-20 bg-white/10 border border-white/20 rounded-2xl hover:border-blue-400 select-none">
+                    <div onclick="window.handleBookmarkClick('${b.id}')"
+                         onauxclick="window.handleMiddleClick(event, '${b.id}')"
+                         class="bookmark-icon flex flex-col items-center justify-center w-16 h-16 sm:w-20 sm:h-20 bg-white/10 border border-white/20 rounded-2xl hover:border-blue-400 select-none group transition-all duration-200 hover:bg-white/20">
                         ${iconContent}
-                        <span class="text-xs text-white/80 mt-1 truncate max-w-full pointer-events-none">${b.name}</span>
-                    </a>
+                        <span class="text-xs text-white/80 mt-1 truncate max-w-full pointer-events-none group-hover:text-white transition-colors">${b.name}</span>
+                        
+                        ${isFolder ? `<span class="absolute top-1 right-1 w-2 h-2 rounded-full bg-blue-500"></span>` : ''}
+                    </div>
                     
                     <button onclick="window.db.deleteBookmark('${b.id}')"
-                            class="delete-btn absolute top-[-5px] right-[-5px] w-6 h-6 flex items-center justify-center bg-white/20 text-white rounded-full p-0.5 shadow-md hover:bg-white/40 transition-colors">
+                            class="delete-btn absolute top-[-5px] right-[-5px] w-6 h-6 flex items-center justify-center bg-white/20 text-white rounded-full p-0.5 shadow-md hover:bg-white/40 transition-colors z-10">
                         <span data-lucide="x" class="w-3 h-3"></span>
                     </button>
                 </div>
                 `;
             }).join('');
 
-            
-            if (bookmarks.length < 8) {
+            // Add Button Logic (Kept limit at 8 as requested)
+            if (bookmarks.length < 8) { 
                 container.innerHTML = htmlContent + `
                     <button id="open-bookmark-modal-btn"
                             class="flex flex-col items-center justify-center w-16 h-16 sm:w-20 sm:h-20 bg-white/5 border border-white/10 rounded-2xl text-white/50 hover:text-white hover:border-blue-500 transition-all duration-300">
@@ -1118,7 +1136,11 @@
             }
 
             const addBtn = document.getElementById('open-bookmark-modal-btn');
-            if (addBtn) addBtn.addEventListener('click', openBookmarkModal);
+            if (addBtn) addBtn.addEventListener('click', () => {
+                // Reset UI state when opening modal
+                window.switchBookmarkMode('link');
+                openBookmarkModal();
+            });
             
             lucide.createIcons();
         };
@@ -1662,6 +1684,210 @@
                 }
             });
         };
+
+
+        // --- Bookmark UI & Folder State ---
+        let currentMode = 'link'; 
+        
+        window.switchBookmarkMode = (mode) => {
+            currentMode = mode;
+            const linkBtn = document.getElementById('mode-link-btn');
+            const folderBtn = document.getElementById('mode-folder-btn');
+            const linkContent = document.getElementById('mode-link-content');
+            const folderContent = document.getElementById('mode-folder-content');
+
+            if (mode === 'link') {
+                linkBtn.className = "flex-1 py-2 rounded-lg text-sm font-semibold transition-colors bg-blue-500 text-white";
+                folderBtn.className = "flex-1 py-2 rounded-lg text-sm font-semibold transition-colors text-white/50 hover:text-white";
+                linkContent.classList.remove('hidden');
+                folderContent.classList.add('hidden');
+                folderContent.classList.remove('flex');
+            } else {
+                folderBtn.className = "flex-1 py-2 rounded-lg text-sm font-semibold transition-colors bg-blue-500 text-white";
+                linkBtn.className = "flex-1 py-2 rounded-lg text-sm font-semibold transition-colors text-white/50 hover:text-white";
+                linkContent.classList.add('hidden');
+                folderContent.classList.remove('hidden');
+                folderContent.classList.add('flex');
+                
+                // Add one empty row if empty
+                const container = document.getElementById('folder-rows-container');
+                if (container.children.length === 0) window.addFolderRow();
+            }
+        };
+
+        window.addFolderRow = () => {
+            const container = document.getElementById('folder-rows-container');
+            const row = document.createElement('div');
+            row.className = "flex gap-2 items-center bg-gray-900/50 p-2 rounded-lg";
+            row.innerHTML = `
+                <div class="flex-1 space-y-1">
+                    <input type="text" placeholder="Name" class="folder-row-name w-full bg-transparent text-white text-xs border-b border-gray-600 focus:border-blue-500 outline-none p-1">
+                    <input type="url" placeholder="URL" class="folder-row-url w-full bg-transparent text-gray-400 text-xs border-b border-gray-600 focus:border-blue-500 outline-none p-1">
+                </div>
+                <button onclick="this.parentElement.remove()" class="text-red-400 hover:text-red-300 p-1"><span data-lucide="trash-2" class="w-4 h-4"></span></button>
+            `;
+            container.appendChild(row);
+            lucide.createIcons();
+            // Scroll to bottom
+            setTimeout(() => {
+                 row.querySelector('input').focus();
+                 container.scrollTop = container.scrollHeight;
+            }, 50);
+        };
+
+        // --- Interaction Logic ---
+
+        window.handleBookmarkClick = (id) => {
+            const item = bookmarks.find(b => b.id === id);
+            if (!item) return;
+
+            if (item.type === 'folder') {
+                openFolderView(item);
+            } else {
+                // Standard link behavior
+                window.location.href = item.url;
+            }
+        };
+
+        // Middle Click Handler
+        window.handleMiddleClick = (e, id) => {
+            if (e.button === 1) { // 1 is the Middle Mouse Button
+                e.preventDefault();
+                const item = bookmarks.find(b => b.id === id);
+                if (!item) return;
+
+                if (item.type === 'folder' && item.children) {
+                    openAllLinksWithDelay(item.children);
+                } else if (item.url) {
+                    window.open(item.url, '_blank');
+                }
+            }
+        };
+
+        // --- Folder Modal Logic (UPDATED) ---
+        
+        window.openFolderView = (folder) => {
+            // FIX: Get elements here inside the function, not at the top level
+            const folderModal = document.getElementById('folder-view-modal');
+            const folderContent = document.getElementById('folder-modal-content');
+            const list = document.getElementById('folder-modal-list');
+            const title = document.getElementById('folder-modal-title');
+            const btn = document.getElementById('folder-open-all-btn');
+
+            if (!folderModal || !folderContent) return console.error("Modal elements not found");
+
+            // Update Title
+            title.innerHTML = `
+                <span data-lucide="folder-open" class="text-blue-400"></span>
+                <span class="truncate">${folder.name}</span>
+            `;
+            
+            // Generate List
+            list.innerHTML = '';
+
+            if (folder.children && folder.children.length > 0) {
+                folder.children.forEach(child => {
+                    const domain = getBaseDomain(child.url);
+                    const faviconUrl = domain ? `https://s2.googleusercontent.com/s2/favicons?domain=${domain}&sz=32` : null;
+                    
+                    const el = document.createElement('a');
+                    el.href = child.url;
+                    el.target = "_blank";
+                    el.className = "flex items-center p-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/5 hover:border-white/20 transition-all group";
+                    el.innerHTML = `
+                        <div class="w-8 h-8 rounded-lg bg-black/20 flex items-center justify-center mr-3">
+                            <img src="${faviconUrl}" class="w-5 h-5 opacity-80 group-hover:opacity-100 transition-opacity" onerror="this.style.display='none'">
+                        </div>
+                        <span class="text-sm text-white/90 group-hover:text-white font-medium truncate flex-1">${child.name}</span>
+                        <span data-lucide="external-link" class="w-4 h-4 text-white/30 group-hover:text-white/70"></span>
+                    `;
+                    list.appendChild(el);
+                });
+            } else {
+                list.innerHTML = '<p class="text-white/40 text-center text-sm italic py-4">This folder is empty.</p>';
+            }
+
+            // Bind Open All Button
+            if (btn) btn.onclick = () => openAllLinksWithDelay(folder.children);
+
+            // Refresh Icons
+            if (window.lucide) lucide.createIcons();
+
+            // Show Modal
+            folderModal.classList.remove('opacity-0', 'pointer-events-none');
+            
+            // Small animation for content pop-in
+            setTimeout(() => {
+                folderContent.classList.remove('scale-95', 'opacity-0');
+                folderContent.classList.add('scale-100', 'opacity-100');
+            }, 10);
+        };
+
+        window.closeFolderModal = () => {
+            const folderModal = document.getElementById('folder-view-modal');
+            const folderContent = document.getElementById('folder-modal-content');
+            
+            if (!folderModal || !folderContent) return;
+
+            folderContent.classList.remove('scale-100', 'opacity-100');
+            folderContent.classList.add('scale-95', 'opacity-0');
+            
+            setTimeout(() => {
+                folderModal.classList.add('opacity-0', 'pointer-events-none');
+            }, 200);
+        };
+
+        // The "Open All" Animation Logic
+        const openAllLinksWithDelay = async (links) => {
+            if (!links || links.length === 0) return;
+            
+            // Loop with delay to create "animation" feel
+            for (const link of links) {
+                if (link.url) {
+                    window.open(link.url, '_blank');
+                    // 300ms delay between tabs
+                    await new Promise(r => setTimeout(r, 300));
+                }
+            }
+        };
+
+        // Updated handleAddBookmark function
+        window.handleAddBookmark = async () => {
+             const nameInput = document.getElementById('bookmark-name');
+             const name = nameInput.value.trim();
+             
+             if (!name) return alert("Please enter a name.");
+
+             if (currentMode === 'link') {
+                 const urlInput = document.getElementById('bookmark-url');
+                 let url = urlInput.value.trim();
+                 if (!url) return alert("Please enter a URL.");
+                 if (!url.startsWith('http')) url = 'https://' + url;
+                 
+                 await window.db.addBookmark(name, url, 'link');
+                 urlInput.value = '';
+             } else {
+                 // Folder Mode
+                 const rows = document.querySelectorAll('#folder-rows-container > div');
+                 const children = [];
+                 
+                 rows.forEach(row => {
+                     const n = row.querySelector('.folder-row-name').value.trim();
+                     let u = row.querySelector('.folder-row-url').value.trim();
+                     if (n && u) {
+                         if (!u.startsWith('http')) u = 'https://' + u;
+                         children.push({ name: n, url: u });
+                     }
+                 });
+
+                 await window.db.addBookmark(name, children, 'folder');
+                 document.getElementById('folder-rows-container').innerHTML = ''; // Clear rows
+             }
+
+             nameInput.value = '';
+             closeBookmarkModal();
+        };
+
     </script>
 </head>
 <body class="bg-gray-900">
@@ -1832,16 +2058,80 @@
 
     <div id="bookmark-modal"
          class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 transition-opacity duration-300 opacity-0 pointer-events-none z-50">
-        <div class="bg-gray-800 p-8 rounded-2xl shadow-2xl w-full max-w-md border border-gray-700 transform transition-all duration-300 scale-100">
-            <h3 class="text-2xl font-bold text-white mb-6">Add New Bookmark</h3>
-            <div class="space-y-4">
-                <input type="text" id="bookmark-name" placeholder="Name" class="w-full p-3 rounded-xl bg-gray-700 text-white placeholder-gray-400 border border-gray-600 focus:border-blue-500 outline-none">
-                <input type="url" id="bookmark-url" placeholder="URL" class="w-full p-3 rounded-xl bg-gray-700 text-white placeholder-gray-400 border border-gray-600 focus:border-blue-500 outline-none">
+        <div class="bg-gray-800 p-8 rounded-2xl shadow-2xl w-full max-w-lg border border-gray-700 transform transition-all duration-300 scale-100 flex flex-col max-h-[85vh]">
+            <h3 class="text-2xl font-bold text-white mb-4">Add New Item</h3>
+            
+            <div class="flex space-x-2 mb-4 bg-gray-700 p-1 rounded-xl">
+                <button id="mode-link-btn" onclick="window.switchBookmarkMode('link')" class="flex-1 py-2 rounded-lg text-sm font-semibold transition-colors bg-blue-500 text-white">Single Link</button>
+                <button id="mode-folder-btn" onclick="window.switchBookmarkMode('folder')" class="flex-1 py-2 rounded-lg text-sm font-semibold transition-colors text-white/50 hover:text-white">Folder Group</button>
             </div>
-            <div class="flex justify-end space-x-4 mt-6">
+
+            <div class="space-y-4 mb-4">
+                <input type="text" id="bookmark-name" placeholder="Display Name (e.g., 'Work' or 'Daily')" class="w-full p-3 rounded-xl bg-gray-700 text-white placeholder-gray-400 border border-gray-600 focus:border-blue-500 outline-none">
+            </div>
+
+            <div id="mode-link-content" class="space-y-4">
+                <input type="url" id="bookmark-url" placeholder="URL (https://...)" class="w-full p-3 rounded-xl bg-gray-700 text-white placeholder-gray-400 border border-gray-600 focus:border-blue-500 outline-none">
+            </div>
+
+            <div id="mode-folder-content" class="hidden flex-col flex-grow overflow-hidden">
+                <div class="flex justify-between items-center mb-2">
+                    <label class="text-white/70 text-sm">Links in this folder:</label>
+                    <button onclick="window.addFolderRow()" class="text-xs bg-blue-600 hover:bg-blue-500 text-white px-2 py-1 rounded transition-colors">+ Add Link</button>
+                </div>
+                <div id="folder-rows-container" class="overflow-y-auto custom-scroll space-y-2 pr-1 max-h-[200px]">
+                    </div>
+            </div>
+
+            <div class="flex justify-end space-x-4 mt-6 pt-4 border-t border-gray-600">
                 <button id="close-bookmark-modal-btn" class="px-5 py-2 rounded-xl bg-gray-600 text-white hover:bg-gray-500 transition-colors">Cancel</button>
-                <button id="add-bookmark-btn" class="px-5 py-2 rounded-xl bg-blue-500 text-white font-semibold hover:bg-blue-600 transition-colors">Save Bookmark</button>
+                <button id="add-bookmark-btn" onclick="window.handleAddBookmark()" class="px-5 py-2 rounded-xl bg-blue-500 text-white font-semibold hover:bg-blue-600 transition-colors">Save</button>            </div>
+        </div>
+    </div>
+
+    <div id="folder-view-modal"
+         class="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center p-4 transition-opacity duration-300 opacity-0 pointer-events-none z-50"
+         onclick="if(event.target === this) window.closeFolderModal()">
+        <div class="bg-gray-900/90 p-6 rounded-3xl shadow-2xl w-full max-w-sm border border-white/10 transform transition-all duration-300 scale-95 opacity-0" id="folder-modal-content">
+            
+            <div class="flex justify-between items-center mb-6">
+                <h3 id="folder-modal-title" class="text-xl font-bold text-white flex items-center gap-2">
+                    <span data-lucide="folder-open" class="text-blue-400"></span>
+                    <span class="truncate">Folder Name</span>
+                </h3>
+                <button onclick="window.closeFolderModal()" class="text-white/50 hover:text-white bg-white/5 p-1 rounded-full"><span data-lucide="x" class="w-5 h-5"></span></button>
             </div>
+
+            <div id="folder-modal-list" class="space-y-2 max-h-[300px] overflow-y-auto custom-scroll mb-6">
+                </div>
+
+            <button id="folder-open-all-btn" class="w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold shadow-lg shadow-blue-900/20 transition-all active:scale-95 flex justify-center items-center gap-2">
+                <span data-lucide="layers" class="w-5 h-5"></span>
+                Open All Links
+            </button>
+        </div>
+    </div>
+
+    <div id="folder-view-modal"
+         class="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center p-4 transition-opacity duration-300 opacity-0 pointer-events-none z-50"
+         onclick="if(event.target === this) closeFolderModal()">
+        <div class="bg-gray-900/90 p-6 rounded-3xl shadow-2xl w-full max-w-sm border border-white/10 transform transition-all duration-300 scale-95 opacity-0" id="folder-modal-content">
+            
+            <div class="flex justify-between items-center mb-6">
+                <h3 id="folder-modal-title" class="text-xl font-bold text-white flex items-center gap-2">
+                    <span data-lucide="folder-open" class="text-blue-400"></span>
+                    <span class="truncate">Folder Name</span>
+                </h3>
+                <button onclick="closeFolderModal()" class="text-white/50 hover:text-white bg-white/5 p-1 rounded-full"><span data-lucide="x" class="w-5 h-5"></span></button>
+            </div>
+
+            <div id="folder-modal-list" class="space-y-2 max-h-[300px] overflow-y-auto custom-scroll mb-6">
+                </div>
+
+            <button id="folder-open-all-btn" class="w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold shadow-lg shadow-blue-900/20 transition-all active:scale-95 flex justify-center items-center gap-2">
+                <span data-lucide="layers" class="w-5 h-5"></span>
+                Open All Links
+            </button>
         </div>
     </div>
 
@@ -1926,7 +2216,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 04/02/2025 - 17:30</div>
+    <div id="version-timestamp">Last Update 09/02/2025 - 10:54</div>
     
     <style>
     /* Custom Scrollbar for horizontal scrolling */
