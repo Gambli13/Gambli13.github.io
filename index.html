@@ -1313,7 +1313,7 @@
 
                 // 1. DETERMINE TARGET DEADLINE
                 let targetDeadline = assignment.deadline; // Default to main deadline
-                let label = "Main Due:"; // Default label
+                let label = ""; // CHANGED: Default is now empty (hides "Main Due")
                 
                 // Check for unfinished subtasks with deadlines
                 if (assignment.subtasks && assignment.subtasks.length > 0) {
@@ -1327,7 +1327,7 @@
                         // The winner is the first one
                         targetDeadline = new Date(activeSubtasks[0].deadline);
                         
-                        // Optional: Show which subtask is driving the timer (truncate if too long)
+                        // Show which subtask is driving the timer (truncate if too long)
                         const subName = activeSubtasks[0].text.length > 15 ? activeSubtasks[0].text.substring(0,12) + '...' : activeSubtasks[0].text;
                         label = `Sub: ${subName}`;
                     }
@@ -1348,7 +1348,8 @@
                 
                 // Compare Date objects
                 if (targetDeadline.getTime() < now.getTime()) { 
-                    countdownEl.innerHTML = `<span class="text-xs text-red-400 mr-2">${label}</span> <span class="text-red-500 font-bold">Overdue</span>`; 
+                    const labelHtml = label ? `<span class="text-xs text-white/50 mr-2">${label}</span>` : '';
+                    countdownEl.innerHTML = `${labelHtml} <span class="text-red-500 font-bold">Overdue</span>`; 
                     return; 
                 }
 
@@ -1357,14 +1358,18 @@
                 const deadlineDay = new Date(targetDeadline.getFullYear(), targetDeadline.getMonth(), targetDeadline.getDate());
 
                 if (deadlineDay.getTime() === today.getTime() && targetDeadline.getTime() > now.getTime()) {
-                    countdownEl.innerHTML = `<span class="text-xs text-white/50 mr-2">${label}</span> <span class="text-green-400 font-semibold">Today!</span>`; 
+                    const labelHtml = label ? `<span class="text-xs text-white/50 mr-2">${label}</span>` : '';
+                    countdownEl.innerHTML = `${labelHtml} <span class="text-green-400 font-semibold">Today!</span>`; 
                     return;
                 }
                 
-                // Normal countdown with Label
+                // Normal countdown with Label (Conditionally Rendered)
+                // This check ensures we don't print an empty line if there is no label
+                const labelHtml = label ? `<span class="text-[10px] text-white/50 uppercase tracking-wider mb-0.5">${label}</span>` : '';
+
                 countdownEl.innerHTML = `
                     <div class="flex flex-col">
-                        <span class="text-[10px] text-white/50 uppercase tracking-wider mb-0.5">${label}</span>
+                        ${labelHtml}
                         <span>
                             <span class="font-bold">${remaining.days}</span>d 
                             <span class="font-bold">${remaining.hours}</span>h 
