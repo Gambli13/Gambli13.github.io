@@ -8,6 +8,16 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
+        /* Hide scrollbar for Chrome, Safari and Opera */
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+
+        /* Hide scrollbar for IE, Edge and Firefox */
+        .no-scrollbar {
+            -ms-overflow-style: none;  /* IE and Edge */
+            scrollbar-width: none;  /* Firefox */
+        }
         /* Custom font and base styles */
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
         body {
@@ -1128,13 +1138,14 @@
             await window.db.reorderBookmarks(bookmarks);
         };
 
-        window.renderBookmarks = (newBookmarks) => {
+       window.renderBookmarks = (newBookmarks) => {
             // Sort bookmarks by 'order'
             bookmarks = newBookmarks.sort((a, b) => (a.order || 0) - (b.order || 0));
             
             const container = document.getElementById('bookmark-container');
             
             const htmlContent = bookmarks.map(b => {
+                // ... (Keep existing mapping logic for htmlContent) ...
                 const domain = getBaseDomain(b.url);
                 const faviconUrl = domain ? `https://s2.googleusercontent.com/s2/favicons?domain=${domain}&sz=64` : null;
                 const iconContent = faviconUrl 
@@ -1143,15 +1154,15 @@
 
                 return `
                 <div id="bookmark-wrap-${b.id}" 
-                     class="bookmark-item-wrap relative"
-                     draggable="true"
-                     ondragstart="window.handleDragStart(event, '${b.id}')"
-                     ondragend="window.handleDragEnd(event, '${b.id}')"
-                     ondragenter="window.handleDragEnter(event, '${b.id}')"
-                     ondragleave="window.handleDragLeave(event, '${b.id}')"
-                     ondragover="window.handleDragOver(event)"
-                     ondrop="window.handleDrop(event, '${b.id}')">
-                     
+                    class="bookmark-item-wrap relative"
+                    draggable="true"
+                    ondragstart="window.handleDragStart(event, '${b.id}')"
+                    ondragend="window.handleDragEnd(event, '${b.id}')"
+                    ondragenter="window.handleDragEnter(event, '${b.id}')"
+                    ondragleave="window.handleDragLeave(event, '${b.id}')"
+                    ondragover="window.handleDragOver(event)"
+                    ondrop="window.handleDrop(event, '${b.id}')">
+                    
                     <a href="${b.url}" rel="noopener noreferrer" title="${b.name}" draggable="false"
                         class="bookmark-icon flex flex-col items-center justify-center w-16 h-16 sm:w-20 sm:h-20 bg-white/10 border border-white/20 rounded-2xl hover:border-blue-400 select-none">
                         ${iconContent}
@@ -1166,8 +1177,7 @@
                 `;
             }).join('');
 
-            
-            if (bookmarks.length < 8) {
+            // REMOVED the "if (bookmarks.length < 8)" check
                 container.innerHTML = htmlContent + `
                     <button id="open-bookmark-modal-btn"
                             class="flex flex-col items-center justify-center w-16 h-16 sm:w-20 sm:h-20 bg-white/5 border border-white/10 rounded-2xl text-white/50 hover:text-white hover:border-blue-500 transition-all duration-300">
@@ -1175,15 +1185,12 @@
                         <span class="text-xs mt-1">Add</span>
                     </button>
                 `;
-            } else {
-                container.innerHTML = htmlContent;
-            }
 
-            const addBtn = document.getElementById('open-bookmark-modal-btn');
-            if (addBtn) addBtn.addEventListener('click', openBookmarkModal);
-            
-            lucide.createIcons();
-        };
+                const addBtn = document.getElementById('open-bookmark-modal-btn');
+                if (addBtn) addBtn.addEventListener('click', openBookmarkModal);
+                
+                lucide.createIcons();
+            };
 
         window.renderAssignments = (newAssignments) => {
             assignments = newAssignments;
@@ -1479,13 +1486,7 @@
         const openBookmarkModal = () => document.getElementById('bookmark-modal').classList.remove('opacity-0', 'pointer-events-none');
         const closeBookmarkModal = () => document.getElementById('bookmark-modal').classList.add('opacity-0', 'pointer-events-none');
         const handleAddBookmark = async () => {
-            // Stop if limit reached
-            if (bookmarks.length >= 8) {
-                alert("Maximum limit of 8 bookmarks reached.");
-                closeBookmarkModal();
-                return;
-            }
-
+            
             const nameInput = document.getElementById('bookmark-name');
             const urlInput = document.getElementById('bookmark-url');
             if (!nameInput.value.trim() || !urlInput.value.trim()) return;
@@ -1776,8 +1777,8 @@
                     <button type="submit" class="hidden">Search</button>
                 </form>
 
-                <div id="bookmark-container" class="grid grid-cols-4 gap-4 sm:gap-6 p-4 rounded-3xl bg-white/5 backdrop-blur-md shadow-inner max-w-2xl w-full">
-                    </div>
+                <div id="bookmark-container" class="grid grid-cols-4 gap-4 sm:gap-6 p-4 rounded-3xl bg-white/5 backdrop-blur-md shadow-inner max-w-2xl w-full overflow-y-auto max-h-[220px] no-scrollbar">
+                </div>
 
                 <div class="flex justify-center w-full">
                     <button id="open-background-gallery-btn"
@@ -1995,7 +1996,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 09/02/2025 - 13:16</div>
+    <div id="version-timestamp">Last Update 09/02/2025 - 13:48</div>
     
     <style>
     /* Custom Scrollbar for horizontal scrolling */
