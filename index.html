@@ -251,25 +251,57 @@
     const setupDataListeners = () => {
         if (!db || !userId) return;
 
+        // Helper to find the "real" deadline (earliest of main deadline OR unfinished subtasks)
+        const getEffectiveDeadline = (assignment) => {
+            let earliest = assignment.deadline || new Date(8640000000000000); // Default to far future if null
+            
+            if (assignment.subtasks && assignment.subtasks.length > 0) {
+                 // Check only unfinished subtasks with valid deadlines
+                 const activeSubtasks = assignment.subtasks.filter(t => !t.done && t.deadline);
+                 if (activeSubtasks.length > 0) {
+                     // Sort subtasks to find the very first one
+                     activeSubtasks.sort((a, b) => new Date(a.deadline) - new Date(b.deadline));
+                     const subDeadline = new Date(activeSubtasks[0].deadline);
+                     
+                     // If subtask is sooner than main deadline, use that
+                     if (subDeadline < earliest) {
+                         earliest = subDeadline;
+                     }
+                 }
+            }
+            return earliest;
+        };
+
         // 1. Assignments Listener
         onSnapshot(collection(db, getCollectionPath('assignments')), (snapshot) => {
             const assignments = [];
             snapshot.forEach(doc => {
                 const data = doc.data();
-                // Determine the correct date object from stored deadline (which is an ISO string in firestore)
                 const deadlineDate = parseDeadlineISO(data.deadline);
                 
                 assignments.push({ 
                     id: doc.id, 
                     ...data, 
-                    // Pass the correctly parsed Date object
                     deadline: deadlineDate 
                 });
             });
-            // Sort by the Date object
-            assignments.sort((a, b) => (a.deadline || new Date(0)) - (b.deadline || new Date(0)));
+
+            // UPDATED SORTING LOGIC
+            assignments.sort((a, b) => {
+                const dateA = getEffectiveDeadline(a);
+                const dateB = getEffectiveDeadline(b);
+                
+                // 1. Primary Sort: Time Remaining (Earliest first)
+                const diff = dateA - dateB;
+                if (diff !== 0) return diff;
+                
+                // 2. Secondary Sort: Title (A-Z)
+                // This forces "Task 2" to appear before "Task 3" when deadlines are equal
+                return a.title.localeCompare(b.title);
+            });
+
             window.renderAssignments(assignments);
-            window.renderCalendar(); // Re-render calendar when assignments change
+            window.renderCalendar(); 
         });
 
         // 2. Bookmarks Listener
@@ -278,13 +310,11 @@
             snapshot.forEach(doc => {
                 loadedBookmarks.push({ id: doc.id, ...doc.data() });
             });
-            // Sort by 'order' immediately upon loading
             loadedBookmarks.sort((a, b) => (a.order || 0) - (b.order || 0));
-            
             window.renderBookmarks(loadedBookmarks);
         });
         
-        // 3. Backgrounds Listener (FIXED: Added Sorting)
+        // 3. Backgrounds Listener
         onSnapshot(collection(db, getCollectionPath('backgrounds')), (snapshot) => {
             const userBackgrounds = [];
             snapshot.forEach(doc => {
@@ -292,14 +322,10 @@
                     id: doc.id, 
                     name: doc.data().name || 'Background', 
                     base64: doc.data().base64,
-                    uploadedAt: doc.data().uploadedAt || new Date(0).toISOString() // Ensure date exists
+                    uploadedAt: doc.data().uploadedAt || new Date(0).toISOString()
                 });
             });
-
-            // SORTING FIX: Always sort by Newest Uploaded first. 
-            // This prevents the order from jumping around based on alphabetical names.
             userBackgrounds.sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
-
             window.setUserBackgrounds(userBackgrounds);
             window.renderBackgroundGallery(userBackgrounds);
         });
@@ -1284,33 +1310,68 @@
             assignments.forEach(assignment => {
                 const countdownEl = document.getElementById(`countdown-${assignment.id}`);
                 if (!countdownEl) return;
-                const deadlineDate = assignment.deadline; // Already a Date object
+
+                // 1. DETERMINE TARGET DEADLINE
+                let targetDeadline = assignment.deadline; // Default to main deadline
+                let label = "Main Due:"; // Default label
                 
-                if (!(deadlineDate instanceof Date) || isNaN(deadlineDate)) {
+                // Check for unfinished subtasks with deadlines
+                if (assignment.subtasks && assignment.subtasks.length > 0) {
+                    // Filter: Not done AND has a valid deadline string
+                    const activeSubtasks = assignment.subtasks.filter(t => !t.done && t.deadline);
+                    
+                    if (activeSubtasks.length > 0) {
+                        // Sort by date (Earliest first)
+                        activeSubtasks.sort((a, b) => new Date(a.deadline) - new Date(b.deadline));
+                        
+                        // The winner is the first one
+                        targetDeadline = new Date(activeSubtasks[0].deadline);
+                        
+                        // Optional: Show which subtask is driving the timer (truncate if too long)
+                        const subName = activeSubtasks[0].text.length > 15 ? activeSubtasks[0].text.substring(0,12) + '...' : activeSubtasks[0].text;
+                        label = `Sub: ${subName}`;
+                    }
+                }
+
+                // Ensure targetDeadline is a valid Date object
+                if (!(targetDeadline instanceof Date) && typeof targetDeadline === 'string') {
+                    targetDeadline = new Date(targetDeadline);
+                }
+
+                if (!(targetDeadline instanceof Date) || isNaN(targetDeadline)) {
                      countdownEl.innerHTML = '<span class="text-gray-400 font-semibold">No Deadline Set</span>';
                      return;
                 }
 
-                const remaining = getTimeRemaining(deadlineDate);
+                const remaining = getTimeRemaining(targetDeadline);
                 const now = new Date();
                 
                 // Compare Date objects
-                if (deadlineDate.getTime() < now.getTime()) { 
-                    countdownEl.innerHTML = '<span class="text-red-500 font-bold">Deadline Passed</span>'; 
+                if (targetDeadline.getTime() < now.getTime()) { 
+                    countdownEl.innerHTML = `<span class="text-xs text-red-400 mr-2">${label}</span> <span class="text-red-500 font-bold">Overdue</span>`; 
                     return; 
                 }
 
-                // Check if due today (ignores time for the 'Due Today' message)
+                // Check if due today
                 const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-                const deadlineDay = new Date(deadlineDate.getFullYear(), deadlineDate.getMonth(), deadlineDate.getDate());
+                const deadlineDay = new Date(targetDeadline.getFullYear(), targetDeadline.getMonth(), targetDeadline.getDate());
 
-                if (deadlineDay.getTime() === today.getTime() && deadlineDate.getTime() > now.getTime()) {
-                    countdownEl.innerHTML = '<span class="text-green-400 font-semibold">Due Today!</span>'; 
+                if (deadlineDay.getTime() === today.getTime() && targetDeadline.getTime() > now.getTime()) {
+                    countdownEl.innerHTML = `<span class="text-xs text-white/50 mr-2">${label}</span> <span class="text-green-400 font-semibold">Today!</span>`; 
                     return;
                 }
                 
-                // Normal countdown
-                countdownEl.innerHTML = `<span class="font-bold">${remaining.days}</span>d <span class="font-bold">${remaining.hours}</span>h <span class="font-bold">${remaining.minutes}</span>m <span class="font-bold">${remaining.seconds}</span>s`;
+                // Normal countdown with Label
+                countdownEl.innerHTML = `
+                    <div class="flex flex-col">
+                        <span class="text-[10px] text-white/50 uppercase tracking-wider mb-0.5">${label}</span>
+                        <span>
+                            <span class="font-bold">${remaining.days}</span>d 
+                            <span class="font-bold">${remaining.hours}</span>h 
+                            <span class="font-bold">${remaining.minutes}</span>m 
+                            <span class="font-bold">${remaining.seconds}</span>s
+                        </span>
+                    </div>`;
             });
         };
         
@@ -1357,8 +1418,12 @@
             container.innerHTML = '';
 
             currentSubtasks.forEach((task, index) => {
-                const row = document.createElement('div');
-                row.className = 'flex items-center space-x-2 mb-2 animate-fadeIn';
+                const wrapper = document.createElement('div');
+                wrapper.className = 'flex flex-col mb-3 bg-gray-700/30 p-2 rounded-lg border border-gray-600/50 animate-fadeIn';
+
+                // ROW 1: Checkbox, Text, Delete
+                const topRow = document.createElement('div');
+                topRow.className = 'flex items-center space-x-2 mb-2';
                 
                 // 1. Checkbox
                 const checkbox = document.createElement('input');
@@ -1367,7 +1432,7 @@
                 checkbox.className = "w-5 h-5 rounded border-gray-500 accent-green-500 cursor-pointer flex-shrink-0";
                 checkbox.onchange = () => {
                     task.done = checkbox.checked;
-                    renderSubtaskUI(); // Re-render to apply green color
+                    renderSubtaskUI(); 
                 };
 
                 // 2. Text Input
@@ -1376,31 +1441,52 @@
                 input.value = task.text;
                 input.placeholder = "Sub-task details...";
                 
-                // CONDITIONAL STYLING: Greenish if done, standard gray if not
                 const bgClass = task.done 
-                    ? 'bg-green-900/40 text-green-200 border-green-700/50 line-through decoration-green-500/50' 
-                    : 'bg-gray-700 text-white border-gray-600';
+                    ? 'text-green-200 line-through decoration-green-500/50 opacity-50' 
+                    : 'text-white';
                 
-                input.className = `flex-1 p-2 rounded-lg border focus:border-blue-500 outline-none transition-all duration-300 ${bgClass}`;
+                input.className = `flex-1 p-1.5 bg-transparent border-b border-transparent focus:border-blue-500 outline-none transition-all duration-300 ${bgClass}`;
                 
-                // Update local data on typing (don't re-render here to keep focus)
-                input.oninput = (e) => {
-                    task.text = e.target.value;
-                };
+                input.oninput = (e) => { task.text = e.target.value; };
 
                 // 3. Delete Button
                 const delBtn = document.createElement('button');
                 delBtn.innerHTML = '<span data-lucide="x" class="w-4 h-4"></span>';
-                delBtn.className = "text-red-400 hover:text-red-500 p-1.5 hover:bg-red-500/10 rounded-lg transition-colors flex-shrink-0";
+                delBtn.className = "text-red-400 hover:text-red-500 p-1 rounded transition-colors flex-shrink-0";
                 delBtn.onclick = () => {
                     currentSubtasks.splice(index, 1);
                     renderSubtaskUI();
                 };
 
-                row.appendChild(checkbox);
-                row.appendChild(input);
-                row.appendChild(delBtn);
-                container.appendChild(row);
+                topRow.appendChild(checkbox);
+                topRow.appendChild(input);
+                topRow.appendChild(delBtn);
+
+                // ROW 2: Deadlines
+                const botRow = document.createElement('div');
+                botRow.className = 'flex items-center space-x-2 pl-7';
+                
+                // Date Input
+                const dateInput = document.createElement('input');
+                dateInput.type = 'date';
+                dateInput.value = task.tempDate || ''; // Use temp property for UI state
+                dateInput.className = "bg-gray-800 text-white text-xs rounded border border-gray-600 p-1 focus:border-blue-500 outline-none";
+                dateInput.onchange = (e) => { task.tempDate = e.target.value; };
+
+                // Time Input
+                const timeInput = document.createElement('input');
+                timeInput.type = 'time';
+                timeInput.value = task.tempTime || ''; // Use temp property for UI state
+                timeInput.className = "bg-gray-800 text-white text-xs rounded border border-gray-600 p-1 focus:border-blue-500 outline-none";
+                timeInput.onchange = (e) => { task.tempTime = e.target.value; };
+
+                botRow.innerHTML = `<span class="text-xs text-white/50 mr-1">Due:</span>`;
+                botRow.appendChild(dateInput);
+                botRow.appendChild(timeInput);
+
+                wrapper.appendChild(topRow);
+                wrapper.appendChild(botRow);
+                container.appendChild(wrapper);
             });
             lucide.createIcons();
         };
@@ -1422,7 +1508,7 @@
             }, 50);
         };
 
-        const openAssignmentDetailModal = (assignment) => {
+       const openAssignmentDetailModal = (assignment) => {
             detailIdInput.value = assignment.id;
             detailTitleInput.value = assignment.title;
             
@@ -1436,12 +1522,21 @@
             
             detailNoteInput.value = assignment.notes || ''; 
 
-            // DEEP COPY existing subtasks to local state (or empty array)
-            // JSON.parse/stringify ensures we don't modify the main array by reference until saved
+            // Deep copy subtasks
             currentSubtasks = assignment.subtasks ? JSON.parse(JSON.stringify(assignment.subtasks)) : [];
             
-            renderSubtaskUI();
+            // PRE-PROCESS SUBTASKS: Split stored 'deadline' string into tempDate and tempTime for the UI
+            currentSubtasks.forEach(task => {
+                if (task.deadline) {
+                    const d = new Date(task.deadline);
+                    if (!isNaN(d)) {
+                        task.tempDate = formatDateForInput(d);
+                        task.tempTime = formatTimeForInput(d);
+                    }
+                }
+            });
 
+            renderSubtaskUI();
             detailModal.classList.remove('opacity-0', 'pointer-events-none');
         };
 
@@ -1462,6 +1557,23 @@
             
             if (!dateString) return; 
 
+            // PROCESS SUBTASKS: Combine tempDate and tempTime back into 'deadline' ISO string
+            const processedSubtasks = currentSubtasks.map(task => {
+                let isoDeadline = null;
+                if (task.tempDate) {
+                    const tVal = task.tempTime || '23:59';
+                    const d = new Date(`${task.tempDate}T${tVal}:00`);
+                    isoDeadline = d.toISOString();
+                }
+                
+                // Return clean object without temp UI fields
+                return {
+                    text: task.text,
+                    done: task.done,
+                    deadline: isoDeadline
+                };
+            });
+
             if (window.db && window.db.updateAssignment) {
                  await window.db.updateAssignment(
                     detailIdInput.value, 
@@ -1469,7 +1581,7 @@
                     dateString, 
                     timeString, 
                     detailNoteInput.value,
-                    currentSubtasks // Pass the updated subtasks array
+                    processedSubtasks // Pass the processed array
                 ); 
             }
             closeAssignmentDetailModal();
@@ -1996,7 +2108,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 09/02/2025 - 13:48</div>
+    <div id="version-timestamp">Last Update 09/02/2025 - 14:23</div>
     
     <style>
     /* Custom Scrollbar for horizontal scrolling */
