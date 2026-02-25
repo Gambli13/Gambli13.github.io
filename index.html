@@ -5,6 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/x-icon" href="images/redchrome.ico">
     <title>New Tab</title>
+    <script>
+        if (localStorage.getItem('dashboardMode') === 'work') {
+            window.location.href = 'work.html';
+        }
+    </script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
@@ -892,8 +897,8 @@
                 { start: "10:00", end: "23:59", title: "END OF DAY", location: null },
             ],
             Wednesday: [
-                { start: "07:00", end: "15:30", title: "MITA Work", location: null },
-                { start: "15:30", end: "23:59", title: "FREE", location: null },
+                { start: "08:45", end: "16:00", title: "OnPoint", location: null },
+                { start: "16:00", end: "23:59", title: "FREE", location: null },
             ],
             Thursday: [
                 { start: "11:00", end: "13:00", title: "Research Design II", location: "ICT-301" },
@@ -1856,29 +1861,42 @@
                 currentCalendarDate = new Date();
                 renderCalendar();
             });
-            // Weekly Timetable Logic (Merged here for optimization)
-            // Weekly Timetable Logic (Horizontal + Gold + Click Outside)
-            document.getElementById('open-weekly-timetable-btn').addEventListener('click', () => {
+            // Quick Menu Logic
+            const quickMenu = document.getElementById('quick-menu');
+            
+            document.getElementById('toggle-quick-menu-btn').addEventListener('click', (e) => {
+                e.stopPropagation();
+                quickMenu.classList.toggle('opacity-0');
+                quickMenu.classList.toggle('pointer-events-none');
+            });
+
+            // Close menu if clicking outside
+            document.addEventListener('click', (e) => {
+                if (!e.target.closest('.fixed.bottom-5.left-5')) {
+                    quickMenu.classList.add('opacity-0', 'pointer-events-none');
+                }
+            });
+
+            // Option 1: Open Timetable (Your existing timetable logic)
+            document.getElementById('menu-open-timetable').addEventListener('click', () => {
+                quickMenu.classList.add('opacity-0', 'pointer-events-none'); // hide menu
+                
                 const modal = document.getElementById("weekly-timetable-modal");
                 const content = document.getElementById("weekly-timetable-content");
                 
-                // Helper to format individual lessons
                 const formatLesson = (item, highlight, isGoldContext) => {
                     let baseClasses = "p-3 rounded-lg mb-2 transition-all duration-300 border";
                     let bgClass, textTitleClass;
 
                     if (highlight) {
                         if (isGoldContext) {
-                            // Gold styling for Friday or End of Day
                             bgClass = 'bg-yellow-500/20 border-yellow-400 shadow-[0_0_15px_rgba(250,204,21,0.3)]';
                             textTitleClass = 'text-yellow-300';
                         } else {
-                            // Standard Purple styling
                             bgClass = 'bg-purple-800/40 border-purple-400';
                             textTitleClass = 'text-purple-300';
                         }
                     } else {
-                        // Inactive styling
                         bgClass = 'bg-white/5 border-transparent';
                         textTitleClass = 'text-blue-300';
                     }
@@ -1898,8 +1916,6 @@
 
                 for (const day of DAYS_OF_WEEK) {
                     const lessons = TIMETABLE[day];
-                    
-                    // Create a column for the day
                     let html = `
                     <div class="min-w-[280px] w-[280px] flex-shrink-0 bg-white/5 p-4 rounded-xl border border-white/10">
                         <h3 class="text-xl font-bold text-white mb-4 border-b border-white/10 pb-2 text-center uppercase tracking-wider">${day}</h3>
@@ -1908,13 +1924,8 @@
                     lessons.forEach(item => {
                         const start = timeToMinutes(item.start);
                         const end = timeToMinutes(item.end);
-                        
-                        // Check if this specific lesson is currently active
                         const isCurrent = day === DAYS_OF_WEEK[dayIndex] && nowMinutes >= start && nowMinutes < end && item.title !== "WEEKEND";
-                        
-                        // Condition for Gold Color: Either it is "END OF DAY" OR it is Friday
                         const isGoldContext = item.title === "END OF DAY" || day === "Friday";
-
                         html += formatLesson(item, isCurrent, isGoldContext);
                     });
                     
@@ -1922,6 +1933,12 @@
                     content.innerHTML += html;
                 }
                 modal.classList.remove("opacity-0", "pointer-events-none");
+            });
+
+            // Option 2: Switch to Work Tab
+            document.getElementById('menu-switch-work').addEventListener('click', () => {
+                localStorage.setItem('dashboardMode', 'work');
+                window.location.href = 'work.html';
             });
 
             // Handle clicking outside the modal to close it
@@ -2174,10 +2191,20 @@
         </div>
     </div>
 
-    <button id="open-weekly-timetable-btn"
-        class="fixed bottom-5 left-5 z-50 p-3 rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition flex items-center justify-center">
-        <span data-lucide="square-menu" class="w-6 h-6 text-white"></span>
-    </button>
+    <div class="fixed bottom-5 left-5 z-50">
+        <div id="quick-menu" class="absolute bottom-full mb-2 left-0 bg-gray-800 border border-gray-700 rounded-xl shadow-2xl overflow-hidden opacity-0 pointer-events-none transition-opacity duration-200 min-w-[180px]">
+            <button id="menu-open-timetable" class="w-full text-left px-4 py-3 text-sm text-white hover:bg-gray-700 flex items-center transition-colors">
+                <span data-lucide="calendar" class="w-4 h-4 mr-2 text-blue-400"></span> Open Timetable
+            </button>
+            <button id="menu-switch-work" class="w-full text-left px-4 py-3 text-sm text-white hover:bg-gray-700 flex items-center border-t border-gray-700 transition-colors">
+                <span data-lucide="briefcase" class="w-4 h-4 mr-2 text-purple-400"></span> Switch to Work
+            </button>
+        </div>
+        
+        <button id="toggle-quick-menu-btn" class="p-3 rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition flex items-center justify-center">
+            <span data-lucide="square-menu" class="w-6 h-6 text-white"></span>
+        </button>
+    </div>
 
     <div id="calendar-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition-opacity duration-300 z-50">
         <div class="bg-gray-900 w-full max-w-5xl rounded-2xl shadow-2xl border border-gray-700 flex flex-col max-h-[90vh]">
@@ -2212,7 +2239,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 09/02/2025 - 15:21</div>
+    <div id="version-timestamp">Last Update 25/02/2026 - 12:15</div>
     
     <style>
     /* Custom Scrollbar for horizontal scrolling */
