@@ -488,7 +488,8 @@
             }
         };
 
-        const renderCalendar = () => {
+        window.renderCalendar = renderCalendar;
+        function renderCalendar() {
             const grid = document.getElementById('calendar-grid');
             const monthYearTitle = document.getElementById('calendar-month-year');
             
@@ -2375,7 +2376,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 25/02/2026 - 18:38</div>
+    <div id="version-timestamp">Last Update 26/02/2026 - 11:43</div>
     
     <style>
     /* Custom Scrollbar for horizontal scrolling */
