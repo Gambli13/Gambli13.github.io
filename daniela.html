@@ -224,9 +224,28 @@
             }
         };
 
+        const createDeadlineDate = (dateString, timeString) => {
+            if (!dateString) return null;
+            const time = timeString || '23:59'; 
+            const [year, month, day] = dateString.split('-').map(Number);
+            const [hours, minutes] = time.split(':').map(Number);
+            const deadlineDate = new Date(year, month - 1, day, hours, minutes);
+            if (isNaN(deadlineDate.getTime())) { console.error("Invalid Date components provided."); return null; }
+            return deadlineDate;
+        };
+
+        const parseDeadlineISO = (isoString) => {
+            if (!isoString) return null;
+            try {
+                const date = new Date(isoString);
+                return isNaN(date) ? null : date;
+            } catch (e) { console.error("Error parsing deadline ISO:", e); return null; }
+        }
+
         const setupDataListeners = () => {
             if (!db || !userId) return;
 
+            // 1. Assignments
             onSnapshot(collection(db, getCollectionPath('assignments')), (snapshot) => {
                 const assignments = [];
                 snapshot.forEach(doc => {
@@ -236,37 +255,13 @@
                 });
                 assignments.sort((a, b) => (a.deadline || 0) - (b.deadline || 0));
                 window.renderAssignments(assignments);
-                // NEW: Re-render calendar when assignments update
-                window.renderCalendar(); 
+                // Safe check before calling renderCalendar
+                if (typeof window.renderCalendar === 'function') {
+                    window.renderCalendar(); 
+                }
             });
 
-            onSnapshot(collection(db, getCollectionPath('bookmarks')), (snapshot) => {
-                const bookmarks = [];
-                snapshot.forEach(doc => {
-                    bookmarks.push({ id: doc.id, ...doc.data() });
-                });
-                window.renderBookmarks(bookmarks);
-            });
-            
-            // 3. Backgrounds Listener (FIXED: Added Sorting by Date)
-            onSnapshot(collection(db, getCollectionPath('backgrounds')), (snapshot) => {
-                const userBackgrounds = [];
-                snapshot.forEach(doc => {
-                    userBackgrounds.push({ 
-                        id: doc.id, 
-                        name: doc.data().name || 'Background', 
-                        base64: doc.data().base64,
-                        uploadedAt: doc.data().uploadedAt || new Date(0).toISOString() // Ensure date exists
-                    });
-                });
-                
-                // SORT: Newest uploads first
-                userBackgrounds.sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
-                
-                window.setUserBackgrounds(userBackgrounds);
-                window.renderBackgroundGallery(userBackgrounds);
-            });
-
+            // 2. Bookmarks
             onSnapshot(collection(db, getCollectionPath('bookmarks')), (snapshot) => {
                 const loadedBookmarks = [];
                 snapshot.forEach(doc => {
@@ -274,6 +269,38 @@
                 });
                 loadedBookmarks.sort((a, b) => (a.order || 0) - (b.order || 0));
                 window.renderBookmarks(loadedBookmarks);
+            });
+            
+            // 3. Backgrounds 
+            onSnapshot(collection(db, getCollectionPath('backgrounds')), (snapshot) => {
+                const userBackgrounds = [];
+                snapshot.forEach(doc => {
+                    userBackgrounds.push({ 
+                        id: doc.id, 
+                        name: doc.data().name || 'Background', 
+                        base64: doc.data().base64,
+                        uploadedAt: doc.data().uploadedAt || new Date(0).toISOString() 
+                    });
+                });
+                
+                userBackgrounds.sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
+                window.setUserBackgrounds(userBackgrounds);
+                window.renderBackgroundGallery(userBackgrounds);
+            });
+
+            // 4. NEW: Finished Assignments Listener (This was missing!)
+            onSnapshot(collection(db, getCollectionPath('finished')), (snapshot) => {
+                const finished = [];
+                snapshot.forEach(doc => {
+                    const data = doc.data();
+                    const deadlineDate = parseDeadlineISO(data.deadline);
+                    const completedAtDate = data.completedAt ? new Date(data.completedAt) : new Date();
+                    finished.push({ id: doc.id, ...data, deadline: deadlineDate, completedAt: completedAtDate });
+                });
+                
+                // Sort by most recently completed first
+                finished.sort((a, b) => b.completedAt - a.completedAt);
+                window.renderFinishedAssignments(finished);
             });
         };
 
@@ -548,6 +575,9 @@
 
             lucide.createIcons();
         };
+
+        window.renderCalendar = renderCalendar;
+
         // --- CALENDAR LOGIC END ---
 
         window.setUserBackgrounds = (newBackgrounds) => {
@@ -1653,23 +1683,7 @@
             });
         };
 
-        const createDeadlineDate = (dateString, timeString) => {
-            if (!dateString) return null;
-            const time = timeString || '23:59'; 
-            const [year, month, day] = dateString.split('-').map(Number);
-            const [hours, minutes] = time.split(':').map(Number);
-            const deadlineDate = new Date(year, month - 1, day, hours, minutes);
-            if (isNaN(deadlineDate.getTime())) { console.error("Invalid Date components provided."); return null; }
-            return deadlineDate;
-        };
-
-        const parseDeadlineISO = (isoString) => {
-            if (!isoString) return null;
-            try {
-                const date = new Date(isoString);
-                return isNaN(date) ? null : date;
-            } catch (e) { console.error("Error parsing deadline ISO:", e); return null; }
-        }
+        
     </script>
 </head>
 <body class="bg-white">
@@ -1992,7 +2006,7 @@
         <span data-lucide="calendar-range" class="w-6 h-6 text-dark-primary group-hover:text-blue-600 transition-colors"></span>
     </button>
 
-    <div id="version-timestamp" class="text-dark-secondary">Last Update 03/03/2026 - 20:34</div>
+    <div id="version-timestamp" class="text-dark-secondary">Last Update 03/03/2026 - 20:47</div>
     </body>
 
     <style>
