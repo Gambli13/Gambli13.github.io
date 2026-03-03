@@ -267,17 +267,13 @@
                 window.renderBackgroundGallery(userBackgrounds);
             });
 
-            onSnapshot(collection(db, getCollectionPath('finished')), (snapshot) => {
-                const finished = [];
+            onSnapshot(collection(db, getCollectionPath('bookmarks')), (snapshot) => {
+                const loadedBookmarks = [];
                 snapshot.forEach(doc => {
-                    const data = doc.data();
-                    let deadlineDate = parseDeadlineISO(data.deadline);
-                    let completedAtDate = data.completedAt ? new Date(data.completedAt) : new Date();
-                    
-                    finished.push({ id: doc.id, ...data, deadline: deadlineDate, completedAt: completedAtDate });
+                    loadedBookmarks.push({ id: doc.id, ...doc.data() });
                 });
-                finished.sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
-                window.renderFinishedAssignments(finished);
+                loadedBookmarks.sort((a, b) => (a.order || 0) - (b.order || 0));
+                window.renderBookmarks(loadedBookmarks);
             });
         };
 
@@ -330,8 +326,25 @@
             addBookmark: async (name, url, icon) => {
                 if (!db || !userId) return;
                 try {
-                    await addDoc(collection(db, getCollectionPath('bookmarks')), { name, url, icon });
+                    const currentCount = window.bookmarks ? window.bookmarks.length : 0;
+                    await addDoc(collection(db, getCollectionPath('bookmarks')), { 
+                        name, 
+                        url, 
+                        icon,
+                        order: currentCount 
+                    });
                 } catch (e) { console.error(e); }
+            },
+            reorderBookmarks: async (newBookmarkArray) => {
+                if (!db || !userId) return;
+                try {
+                    const promises = newBookmarkArray.map((bm, index) => {
+                        return setDoc(doc(db, getCollectionPath('bookmarks'), bm.id), {
+                            order: index
+                        }, { merge: true });
+                    });
+                    await Promise.all(promises);
+                } catch (e) { console.error("Reorder failed", e); }
             },
             deleteBookmark: async (id) => {
                 if (!db || !userId) return;
@@ -780,21 +793,21 @@
             let countdownHTML;
             let icon = "calendar";
             let statusClass = "text-pink-600"; 
-            let subText = `<span class="text-dark-secondary">Next Up:</span> <span class="font-bold text-dark-primary">${title}</span>`; 
+            let subText = `<span class="whitespace-nowrap mr-1">Next Up:</span> <span class="font-bold text-dark-primary break-words">${title}</span>`; 
             let timeRangeToDisplay = '';
             let locationPrefix = 'Location: ';
 
             if (isCurrent && totalSeconds > 0) {
                  statusClass = title === "BREAK" ? "text-pink-300" : "text-pink-400";
                  icon = title === "BREAK" ? "coffee" : "hourglass";
-                 subText = `<span class="text-dark-secondary">Currently in:</span> <span class="font-bold text-dark-primary">${title}</span>`;
+                 subText = `<span class="whitespace-nowrap mr-1">Currently in:</span> <span class="font-bold text-dark-primary break-words">${title}</span>`;
                  countdownHTML = `<span class="font-bold">${hours}</span>h <span class="font-bold">${minutes}</span>m left`;
                  timeRangeToDisplay = `${start} - ${end}`;
             } else if (days > 0) {
                 countdownHTML = `<span class="font-bold">${days}</span>d <span class="font-bold">${hours}</span>h <span class="font-bold">${minutes}</span>m`;
                 icon = "calendar-check";
                 statusClass = "text-yellow-700";
-                subText = `<span class="text-dark-secondary">First Lesson:</span> <span class="font-bold text-dark-primary">${title}</span> (${day})`;
+                subText = `<span class="whitespace-nowrap mr-1">First Lesson:</span> <span class="font-bold text-dark-primary break-words">${title} (${day})</span>`;
                 timeRangeToDisplay = `${start} - ${end}`;
             } else if (totalSeconds > 0) {
                 countdownHTML = `<span class="font-bold">${hours}</span>h <span class="font-bold">${minutes}</span>m`;
@@ -804,24 +817,28 @@
                 countdownHTML = "Finished";
                 icon = "sun";
                 statusClass = "text-dark-tertiary";
-                subText = `<span class="text-dark-secondary">Classes are over. Enjoy your evening!</span>`;
+                subText = `<span class="block w-full text-center sm:text-left">Classes are over. Enjoy your evening!</span>`;
                 location = '';
             }
 
             widgetEl.innerHTML = `
-                <div class="flex justify-between items-center w-full">
-                    <div class="flex items-center">
-                        <span data-lucide="${icon}" class="w-5 h-5 mr-2 ${statusClass} icon-dark-primary"></span>
-                        <p class="text-sm text-dark-secondary">${subText}</p>
+                <div class="flex justify-between items-start w-full gap-4">
+                    <div class="flex items-start min-w-0 flex-1">
+                        <div class="mt-0.5 flex-shrink-0 mr-2">
+                            <span data-lucide="${icon}" class="w-5 h-5 ${statusClass} icon-dark-primary block"></span>
+                        </div>
+                        <div class="text-sm text-dark-secondary min-w-0 flex-1 leading-snug">
+                            ${subText}
+                        </div>
                     </div>
-                    <p class="text-sm font-semibold ${statusClass} text-dark-primary">${countdownHTML}</p>
+                    <p class="text-sm font-semibold flex-shrink-0 whitespace-nowrap text-right ${statusClass} text-dark-primary mt-0.5">${countdownHTML}</p>
                 </div>
-                <div class="flex justify-between items-center w-full mt-1 border-t border-dark-tertiary/20 pt-1">
+                <div class="flex justify-between items-center w-full mt-2 border-t border-dark-tertiary/20 pt-2">
                     <p class="text-xs text-dark-tertiary">${timeRangeToDisplay}</p>
-                    <p class="text-xs text-dark-tertiary">${location ? locationPrefix + location : ''}</p>
+                    <p class="text-xs text-dark-tertiary truncate ml-2">${location ? locationPrefix + location : ''}</p>
                 </div>
             `;
-            lucide.createIcons(); 
+            lucide.createIcons();
         };
 
         let assignments = [];
@@ -956,6 +973,70 @@
             }, 500);
         };
 
+        // --- Drag and Drop Logic ---
+        let draggedItem = null;
+
+        window.handleDragStart = (e, id) => {
+            draggedItem = bookmarks.find(b => b.id === id);
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.dropEffect = 'move';
+
+            const dragIcon = e.currentTarget.querySelector('.bookmark-icon');
+            if (dragIcon) {
+                e.dataTransfer.setDragImage(dragIcon, dragIcon.offsetWidth / 2, dragIcon.offsetHeight / 2);
+            }
+
+            setTimeout(() => {
+                const el = document.getElementById(`bookmark-wrap-${id}`);
+                if(el) el.classList.add('dragging');
+            }, 0);
+        };
+
+        window.handleDragEnd = (e, id) => {
+            const el = document.getElementById(`bookmark-wrap-${id}`);
+            if(el) el.classList.remove('dragging');
+            document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+            draggedItem = null;
+        };
+
+        window.handleDragEnter = (e, targetId) => {
+            e.preventDefault();
+            if (draggedItem && draggedItem.id !== targetId) {
+                const el = document.getElementById(`bookmark-wrap-${targetId}`);
+                if(el) el.classList.add('drag-over');
+            }
+        };
+
+        window.handleDragLeave = (e, targetId) => {
+            const el = document.getElementById(`bookmark-wrap-${targetId}`);
+            if(el) el.classList.remove('drag-over');
+        };
+
+        window.handleDragOver = (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+        };
+
+        window.handleDrop = async (e, targetId) => {
+            e.preventDefault();
+            document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+            
+            if (!draggedItem || draggedItem.id === targetId) return;
+
+            const oldIndex = bookmarks.findIndex(b => b.id === draggedItem.id);
+            const newIndex = bookmarks.findIndex(b => b.id === targetId);
+
+            if (oldIndex === -1 || newIndex === -1) return;
+
+            const [movedItem] = bookmarks.splice(oldIndex, 1);
+            bookmarks.splice(newIndex, 0, movedItem);
+
+            bookmarks.forEach((bm, index) => { bm.order = index; });
+
+            window.renderBookmarks(bookmarks);
+            if(window.db && window.db.reorderBookmarks) await window.db.reorderBookmarks(bookmarks);
+        };
+
         
         window.handleAssignmentDelete = (id) => { window.db.deleteAssignment(id); };
 
@@ -976,20 +1057,31 @@
         };
 
         window.renderBookmarks = (newBookmarks) => {
-            bookmarks = newBookmarks;
+            bookmarks = newBookmarks.sort((a, b) => (a.order || 0) - (b.order || 0));
             const container = document.getElementById('bookmark-container');
-            container.innerHTML = bookmarks.map(b => {
+            
+            const htmlContent = bookmarks.map(b => {
                 const domain = getBaseDomain(b.url);
                 const faviconUrl = domain ? `https://s2.googleusercontent.com/s2/favicons?domain=${domain}&sz=64` : null;
                 const iconContent = faviconUrl 
-                    ? `<img src="${faviconUrl}" alt="${b.name} Favicon" class="bookmark-favicon" onerror="this.outerHTML='<span data-lucide=${b.icon || 'link'} class=\\'w-6 h-6 icon-dark-primary\\'></span>'"/>`
+                    ? `<img src="${faviconUrl}" alt="${b.name}" draggable="false" class="bookmark-favicon" onerror="this.outerHTML='<span data-lucide=${b.icon || 'link'} class=\\'w-6 h-6 icon-dark-primary\\'></span>'"/>`
                     : `<span data-lucide="${b.icon || 'link'}" class="w-6 h-6 icon-dark-primary"></span>`;
+                
                 return `
-                <div class="bookmark-item-wrap relative">
-                    <a href="${b.url}" rel="noopener noreferrer" title="${b.name}"
-                        class="bookmark-icon flex flex-col items-center justify-center w-16 h-16 sm:w-20 sm:h-20 bg-white/70 border border-white/90 rounded-2xl hover:border-blue-400">
+                <div id="bookmark-wrap-${b.id}" 
+                    class="bookmark-item-wrap relative"
+                    draggable="true"
+                    ondragstart="window.handleDragStart(event, '${b.id}')"
+                    ondragend="window.handleDragEnd(event, '${b.id}')"
+                    ondragenter="window.handleDragEnter(event, '${b.id}')"
+                    ondragleave="window.handleDragLeave(event, '${b.id}')"
+                    ondragover="window.handleDragOver(event)"
+                    ondrop="window.handleDrop(event, '${b.id}')">
+                    
+                    <a href="${b.url}" rel="noopener noreferrer" title="${b.name}" draggable="false"
+                        class="bookmark-icon flex flex-col items-center justify-center w-16 h-16 sm:w-20 sm:h-20 bg-white/70 border border-white/90 rounded-2xl hover:border-blue-400 select-none">
                         ${iconContent}
-                        <span class="text-xs text-dark-secondary mt-1 truncate max-w-full">${b.name}</span>
+                        <span class="text-xs text-dark-secondary mt-1 truncate max-w-full pointer-events-none">${b.name}</span>
                     </a>
                     <button onclick="window.db.deleteBookmark('${b.id}')"
                             class="delete-btn absolute top-[-5px] right-[-5px] w-6 h-6 flex items-center justify-center bg-dark-primary/20 text-dark-primary rounded-full p-0.5 shadow-md hover:bg-dark-primary/30 transition-colors">
@@ -998,7 +1090,8 @@
                 </div>
                 `;
             }).join('');
-            container.innerHTML += `
+
+            container.innerHTML = htmlContent + `
                 <button id="open-bookmark-modal-btn"
                         class="flex flex-col items-center justify-center w-16 h-16 sm:w-20 sm:h-20 bg-white/50 border border-white/70 rounded-2xl text-dark-tertiary hover:text-dark-primary hover:border-blue-500 transition-all duration-300"
                         title="Add New Bookmark">
@@ -1006,7 +1099,10 @@
                     <span class="text-xs mt-1">Add</span>
                 </button>
             `;
-            document.getElementById('open-bookmark-modal-btn')?.addEventListener('click', openBookmarkModal);
+            
+            const addBtn = document.getElementById('open-bookmark-modal-btn');
+            if (addBtn) addBtn.addEventListener('click', openBookmarkModal);
+            
             lucide.createIcons();
         };
 
@@ -1393,7 +1489,114 @@
             }
         };
 
+        // --- Circular Widgets Logic ---
+        const STIPEND_DATES = [
+            "2026-02-25",
+            "2026-03-25",
+            "2026-04-22",
+            "2026-05-20",
+            "2026-06-17",
+            "2026-07-15",
+            "2026-08-12",
+        ];
+
+        const updateCircularWidgets = () => {
+            const now = new Date();
+            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            
+            // 1. Update Next Paga (Strictly the Last Friday of the Month)
+            const getPagaDateForMonth = (year, month) => {
+                let lastDay = new Date(year, month + 1, 0); 
+                // Loop backwards until the day is Friday (5)
+                while (lastDay.getDay() !== 5) {
+                    lastDay.setDate(lastDay.getDate() - 1);
+                }
+                return lastDay;
+            };
+
+            let currentMonthPaga = getPagaDateForMonth(now.getFullYear(), now.getMonth());
+            let nextMonthPaga = getPagaDateForMonth(now.getFullYear(), now.getMonth() + 1);
+            let prevMonthPaga = getPagaDateForMonth(now.getFullYear(), now.getMonth() - 1);
+
+            let targetPagaDate, startPagaDate;
+
+            if (today.getTime() > currentMonthPaga.getTime()) {
+                targetPagaDate = nextMonthPaga;
+                startPagaDate = currentMonthPaga;
+            } else {
+                targetPagaDate = currentMonthPaga;
+                startPagaDate = prevMonthPaga;
+            }
+
+            const pagaText = document.getElementById('paga-left-text');
+            const pagaCircle = document.getElementById('paga-progress-circle');
+            
+            if (pagaText && pagaCircle) {
+                const diffTime = targetPagaDate.getTime() - today.getTime();
+                const daysLeft = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                
+                const totalCycleTime = targetPagaDate.getTime() - startPagaDate.getTime();
+                const totalCycleDays = Math.ceil(totalCycleTime / (1000 * 60 * 60 * 24));
+                
+                const daysIntoCycle = totalCycleDays - daysLeft;
+                let pagaPercent = (daysIntoCycle / totalCycleDays) * 100;
+                
+                if (daysLeft === 0) pagaPercent = 100;
+
+                pagaText.textContent = `${daysLeft}d`;
+                
+                const circumference = 175.9; // FIXED MATH FOR BIGGER CIRCLE
+                const pagaOffset = circumference - (pagaPercent / 100) * circumference;
+                pagaCircle.style.strokeDashoffset = pagaOffset;
+            }
+
+            // 2. Update Next Stipend (List-based)
+            const parsedDates = STIPEND_DATES
+                .map(d => new Date(d + "T00:00:00"))
+                .sort((a, b) => a - b);
+            
+            let nextStipendDate = null;
+            let prevStipendDate = null;
+
+            for (let i = 0; i < parsedDates.length; i++) {
+                if (parsedDates[i] >= today) {
+                    nextStipendDate = parsedDates[i];
+                    prevStipendDate = i > 0 ? parsedDates[i-1] : new Date(nextStipendDate.getTime() - (28 * 24 * 60 * 60 * 1000));
+                    break;
+                }
+            }
+
+            const stipendText = document.getElementById('stipend-left-text');
+            const stipendCircle = document.getElementById('stipend-progress-circle');
+            
+            if (stipendText && stipendCircle) {
+                if (!nextStipendDate) {
+                    stipendText.textContent = "--";
+                    stipendCircle.style.strokeDashoffset = 175.9; // FIXED MATH
+                } else {
+                    const diffTime = nextStipendDate.getTime() - today.getTime();
+                    const daysLeft = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                    
+                    const totalCycleTime = nextStipendDate.getTime() - prevStipendDate.getTime();
+                    const totalCycleDays = Math.ceil(totalCycleTime / (1000 * 60 * 60 * 24));
+                    
+                    const daysIntoCycle = totalCycleDays - daysLeft;
+                    let stipendPercent = (daysIntoCycle / totalCycleDays) * 100;
+                    
+                    if (daysLeft === 0) stipendPercent = 100;
+
+                    stipendText.textContent = `${daysLeft}d`;
+                    
+                    const circumference = 175.9; // FIXED MATH FOR BIGGER CIRCLE
+                    const stipendOffset = circumference - (stipendPercent / 100) * circumference;
+                    stipendCircle.style.strokeDashoffset = stipendOffset;
+                }
+            }
+        };
+
         window.onload = () => {
+            updateCircularWidgets();
+            setInterval(updateCircularWidgets, 60000);
             changeBackground(currentBackgroundId); 
             window.renderMCASTLinks(); 
             renderScheduleWidget(); 
@@ -1486,6 +1689,37 @@
                     </div>
                 <div id="mcast-link-list" class="space-y-3">
                     </div>
+
+                    <div id="mcast-link-list" class="space-y-3">
+            </div>
+        
+                <div class="mt-6 pt-6 border-t border-gray-200 flex justify-center gap-6">
+                    <div class="flex flex-col items-center justify-center p-3 rounded-2xl bg-white/50 backdrop-blur-md shadow-sm border border-gray-200 w-28 h-28 hover:bg-white/80 transition-colors">
+                        <div class="relative w-16 h-16">
+                            <svg class="w-16 h-16 transform -rotate-90">
+                                <circle cx="32" cy="32" r="28" stroke="currentColor" stroke-width="4" fill="transparent" class="text-gray-200" />
+                                <circle id="paga-progress-circle" cx="32" cy="32" r="28" stroke="currentColor" stroke-width="4" fill="transparent" stroke-dasharray="175.9" stroke-dashoffset="0" class="text-pink-500 transition-all duration-1000 ease-out" />
+                            </svg>
+                            <div class="absolute inset-0 flex items-center justify-center">
+                                <span id="paga-left-text" class="text-sm font-bold text-dark-primary">0d</span>
+                            </div>
+                        </div>
+                        <span class="text-[11px] font-medium text-dark-secondary uppercase tracking-wider text-center leading-none mt-2">Paga</span>
+                    </div>
+                    
+                    <div class="flex flex-col items-center justify-center p-3 rounded-2xl bg-white/50 backdrop-blur-md shadow-sm border border-gray-200 w-28 h-28 hover:bg-white/80 transition-colors">
+                        <div class="relative w-16 h-16">
+                            <svg class="w-16 h-16 transform -rotate-90">
+                                <circle cx="32" cy="32" r="28" stroke="currentColor" stroke-width="4" fill="transparent" class="text-gray-200" />
+                                <circle id="stipend-progress-circle" cx="32" cy="32" r="28" stroke="currentColor" stroke-width="4" fill="transparent" stroke-dasharray="175.9" stroke-dashoffset="0" class="text-pink-500 transition-all duration-1000 ease-out" />
+                            </svg>
+                            <div class="absolute inset-0 flex items-center justify-center">
+                                <span id="stipend-left-text" class="text-sm font-bold text-dark-primary">0d</span>
+                            </div>
+                        </div>
+                        <span class="text-[11px] font-medium text-dark-secondary uppercase tracking-wider text-center leading-none mt-2">Stipend</span>
+                    </div>
+                </div>
             </div>
 
             <div class="lg:col-span-3 flex flex-col items-center justify-center p-6 space-y-8">
@@ -1501,8 +1735,8 @@
                     <button type="submit" class="hidden">Search</button>
                 </form>
 
-                <div id="bookmark-container" class="grid grid-cols-4 gap-4 sm:gap-6 p-4 rounded-3xl bg-white/50 backdrop-blur-md shadow-inner max-w-2xl w-full border border-gray-100">
-                    </div>
+                <div id="bookmark-container" class="grid grid-cols-4 gap-4 sm:gap-6 p-4 rounded-3xl bg-white/50 backdrop-blur-md shadow-inner max-w-2xl w-full border border-gray-100 overflow-y-auto max-h-[220px] no-scrollbar">
+                </div>
 
                 <div class="flex justify-center w-full">
                     <button id="open-background-gallery-btn"
@@ -1515,10 +1749,10 @@
                 <p id="user-id-display" class="text-xs text-dark-tertiary mt-4"></p>
             </div>
 
-            <div class="lg:col-span-2 p-6 bg-white/70 rounded-3xl backdrop-blur-xl shadow-2xl h-fit border border-gray-100">
+            <div class="lg:col-span-2 p-5 bg-white/70 rounded-3xl backdrop-blur-xl shadow-2xl h-fit ">
              <div class="flex justify-between items-center mb-4">
                  <h2 class="text-xl font-bold text-dark-primary flex items-center">
-                    <button id="open-calendar-btn" class="hover:bg-gray-0 rounded-lg p-1 transition-all duration-200 group mr-1" title="Open Calendar View">
+                    <button id="open-calendar-btn" class="hover:bg-gray-0 rounded-lg p-1 transition-all duration-200 group" title="Open Calendar View">
                         <span data-lucide="clipboard-list" class="w-6 h-6 text-pink-400 group-hover:scale-110 transition-transform"></span>
                     </button>
                      Upcoming Assignments
@@ -1758,7 +1992,7 @@
         <span data-lucide="calendar-range" class="w-6 h-6 text-dark-primary group-hover:text-blue-600 transition-colors"></span>
     </button>
 
-    <div id="version-timestamp" class="text-dark-secondary">Last Update 04/02/2026 - 18:46</div>
+    <div id="version-timestamp" class="text-dark-secondary">Last Update 03/03/2026 - 20:34</div>
     </body>
 
     <style>
@@ -1766,6 +2000,34 @@
         .custom-scroll::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.05); border-radius: 4px; }
         .custom-scroll::-webkit-scrollbar-thumb { background: rgba(74, 44, 44, 0.2); border-radius: 4px; } 
         .custom-scroll::-webkit-scrollbar-thumb:hover { background: rgba(74, 44, 44, 0.4); }
+
+        /* Hide scrollbar for Chrome, Safari and Opera */
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        /* Hide scrollbar for IE, Edge and Firefox */
+        .no-scrollbar {
+            -ms-overflow-style: none;  
+            scrollbar-width: none;  
+        }
+
+        /* Drag & Drop Styles */
+        .bookmark-item-wrap {
+            transition: transform 0.2s cubic-bezier(0.2, 0, 0.2, 1), opacity 0.2s;
+            cursor: pointer !important; 
+            touch-action: none;
+        }
+        .bookmark-icon {
+            cursor: pointer !important;
+        }
+        .dragging {
+            opacity: 0.01;
+        }
+        .drag-over .bookmark-icon {
+            transform: scale(1.1);
+            border-color: #3b82f6; 
+            box-shadow: 0 0 15px rgba(59, 130, 246, 0.5);
+        }
     </style>
     <script>
             document.getElementById('open-weekly-timetable-btn').addEventListener('click', () => {
