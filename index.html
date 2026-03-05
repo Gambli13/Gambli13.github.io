@@ -1432,9 +1432,14 @@
                         // The winner is the first one
                         targetDeadline = new Date(activeSubtasks[0].deadline);
                         
-                        // Show which subtask is driving the timer (truncate if too long)
-                        const subName = activeSubtasks[0].text.length > 15 ? activeSubtasks[0].text.substring(0,12) + '...' : activeSubtasks[0].text;
-                        label = `Sub: ${subName}`;
+                        // NEW: Format the subtask deadline date instead of using its name
+                        const sDay = String(targetDeadline.getDate()).padStart(2, '0');
+                        const sMonth = String(targetDeadline.getMonth() + 1).padStart(2, '0');
+                        const sYear = targetDeadline.getFullYear();
+                        const sHours = String(targetDeadline.getHours()).padStart(2, '0');
+                        const sMins = String(targetDeadline.getMinutes()).padStart(2, '0');
+                        
+                        label = `Subtask Due: ${sDay}/${sMonth}/${sYear} ${sHours}:${sMins}`;
                     }
                 }
 
@@ -2376,7 +2381,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 26/02/2026 - 11:43</div>
+    <div id="version-timestamp">Last Update 05/03/2026 - 12:27</div>
     
     <style>
     /* Custom Scrollbar for horizontal scrolling */
