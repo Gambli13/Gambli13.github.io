@@ -1977,26 +1977,40 @@
                 currentCalendarDate = new Date();
                 renderCalendar();
             });
-            // Quick Menu Logic
+
+            
+
+           // Quick Menu Slide-Out Logic (Updated for Bubbles)
             const quickMenu = document.getElementById('quick-menu');
             
+            // Helper function to close the menu
+            const closeMenu = () => {
+                quickMenu.classList.add('-translate-x-10', 'opacity-0', 'pointer-events-none');
+                quickMenu.classList.remove('translate-x-0', 'opacity-100');
+            };
+
             document.getElementById('toggle-quick-menu-btn').addEventListener('click', (e) => {
                 e.stopPropagation();
-                quickMenu.classList.toggle('opacity-0');
-                quickMenu.classList.toggle('pointer-events-none');
-            });
-
-            // Close menu if clicking outside
-            document.addEventListener('click', (e) => {
-                if (!e.target.closest('.fixed.bottom-5.left-5')) {
-                    quickMenu.classList.add('opacity-0', 'pointer-events-none');
+                if (quickMenu.classList.contains('opacity-0')) {
+                    // Open
+                    quickMenu.classList.remove('-translate-x-10', 'opacity-0', 'pointer-events-none');
+                    quickMenu.classList.add('translate-x-0', 'opacity-100');
+                } else {
+                    // Close
+                    closeMenu();
                 }
             });
 
-            // Option 1: Open Timetable (Your existing timetable logic)
+            document.addEventListener('click', (e) => {
+                if (!e.target.closest('.fixed.bottom-5.left-5')) {
+                    closeMenu();
+                }
+            });
+
             document.getElementById('menu-open-timetable').addEventListener('click', () => {
-                quickMenu.classList.add('opacity-0', 'pointer-events-none'); // hide menu
+                closeMenu(); // Closes menu smoothly before opening modal
                 
+                // Keep the rest of your original timetable logic here...
                 const modal = document.getElementById("weekly-timetable-modal");
                 const content = document.getElementById("weekly-timetable-content");
                 
@@ -2051,28 +2065,153 @@
                 modal.classList.remove("opacity-0", "pointer-events-none");
             });
 
-            // Option 2: Switch to Work Tab
             document.getElementById('menu-switch-work').addEventListener('click', () => {
                 localStorage.setItem('dashboardMode', 'work');
                 window.location.href = 'work.html';
             });
 
-            // Handle clicking outside the modal to close it
-            document.getElementById("weekly-timetable-modal").addEventListener('click', (e) => {
-                 if (e.target === e.currentTarget) {
-                     e.currentTarget.classList.add("opacity-0", "pointer-events-none");
-                 }
-            });
-
-            // MODIFIED CODE (Forces everything to a Google Search)
-            document.getElementById('search-form').addEventListener('submit', (e) => {
-                e.preventDefault();
-                const query = document.getElementById('search-input').value;
-                if (query) {
-                    // Simple logic: always search Google
-                    window.location.href = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+            // --- FIX: Global Background Click to Close Modals ---
+            ['weekly-timetable-modal', 'maps-modal'].forEach(modalId => {
+                const modalEl = document.getElementById(modalId);
+                if (modalEl) {
+                    modalEl.addEventListener('click', (e) => {
+                        if (e.target === e.currentTarget) {
+                            e.currentTarget.classList.add('opacity-0', 'pointer-events-none');
+                        }
+                    });
                 }
             });
+
+           // --- Maps Modal Logic ---
+            const HOME_LOC = "10 Triq Grosseto, Birkirkara";
+            const MAP_DESTINATIONS = {
+                'school': { address: "MCAST, Paola", name: "School" },
+                'work': { address: "Lotus Consultancy Limited", name: "Work" }
+            };
+
+            const mapsSelect = document.getElementById('maps-destination-select');
+            const mapsIframe = document.getElementById('maps-iframe');
+            const mapsExtension = document.getElementById('maps-extension');
+            const mapsTitleText = document.getElementById('maps-title-text');
+            let isReversed = false; 
+
+            // NOW ACCEPTS NAMES TO DISPLAY IN THE TITLE
+            const updateMap = (start, end, startName, endName) => {
+                const finalStart = isReversed ? end : start;
+                const finalEnd = isReversed ? start : end;
+                const finalStartName = isReversed ? endName : startName;
+                const finalEndName = isReversed ? startName : endName;
+                
+                // FIXED THE BROKEN GOOGLE MAPS URL
+                mapsIframe.src = `https://maps.google.com/maps?saddr=${encodeURIComponent(finalStart)}&daddr=${encodeURIComponent(finalEnd)}&output=embed`;
+                
+                // UPDATE THE TITLE DYNAMICALLY
+                if (mapsTitleText) {
+                    mapsTitleText.innerHTML = `${finalStartName} <span data-lucide="arrow-right" class="w-5 h-5 mx-2 text-gray-500"></span> ${finalEndName}`;
+                    if (window.lucide) window.lucide.createIcons();
+                }
+            };
+
+            document.getElementById('open-maps-btn').addEventListener('click', () => {
+                document.getElementById('maps-modal').classList.remove('opacity-0', 'pointer-events-none');
+                
+                mapsSelect.value = 'school';
+                isReversed = false; 
+                const reverseBtn = document.getElementById('reverse-map-btn');
+                if (reverseBtn) reverseBtn.classList.remove('text-blue-400');
+                
+                const dest = MAP_DESTINATIONS[mapsSelect.value];
+                updateMap(HOME_LOC, dest.address, "Home", dest.name);
+            });
+
+            document.getElementById('reverse-map-btn').addEventListener('click', () => {
+                isReversed = !isReversed;
+                document.getElementById('reverse-map-btn').classList.toggle('text-blue-400'); 
+                
+                const destKey = mapsSelect.value;
+                
+                if (mapsExtension && !mapsExtension.classList.contains('w-0')) {
+                    const start = document.getElementById('ext-start-loc').value || HOME_LOC;
+                    const end = document.getElementById('ext-end-loc').value;
+                    const name = document.getElementById('ext-dest-name').value || "Custom";
+                    const startName = start === HOME_LOC ? "Home" : "Custom Start";
+                    if(end) updateMap(start, end, startName, name);
+                } else {
+                    const dest = MAP_DESTINATIONS[destKey];
+                    if(dest) {
+                        const startLoc = dest.start || HOME_LOC; 
+                        const startName = startLoc === HOME_LOC ? "Home" : "Custom Start";
+                        updateMap(startLoc, dest.address, startName, dest.name);
+                    }
+                }
+            });
+
+            document.getElementById('close-maps-btn').addEventListener('click', () => {
+                document.getElementById('maps-modal').classList.add('opacity-0', 'pointer-events-none');
+                if(mapsExtension) mapsExtension.classList.replace('w-80', 'w-0'); 
+            });
+
+            if (mapsSelect) {
+                mapsSelect.addEventListener('change', (e) => {
+                    const dest = MAP_DESTINATIONS[e.target.value];
+                    if(dest) {
+                        const startLoc = dest.start || HOME_LOC; 
+                        const startName = startLoc === HOME_LOC ? "Home" : "Custom Start";
+                        updateMap(startLoc, dest.address, startName, dest.name);
+                    }
+                });
+            }
+
+            const toggleMapExtBtn = document.getElementById('toggle-map-ext-btn');
+            if (toggleMapExtBtn && mapsExtension) {
+                toggleMapExtBtn.addEventListener('click', () => {
+                    if (mapsExtension.classList.contains('w-0')) {
+                        mapsExtension.classList.replace('w-0', 'w-80');
+                    } else {
+                        mapsExtension.classList.replace('w-80', 'w-0');
+                    }
+                });
+            }
+
+            const extShowBtn = document.getElementById('ext-show-btn');
+            if (extShowBtn) {
+                extShowBtn.addEventListener('click', () => {
+                    const start = document.getElementById('ext-start-loc').value || HOME_LOC;
+                    const end = document.getElementById('ext-end-loc').value;
+                    const name = document.getElementById('ext-dest-name').value || "Custom";
+                    if(!end) return alert("Please enter an End Destination.");
+                    
+                    const startName = start === HOME_LOC ? "Home" : "Custom Start";
+                    updateMap(start, end, startName, name); 
+                });
+            }
+
+            const extSaveBtn = document.getElementById('ext-save-btn');
+            if (extSaveBtn) {
+                extSaveBtn.addEventListener('click', () => {
+                    const name = document.getElementById('ext-dest-name').value.trim();
+                    const start = document.getElementById('ext-start-loc').value || HOME_LOC;
+                    const end = document.getElementById('ext-end-loc').value.trim();
+
+                    if(!name || !end) return alert("Destination Name and End Location are required.");
+
+                    const key = 'custom_' + Date.now();
+                    MAP_DESTINATIONS[key] = { address: end, start: start, name: name };
+
+                    const opt = document.createElement('option');
+                    opt.value = key;
+                    opt.textContent = name;
+                    mapsSelect.appendChild(opt);
+
+                    mapsSelect.value = key;
+                    const startName = start === HOME_LOC ? "Home" : "Custom Start";
+                    updateMap(start, end, startName, name);
+
+                    document.getElementById('ext-dest-name').value = '';
+                    document.getElementById('ext-end-loc').value = '';
+                    mapsExtension.classList.replace('w-80', 'w-0');
+                });
+            }
         };
     </script>
 </head>
@@ -2118,10 +2257,10 @@
                         <span data-lucide="mail" class="w-5 h-5"></span>
                     </a>
                     
-                    <a href="https://maps.google.com/" target="_blank" rel="noopener noreferrer" title="Google Maps"
-                    class="absolute right-12 top-1/2 transform -translate-y-1/2 text-gray-500 hover:text-green-600 transition-colors">
+                   <button type="button" id="open-maps-btn" title="Directions"
+                    class="absolute right-12 top-1/2 transform -translate-y-1/2 text-gray-500 hover:text-green-600 transition-colors z-10">
                         <span data-lucide="map-pin" class="w-5 h-5"></span>
-                    </a>
+                    </button>
                     
                     <button type="submit" class="hidden">Search</button>
                 </form>
@@ -2333,19 +2472,37 @@
         </div>
     </div>
 
-    <div class="fixed bottom-5 left-5 z-50">
-        <div id="quick-menu" class="absolute bottom-full mb-2 left-0 bg-gray-800 border border-gray-700 rounded-xl shadow-2xl overflow-hidden opacity-0 pointer-events-none transition-opacity duration-200 min-w-[180px]">
-            <button id="menu-open-timetable" class="w-full text-left px-4 py-3 text-sm text-white hover:bg-gray-700 flex items-center transition-colors">
-                <span data-lucide="calendar" class="w-4 h-4 mr-2 text-blue-400"></span> Open Timetable
-            </button>
-            <button id="menu-switch-work" class="w-full text-left px-4 py-3 text-sm text-white hover:bg-gray-700 flex items-center border-t border-gray-700 transition-colors">
-                <span data-lucide="briefcase" class="w-4 h-4 mr-2 text-purple-400"></span> Switch to Work
-            </button>
-        </div>
-        
-        <button id="toggle-quick-menu-btn" class="p-3 rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition flex items-center justify-center">
+    <div class="fixed bottom-5 left-5 z-50 flex items-center h-12">
+        <button id="toggle-quick-menu-btn" class="relative group p-3 rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition flex items-center justify-center z-20">
             <span data-lucide="square-menu" class="w-6 h-6 text-white"></span>
+            
+            <div class="absolute bottom-full mb-3 left-1/2 transform -translate-x-1/2 px-3 py-1.5 bg-gray-800 text-white text-xs font-bold rounded-lg shadow-xl opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-50">
+                Menu
+                <div class="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-gray-800"></div>
+            </div>
         </button>
+        
+        <div id="quick-menu" class="absolute left-full ml-2 flex items-center space-x-3 transition-all duration-300 -translate-x-10 opacity-0 pointer-events-none z-10">
+            
+            <button id="menu-open-timetable" class="relative group p-3 rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition flex items-center justify-center">
+                <span data-lucide="calendar" class="w-6 h-6 text-purple-400"></span>
+                
+                <div class="absolute bottom-full mb-3 left-1/2 transform -translate-x-1/2 px-3 py-1.5 bg-purple-600 text-white text-xs font-bold rounded-lg shadow-xl opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-50">
+                    Open Timetable
+                    <div class="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-purple-600"></div>
+                </div>
+            </button>
+            
+            <button id="menu-switch-work" class="relative group p-3 rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition flex items-center justify-center">
+                <span data-lucide="briefcase" class="w-6 h-6 text-blue-400"></span>
+                
+                <div class="absolute bottom-full mb-3 left-1/2 transform -translate-x-1/2 px-3 py-1.5 bg-blue-600 text-white text-xs font-bold rounded-lg shadow-xl opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-50">
+                    Switch to Work
+                    <div class="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-blue-600"></div>
+                </div>
+            </button>
+
+        </div>
     </div>
 
     <div id="calendar-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition-opacity duration-300 z-50">
@@ -2381,7 +2538,63 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 05/03/2026 - 12:27</div>
+    <div id="maps-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition-opacity duration-300 z-50">
+        <div class="bg-gray-900 w-full max-w-6xl rounded-2xl shadow-2xl border border-gray-700 flex flex-col h-[85vh] overflow-hidden">
+            
+            <div class="flex items-center justify-between p-4 border-b border-gray-700 bg-gray-800/50">
+                <div class="flex items-center space-x-4 w-full">
+                    <h3 class="text-xl font-bold text-white flex items-center">
+                        <span data-lucide="map" class="w-5 h-5 mr-2 text-green-400 flex-shrink-0"></span> 
+                        <span id="maps-title-text" class="flex items-center whitespace-nowrap">Live Directions</span>
+                    </h3>
+                    <select id="maps-destination-select" class="bg-gray-700 text-white border border-gray-600 rounded-lg p-2 outline-none focus:border-blue-500 cursor-pointer">
+                        <option value="school">School (MCAST, Paola)</option>
+                        <option value="work">Work (Lotus Consultancy Limited)</option>
+                    </select>
+                    
+                    <button id="reverse-map-btn" class="p-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-white transition-colors" title="Reverse Directions">
+                        <span data-lucide="arrow-right-left" class="w-5 h-5"></span>
+                    </button>
+                </div>
+                <div class="flex space-x-2">
+                    <button id="toggle-map-ext-btn" class="p-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-white transition-colors" title="Add Custom Location">
+                        <span data-lucide="plus" class="w-5 h-5"></span>
+                    </button>
+                    <button id="close-maps-btn" class="p-2 rounded-lg bg-red-600/80 hover:bg-red-600 text-white transition-colors">
+                        <span data-lucide="x" class="w-5 h-5"></span>
+                    </button>
+                </div>
+            </div>
+            
+            <div class="flex-grow w-full flex bg-gray-800 overflow-hidden relative">
+                <div class="flex-grow h-full relative z-10 transition-all duration-300">
+                    <iframe id="maps-iframe" width="100%" height="100%" style="border:0;" allowfullscreen="" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
+                </div>
+                
+                <div id="maps-extension" class="w-0 overflow-hidden bg-gray-900 border-l border-gray-700 flex flex-col transition-all duration-300 ease-out z-20">
+                    <div class="p-5 w-80 flex-shrink-0">
+                        <h4 class="text-white font-bold mb-4 text-lg">Add Location</h4>
+                        
+                        <label class="block text-white/70 text-xs mb-1">Destination Name</label>
+                        <input type="text" id="ext-dest-name" placeholder="e.g. Gym" class="w-full mb-3 p-2.5 bg-gray-800 text-white rounded-lg outline-none border border-gray-600 focus:border-blue-500 transition-colors">
+                        
+                        <label class="block text-white/70 text-xs mb-1">Start Location</label>
+                        <input type="text" id="ext-start-loc" placeholder="Starting address" value="10 Triq Grosseto, Birkirkara" class="w-full mb-3 p-2.5 bg-gray-800 text-white rounded-lg outline-none border border-gray-600 focus:border-blue-500 transition-colors">
+                        
+                        <label class="block text-white/70 text-xs mb-1">End Location</label>
+                        <input type="text" id="ext-end-loc" placeholder="Ending address" class="w-full mb-5 p-2.5 bg-gray-800 text-white rounded-lg outline-none border border-gray-600 focus:border-blue-500 transition-colors">
+                        
+                        <div class="flex space-x-3">
+                            <button id="ext-show-btn" class="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-semibold py-2.5 rounded-lg transition-colors">Show on map</button>
+                            <button id="ext-save-btn" class="flex-1 bg-green-600 hover:bg-green-500 text-white font-semibold py-2.5 rounded-lg transition-colors shadow-lg shadow-green-900/20">Save</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="version-timestamp">Last Update 09/03/2026 - 00:06</div>
     
     <style>
     /* Custom Scrollbar for horizontal scrolling */
