@@ -171,6 +171,7 @@
         const LOCAL_AUTH_TOKEN = null; 
     </script>
     <script type="module">
+        
     import { initializeApp } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js";
     import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-auth.js";
     import { getFirestore, doc, addDoc, deleteDoc, setDoc, onSnapshot, collection, setLogLevel } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore.js";
@@ -348,6 +349,15 @@
             finished.sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
             window.renderFinishedAssignments(finished);
         });
+
+        // 5. NEW: Custom Map Locations Listener
+        onSnapshot(collection(db, getCollectionPath('map_locations')), (snapshot) => {
+            const locations = [];
+            snapshot.forEach(doc => {
+                locations.push({ id: doc.id, ...doc.data() });
+            });
+            window.renderMapLocations(locations);
+        });
     };
 
     window.db = {
@@ -453,6 +463,33 @@
             if (!db || !userId) return;
             try { await deleteDoc(doc(db, getCollectionPath('backgrounds'), id)); } catch (e) { console.error(e); }
         },
+        // NEW: Add Map Location
+        addMapLocation: async (name, start, end) => {
+            if (!db || !userId) return;
+            try {
+                await addDoc(collection(db, getCollectionPath('map_locations')), {
+                    name: name,
+                    start: start,
+                    address: end, 
+                    createdAt: new Date().toISOString()
+                });
+            } catch (e) { console.error(e); }
+        },
+        // NEW: Edit & Delete Map Locations
+        updateMapLocation: async (id, name, start, end) => {
+            if (!db || !userId) return;
+            try {
+                await setDoc(doc(db, getCollectionPath('map_locations'), id), {
+                    name: name,
+                    start: start,
+                    address: end
+                }, { merge: true });
+            } catch (e) { console.error(e); }
+        },
+        deleteMapLocation: async (id) => {
+            if (!db || !userId) return;
+            try { await deleteDoc(doc(db, getCollectionPath('map_locations'), id)); } catch (e) { console.error(e); }
+        }
     };
 
     
@@ -1041,6 +1078,13 @@
         let bookmarks = []; 
         let countdownInterval;
 
+        // NEW: Global Map Variables
+        const HOME_LOC = "10 Triq Grosseto, Birkirkara";
+        let MAP_DESTINATIONS = {
+            'school': { address: "MCAST, Paola", name: "School" },
+            'work': { address: "Lotus Consultancy Limited", name: "Work" }
+        };
+
         // --- Utils ---
         const padZero = (num) => String(Math.floor(num)).padStart(2, '0');
         const getTimeRemaining = (endTime) => {
@@ -1322,6 +1366,84 @@
                 
                 lucide.createIcons();
             };
+
+        let currentMapSelection = 'school'; // Track active selection
+
+        window.renderMapLocations = (locations) => {
+            const listContainer = document.getElementById('maps-destination-list');
+            const btnText = document.getElementById('maps-destination-selected-text');
+            if (!listContainer || !btnText) return;
+            
+            // Reset to defaults
+            MAP_DESTINATIONS = {
+                'school': { address: "MCAST, Paola", name: "School", isCustom: false },
+                'work': { address: "Lotus Consultancy Limited", name: "Work ", isCustom: false }
+            };
+            
+            locations.forEach(loc => {
+                MAP_DESTINATIONS[loc.id] = { address: loc.address, start: loc.start, name: loc.name, isCustom: true };
+            });
+            
+            listContainer.innerHTML = '';
+            
+            // Create list items
+            Object.keys(MAP_DESTINATIONS).forEach(key => {
+                const dest = MAP_DESTINATIONS[key];
+                const itemEl = document.createElement('div');
+                itemEl.className = 'flex items-center justify-between p-3 hover:bg-gray-600 cursor-pointer group border-b border-gray-600/50 last:border-0';
+                
+                const textSpan = document.createElement('span');
+                textSpan.className = 'text-white text-sm truncate flex-grow';
+                textSpan.textContent = dest.name;
+                textSpan.onclick = () => {
+                    currentMapSelection = key;
+                    btnText.textContent = dest.name;
+                    listContainer.classList.add('hidden');
+                    if (window.triggerMapUpdate) window.triggerMapUpdate(key);
+                };
+                
+                itemEl.appendChild(textSpan);
+
+                // Add Edit/Delete buttons if it's a custom location
+                if (dest.isCustom) {
+                    const actionDiv = document.createElement('div');
+                    actionDiv.className = 'flex space-x-2 opacity-0 group-hover:opacity-100 transition-opacity ml-2';
+                    
+                    const editBtn = document.createElement('button');
+                    editBtn.innerHTML = '<span data-lucide="edit-2" class="w-4 h-4 text-blue-400 hover:text-blue-300"></span>';
+                    editBtn.className = 'p-1';
+                    editBtn.onclick = (e) => {
+                        e.stopPropagation();
+                        window.openEditMapLocation(key, dest);
+                    };
+
+                    const delBtn = document.createElement('button');
+                    delBtn.innerHTML = '<span data-lucide="trash-2" class="w-4 h-4 text-red-400 hover:text-red-300"></span>';
+                    delBtn.className = 'p-1';
+                    delBtn.onclick = async (e) => {
+                        e.stopPropagation();
+                        if(confirm('Delete this location?')) {
+                            await window.db.deleteMapLocation(key);
+                            if (currentMapSelection === key) {
+                                currentMapSelection = 'school';
+                                btnText.textContent = MAP_DESTINATIONS['school'].name;
+                            }
+                        }
+                    };
+
+                    actionDiv.appendChild(editBtn);
+                    actionDiv.appendChild(delBtn);
+                    itemEl.appendChild(actionDiv);
+                }
+                listContainer.appendChild(itemEl);
+            });
+            
+            // Re-sync button text
+            if (MAP_DESTINATIONS[currentMapSelection]) {
+                btnText.textContent = MAP_DESTINATIONS[currentMapSelection].name;
+            }
+            if(window.lucide) window.lucide.createIcons();
+        };
 
         window.renderAssignments = (newAssignments) => {
             assignments = newAssignments;
@@ -2083,41 +2205,19 @@
             });
 
            // --- Maps Modal Logic ---
-            const HOME_LOC = "10 Triq Grosseto, Birkirkara";
-            const MAP_DESTINATIONS = {
-                'school': { address: "MCAST, Paola", name: "School" },
-                'work': { address: "Lotus Consultancy Limited", name: "Work" }
-            };
-
-            const mapsSelect = document.getElementById('maps-destination-select');
             const mapsIframe = document.getElementById('maps-iframe');
             const mapsExtension = document.getElementById('maps-extension');
             const mapsTitleText = document.getElementById('maps-title-text');
             let isReversed = false; 
 
-            // --- NEW: Load saved custom destinations from Local Storage ---
-            const savedDestinations = JSON.parse(localStorage.getItem('customMapDestinations') || '{}');
-            Object.assign(MAP_DESTINATIONS, savedDestinations); // Merge saved ones with default ones
-            
-            if (mapsSelect) {
-                // Add the saved ones into the dropdown menu visually
-                Object.keys(savedDestinations).forEach(key => {
-                    const dest = savedDestinations[key];
-                    const opt = document.createElement('option');
-                    opt.value = key;
-                    opt.textContent = dest.name;
-                    mapsSelect.appendChild(opt);
-                });
-            }
-            // --------------------------------------------------------------
-
+            // Core Map Engine
             const updateMap = (start, end, startName, endName) => {
                 const finalStart = isReversed ? end : start;
                 const finalEnd = isReversed ? start : end;
                 const finalStartName = isReversed ? endName : startName;
                 const finalEndName = isReversed ? startName : endName;
                 
-                mapsIframe.src = `https://maps.google.com/maps?saddr=${encodeURIComponent(finalStart)}&daddr=${encodeURIComponent(finalEnd)}&output=embed`;
+                mapsIframe.src = `https://maps.google.com/maps?saddr=${encodeURIComponent(finalStart)}&daddr=${encodeURIComponent(finalEnd)}&t=h&output=embed`;
                 
                 if (mapsTitleText) {
                     mapsTitleText.innerHTML = `${finalStartName} <span data-lucide="arrow-right" class="w-5 h-5 mx-2 text-gray-500"></span> ${finalEndName}`;
@@ -2125,23 +2225,44 @@
                 }
             };
 
+            // Hook for global dropdown selection
+            window.triggerMapUpdate = (destKey) => {
+                const dest = MAP_DESTINATIONS[destKey];
+                if(dest) {
+                    const startLoc = dest.start || HOME_LOC; 
+                    const startName = startLoc === HOME_LOC ? "Home" : "Custom Start";
+                    updateMap(startLoc, dest.address, startName, dest.name.split(' (')[0]);
+                }
+            };
+
+            // Custom Dropdown UI Toggles
+            const customDropdownBtn = document.getElementById('maps-destination-btn');
+            const customDropdownList = document.getElementById('maps-destination-list');
+            if (customDropdownBtn && customDropdownList) {
+                customDropdownBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    customDropdownList.classList.toggle('hidden');
+                });
+                document.addEventListener('click', (e) => {
+                    if (!e.target.closest('#custom-maps-dropdown-container')) customDropdownList.classList.add('hidden');
+                });
+            }
+
             document.getElementById('open-maps-btn').addEventListener('click', () => {
                 document.getElementById('maps-modal').classList.remove('opacity-0', 'pointer-events-none');
                 
-                mapsSelect.value = 'school';
+                currentMapSelection = 'school';
+                document.getElementById('maps-destination-selected-text').textContent = MAP_DESTINATIONS['school'].name;
                 isReversed = false; 
                 const reverseBtn = document.getElementById('reverse-map-btn');
                 if (reverseBtn) reverseBtn.classList.remove('text-blue-400');
                 
-                const dest = MAP_DESTINATIONS[mapsSelect.value];
-                updateMap(HOME_LOC, dest.address, "Home", dest.name);
+                window.triggerMapUpdate('school');
             });
 
             document.getElementById('reverse-map-btn').addEventListener('click', () => {
                 isReversed = !isReversed;
                 document.getElementById('reverse-map-btn').classList.toggle('text-blue-400'); 
-                
-                const destKey = mapsSelect.value;
                 
                 if (mapsExtension && !mapsExtension.classList.contains('w-0')) {
                     const start = document.getElementById('ext-start-loc').value || HOME_LOC;
@@ -2150,12 +2271,7 @@
                     const startName = start === HOME_LOC ? "Home" : "Custom Start";
                     if(end) updateMap(start, end, startName, name);
                 } else {
-                    const dest = MAP_DESTINATIONS[destKey];
-                    if(dest) {
-                        const startLoc = dest.start || HOME_LOC; 
-                        const startName = startLoc === HOME_LOC ? "Home" : "Custom Start";
-                        updateMap(startLoc, dest.address, startName, dest.name);
-                    }
+                    window.triggerMapUpdate(currentMapSelection);
                 }
             });
 
@@ -2164,21 +2280,34 @@
                 if(mapsExtension) mapsExtension.classList.replace('w-80', 'w-0'); 
             });
 
-            if (mapsSelect) {
-                mapsSelect.addEventListener('change', (e) => {
-                    const dest = MAP_DESTINATIONS[e.target.value];
-                    if(dest) {
-                        const startLoc = dest.start || HOME_LOC; 
-                        const startName = startLoc === HOME_LOC ? "Home" : "Custom Start";
-                        updateMap(startLoc, dest.address, startName, dest.name);
-                    }
-                });
-            }
+            // Handle the Extension Panel (Add vs Edit Modes)
+            const resetExtensionPanel = () => {
+                document.getElementById('ext-panel-title').textContent = "Add Location";
+                document.getElementById('ext-loc-id').value = '';
+                document.getElementById('ext-dest-name').value = '';
+                document.getElementById('ext-start-loc').value = HOME_LOC;
+                document.getElementById('ext-end-loc').value = '';
+                document.getElementById('ext-save-btn').textContent = "Save";
+            };
+
+            window.openEditMapLocation = (id, dest) => {
+                document.getElementById('ext-panel-title').textContent = "Edit Location";
+                document.getElementById('ext-loc-id').value = id;
+                document.getElementById('ext-dest-name').value = dest.name;
+                document.getElementById('ext-start-loc').value = dest.start || HOME_LOC;
+                document.getElementById('ext-end-loc').value = dest.address;
+                document.getElementById('ext-save-btn').textContent = "Update";
+                
+                if (mapsExtension && mapsExtension.classList.contains('w-0')) {
+                    mapsExtension.classList.replace('w-0', 'w-80');
+                }
+            };
 
             const toggleMapExtBtn = document.getElementById('toggle-map-ext-btn');
             if (toggleMapExtBtn && mapsExtension) {
                 toggleMapExtBtn.addEventListener('click', () => {
                     if (mapsExtension.classList.contains('w-0')) {
+                        resetExtensionPanel();
                         mapsExtension.classList.replace('w-0', 'w-80');
                     } else {
                         mapsExtension.classList.replace('w-80', 'w-0');
@@ -2201,37 +2330,35 @@
 
             const extSaveBtn = document.getElementById('ext-save-btn');
             if (extSaveBtn) {
-                extSaveBtn.addEventListener('click', () => {
+                extSaveBtn.addEventListener('click', async () => {
+                    const id = document.getElementById('ext-loc-id').value;
                     const name = document.getElementById('ext-dest-name').value.trim();
                     const start = document.getElementById('ext-start-loc').value || HOME_LOC;
                     const end = document.getElementById('ext-end-loc').value.trim();
 
                     if(!name || !end) return alert("Destination Name and End Location are required.");
 
-                    const key = 'custom_' + Date.now();
-                    const newDest = { address: end, start: start, name: name };
-                    
-                    // Add to active dictionary
-                    MAP_DESTINATIONS[key] = newDest;
+                    const originalText = extSaveBtn.textContent;
+                    extSaveBtn.textContent = id ? "Updating..." : "Saving...";
+                    extSaveBtn.disabled = true;
 
-                    // --- NEW: Save it to LocalStorage so it survives refreshes ---
-                    const currentSaved = JSON.parse(localStorage.getItem('customMapDestinations') || '{}');
-                    currentSaved[key] = newDest;
-                    localStorage.setItem('customMapDestinations', JSON.stringify(currentSaved));
-                    // -------------------------------------------------------------
+                    // Branch logic based on Hidden ID field!
+                    if (id) {
+                        await window.db.updateMapLocation(id, name, start, end);
+                        currentMapSelection = id; // Keep it selected after edit
+                    } else {
+                        await window.db.addMapLocation(name, start, end);
+                    }
 
-                    const opt = document.createElement('option');
-                    opt.value = key;
-                    opt.textContent = name;
-                    mapsSelect.appendChild(opt);
-
-                    mapsSelect.value = key;
+                    // Update map immediately
                     const startName = start === HOME_LOC ? "Home" : "Custom Start";
                     updateMap(start, end, startName, name);
 
-                    document.getElementById('ext-dest-name').value = '';
-                    document.getElementById('ext-end-loc').value = '';
+                    // Clean up UI
+                    resetExtensionPanel();
                     mapsExtension.classList.replace('w-80', 'w-0');
+                    extSaveBtn.textContent = originalText;
+                    extSaveBtn.disabled = false;
                 });
             }
         };
@@ -2569,10 +2696,15 @@
                         <span data-lucide="map" class="w-5 h-5 mr-2 text-green-400 flex-shrink-0"></span> 
                         <span id="maps-title-text" class="flex items-center whitespace-nowrap">Live Directions</span>
                     </h3>
-                    <select id="maps-destination-select" class="bg-gray-700 text-white border border-gray-600 rounded-lg p-2 outline-none focus:border-blue-500 cursor-pointer">
-                        <option value="school">School (MCAST, Paola)</option>
-                        <option value="work">Work (Lotus Consultancy Limited)</option>
-                    </select>
+                    
+                    <div class="relative z-50" id="custom-maps-dropdown-container">
+                        <button id="maps-destination-btn" class="flex items-center justify-between w-64 bg-gray-700 text-white border border-gray-600 rounded-lg p-2 outline-none focus:border-blue-500 cursor-pointer transition-colors">
+                            <span id="maps-destination-selected-text" class="truncate">School</span>
+                            <span data-lucide="chevron-down" class="w-4 h-4 ml-2 flex-shrink-0"></span>
+                        </button>
+                        <div id="maps-destination-list" class="absolute top-full left-0 mt-1 w-full bg-gray-700 border border-gray-600 rounded-lg shadow-xl hidden flex-col max-h-60 overflow-y-auto custom-scroll">
+                            </div>
+                    </div>
                     
                     <button id="reverse-map-btn" class="p-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-white transition-colors" title="Reverse Directions">
                         <span data-lucide="arrow-right-left" class="w-5 h-5"></span>
@@ -2595,7 +2727,9 @@
                 
                 <div id="maps-extension" class="w-0 overflow-hidden bg-gray-900 border-l border-gray-700 flex flex-col transition-all duration-300 ease-out z-20">
                     <div class="p-5 w-80 flex-shrink-0">
-                        <h4 class="text-white font-bold mb-4 text-lg">Add Location</h4>
+                        <h4 id="ext-panel-title" class="text-white font-bold mb-4 text-lg">Add Location</h4>
+                        
+                        <input type="hidden" id="ext-loc-id" value="">
                         
                         <label class="block text-white/70 text-xs mb-1">Destination Name</label>
                         <input type="text" id="ext-dest-name" placeholder="e.g. Gym" class="w-full mb-3 p-2.5 bg-gray-800 text-white rounded-lg outline-none border border-gray-600 focus:border-blue-500 transition-colors">
@@ -2616,7 +2750,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 09/03/2026 - 00:12</div>
+    <div id="version-timestamp">Last Update 09/03/2026 - 00:35</div>
     
     <style>
     /* Custom Scrollbar for horizontal scrolling */
