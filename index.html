@@ -2095,17 +2095,30 @@
             const mapsTitleText = document.getElementById('maps-title-text');
             let isReversed = false; 
 
-            // NOW ACCEPTS NAMES TO DISPLAY IN THE TITLE
+            // --- NEW: Load saved custom destinations from Local Storage ---
+            const savedDestinations = JSON.parse(localStorage.getItem('customMapDestinations') || '{}');
+            Object.assign(MAP_DESTINATIONS, savedDestinations); // Merge saved ones with default ones
+            
+            if (mapsSelect) {
+                // Add the saved ones into the dropdown menu visually
+                Object.keys(savedDestinations).forEach(key => {
+                    const dest = savedDestinations[key];
+                    const opt = document.createElement('option');
+                    opt.value = key;
+                    opt.textContent = dest.name;
+                    mapsSelect.appendChild(opt);
+                });
+            }
+            // --------------------------------------------------------------
+
             const updateMap = (start, end, startName, endName) => {
                 const finalStart = isReversed ? end : start;
                 const finalEnd = isReversed ? start : end;
                 const finalStartName = isReversed ? endName : startName;
                 const finalEndName = isReversed ? startName : endName;
                 
-                // FIXED THE BROKEN GOOGLE MAPS URL
                 mapsIframe.src = `https://maps.google.com/maps?saddr=${encodeURIComponent(finalStart)}&daddr=${encodeURIComponent(finalEnd)}&output=embed`;
                 
-                // UPDATE THE TITLE DYNAMICALLY
                 if (mapsTitleText) {
                     mapsTitleText.innerHTML = `${finalStartName} <span data-lucide="arrow-right" class="w-5 h-5 mx-2 text-gray-500"></span> ${finalEndName}`;
                     if (window.lucide) window.lucide.createIcons();
@@ -2196,7 +2209,16 @@
                     if(!name || !end) return alert("Destination Name and End Location are required.");
 
                     const key = 'custom_' + Date.now();
-                    MAP_DESTINATIONS[key] = { address: end, start: start, name: name };
+                    const newDest = { address: end, start: start, name: name };
+                    
+                    // Add to active dictionary
+                    MAP_DESTINATIONS[key] = newDest;
+
+                    // --- NEW: Save it to LocalStorage so it survives refreshes ---
+                    const currentSaved = JSON.parse(localStorage.getItem('customMapDestinations') || '{}');
+                    currentSaved[key] = newDest;
+                    localStorage.setItem('customMapDestinations', JSON.stringify(currentSaved));
+                    // -------------------------------------------------------------
 
                     const opt = document.createElement('option');
                     opt.value = key;
@@ -2594,7 +2616,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 09/03/2026 - 00:06</div>
+    <div id="version-timestamp">Last Update 09/03/2026 - 00:12</div>
     
     <style>
     /* Custom Scrollbar for horizontal scrolling */
