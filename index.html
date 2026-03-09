@@ -2100,6 +2100,24 @@
                 renderCalendar();
             });
 
+            // --- Google Search Logic ---
+            document.getElementById('search-form').addEventListener('submit', (e) => {
+                e.preventDefault(); // Prevents the page from reloading
+                
+                const searchInput = document.getElementById('search-input');
+                const query = searchInput.value.trim();
+                
+                if (!query) return; // Do nothing if the bar is empty
+
+                // Simple check: if it has a dot and no spaces, treat it as a URL
+                if (query.includes('.') && !query.includes(' ')) {
+                    const url = query.startsWith('http') ? query : `https://${query}`;
+                    window.location.href = url;
+                } else {
+                    // Otherwise, execute a standard Google search
+                    window.location.href = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+                }
+            });
             
 
            // Quick Menu Slide-Out Logic (Updated for Bubbles)
@@ -2750,7 +2768,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 09/03/2026 - 00:35</div>
+    <div id="version-timestamp">Last Update 09/03/2026 - 10:47</div>
     
     <style>
     /* Custom Scrollbar for horizontal scrolling */
