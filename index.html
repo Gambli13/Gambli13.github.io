@@ -2380,6 +2380,300 @@
                 });
             }
         };
+
+        // --- F1 Live Data Engine (Hardcoded 2026 Season) ---
+        const initF1Logic = () => {
+            let nextF1Session = null;
+            
+            // 2026 F1 Calendar (Times are in UTC. Your browser automatically converts them to your local time!)
+            // 2026 F1 Calendar - FULL SESSIONS (Times are in UTC)
+            const rawF1Sessions = [
+                // 🇨🇳 Round 2: China (Shanghai) - SPRINT WEEKEND
+                { name: "Chinese GP - Practice 1", start: "2026-03-13T03:30:00Z", end: "2026-03-13T04:30:00Z", location: "Shanghai International Circuit" },
+                { name: "Chinese GP - Sprint Quali", start: "2026-03-13T07:30:00Z", end: "2026-03-13T08:30:00Z", location: "Shanghai International Circuit" },
+                { name: "Chinese GP - Sprint", start: "2026-03-14T03:00:00Z", end: "2026-03-14T04:00:00Z", location: "Shanghai International Circuit" },
+                { name: "Chinese GP - Qualifying", start: "2026-03-14T07:00:00Z", end: "2026-03-14T08:00:00Z", location: "Shanghai International Circuit" },
+                { name: "Chinese GP - Race", start: "2026-03-15T07:00:00Z", end: "2026-03-15T09:00:00Z", location: "Shanghai International Circuit" },
+                
+                // 🇯🇵 Round 3: Japan (Suzuka) - STANDARD WEEKEND
+                { name: "Japanese GP - Practice 1", start: "2026-03-27T02:30:00Z", end: "2026-03-27T03:30:00Z", location: "Suzuka Circuit" },
+                { name: "Japanese GP - Practice 2", start: "2026-03-27T06:00:00Z", end: "2026-03-27T07:00:00Z", location: "Suzuka Circuit" },
+                { name: "Japanese GP - Practice 3", start: "2026-03-28T02:30:00Z", end: "2026-03-28T03:30:00Z", location: "Suzuka Circuit" },
+                { name: "Japanese GP - Qualifying", start: "2026-03-28T06:00:00Z", end: "2026-03-28T07:00:00Z", location: "Suzuka Circuit" },
+                { name: "Japanese GP - Race", start: "2026-03-29T05:00:00Z", end: "2026-03-29T07:00:00Z", location: "Suzuka Circuit" },
+                
+                // 🇧🇭 Round 4: Bahrain (Sakhir) - STANDARD WEEKEND
+                { name: "Bahrain GP - Practice 1", start: "2026-04-10T11:30:00Z", end: "2026-04-10T12:30:00Z", location: "Bahrain International Circuit" },
+                { name: "Bahrain GP - Practice 2", start: "2026-04-10T15:00:00Z", end: "2026-04-10T16:00:00Z", location: "Bahrain International Circuit" },
+                { name: "Bahrain GP - Practice 3", start: "2026-04-11T12:30:00Z", end: "2026-04-11T13:30:00Z", location: "Bahrain International Circuit" },
+                { name: "Bahrain GP - Qualifying", start: "2026-04-11T16:00:00Z", end: "2026-04-11T17:00:00Z", location: "Bahrain International Circuit" },
+                { name: "Bahrain GP - Race", start: "2026-04-12T15:00:00Z", end: "2026-04-12T17:00:00Z", location: "Bahrain International Circuit" },
+
+                // 🇸🇦 Round 5: Saudi Arabia (Jeddah) - STANDARD WEEKEND
+                { name: "Saudi Arabian GP - Practice 1", start: "2026-04-17T13:30:00Z", end: "2026-04-17T14:30:00Z", location: "Jeddah Street Circuit" },
+                { name: "Saudi Arabian GP - Practice 2", start: "2026-04-17T17:00:00Z", end: "2026-04-17T18:00:00Z", location: "Jeddah Street Circuit" },
+                { name: "Saudi Arabian GP - Practice 3", start: "2026-04-18T13:30:00Z", end: "2026-04-18T14:30:00Z", location: "Jeddah Street Circuit" },
+                { name: "Saudi Arabian GP - Qualifying", start: "2026-04-18T17:00:00Z", end: "2026-04-18T18:00:00Z", location: "Jeddah Street Circuit" },
+                { name: "Saudi Arabian GP - Race", start: "2026-04-19T17:00:00Z", end: "2026-04-19T19:00:00Z", location: "Jeddah Street Circuit" },
+
+                // 🇺🇸 Round 6: Miami - SPRINT WEEKEND
+                { name: "Miami GP - Practice 1", start: "2026-05-01T16:30:00Z", end: "2026-05-01T17:30:00Z", location: "Miami International Autodrome" },
+                { name: "Miami GP - Sprint Quali", start: "2026-05-01T20:30:00Z", end: "2026-05-01T21:30:00Z", location: "Miami International Autodrome" },
+                { name: "Miami GP - Sprint", start: "2026-05-02T16:00:00Z", end: "2026-05-02T17:00:00Z", location: "Miami International Autodrome" },
+                { name: "Miami GP - Qualifying", start: "2026-05-02T20:00:00Z", end: "2026-05-02T21:00:00Z", location: "Miami International Autodrome" },
+                { name: "Miami GP - Race", start: "2026-05-03T20:00:00Z", end: "2026-05-03T22:00:00Z", location: "Miami International Autodrome" }
+            ];
+
+            // Saftey sorting: Ensures the schedule works perfectly even if you paste future events out of order
+            const f1Sessions = rawF1Sessions.sort((a, b) => new Date(a.start) - new Date(b.start));
+
+            const updateF1Countdown = () => {
+                const now = new Date();
+                // Find the first session that hasn't ended yet
+                nextF1Session = f1Sessions.find(s => new Date(s.end) > now);
+                
+                const badge = document.getElementById('f1-notification-badge');
+                if (!badge || !nextF1Session) return;
+                
+                const startDate = new Date(nextF1Session.start);
+                const endDate = new Date(nextF1Session.end);
+                
+                if (now >= startDate && now <= endDate) {
+                    badge.textContent = 'LIVE';
+                    badge.classList.remove('hidden');
+                    badge.classList.add('animate-pulse');
+                } else {
+                    const diffMs = startDate - now;
+                    const diffMins = Math.floor(diffMs / 60000);
+                    
+                    // Show badge if within 30 mins
+                    if (diffMins >= 0 && diffMins <= 30) {
+                        badge.classList.remove('hidden', 'animate-pulse');
+                        
+                        if (diffMins < 5) {
+                            const diffSecs = Math.floor(diffMs / 1000);
+                            const m = Math.floor(diffSecs / 60);
+                            const s = diffSecs % 60;
+                            badge.textContent = `${m}:${s.toString().padStart(2, '0')}`;
+                        } else {
+                            badge.textContent = `${diffMins}m`;
+                        }
+                    } else {
+                        badge.classList.add('hidden');
+                    }
+                }
+            };
+
+            // Update immediately, then every 1 second
+            updateF1Countdown();
+            setInterval(updateF1Countdown, 1000);
+
+            // --- Modal Events ---
+            const f1Modal = document.getElementById('f1-modal');
+            
+            document.getElementById('menu-open-f1').addEventListener('click', () => {
+                // Close the quick menu first
+                const quickMenu = document.getElementById('quick-menu');
+                if(quickMenu) {
+                    quickMenu.classList.add('-translate-x-10', 'opacity-0', 'pointer-events-none');
+                    quickMenu.classList.remove('translate-x-0', 'opacity-100');
+                }
+                
+                f1Modal.classList.remove('opacity-0', 'pointer-events-none');
+                
+                const content = document.getElementById('f1-modal-content');
+                if (!nextF1Session) {
+                    content.innerHTML = '<p class="text-white/50 text-center py-10">2026 Season Concluded!</p>';
+                    return;
+                }
+                
+                const startDate = new Date(nextF1Session.start);
+                const now = new Date();
+                const diffMs = startDate - now;
+                const diffMins = Math.floor(diffMs / 60000);
+                const isLive = now >= startDate && now <= new Date(nextF1Session.end);
+                
+                // Header HTML
+                let html = `
+                    <div class="mb-6 p-5 bg-gray-800 rounded-xl border border-gray-700 shadow-inner">
+                        <h4 class="text-2xl font-bold text-red-500 mb-1">${nextF1Session.name}</h4>
+                        <p class="text-white/70 flex items-center mb-2"><span data-lucide="map-pin" class="w-4 h-4 mr-1"></span> ${nextF1Session.location}</p>
+                        <div class="flex items-center mt-3 pt-3 border-t border-gray-700">
+                            <span data-lucide="clock" class="w-5 h-5 mr-2 text-gray-400"></span> 
+                            <span class="text-lg font-semibold text-white">${startDate.toLocaleString([], {weekday: 'long', month: 'short', day: 'numeric', hour: '2-digit', minute:'2-digit'})}</span>
+                            <span class="ml-auto text-sm font-bold px-3 py-1 rounded-md ${isLive ? 'bg-red-600 text-white animate-pulse' : 'bg-gray-900 text-gray-400'}">
+                                ${isLive ? '● LIVE NOW' : 'UPCOMING'}
+                            </span>
+                        </div>
+                    </div>
+                `;
+                
+                // Show streaming links only if the session is LIVE or starting within 30 minutes
+                if (isLive || (diffMins >= 0 && diffMins <= 30)) {
+                    html += `
+                        <h5 class="text-lg font-bold mb-3 text-white border-b border-gray-700 pb-2 flex items-center">
+                            <span data-lucide="activity" class="w-5 h-5 mr-2 text-green-400"></span> Live Action Hub
+                        </h5>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                            <a href="https://streamed.pk/" target="_blank" class="flex flex-col items-center justify-center p-6 bg-gradient-to-br from-red-600 to-red-900 rounded-xl border border-red-500 hover:scale-105 hover:shadow-[0_0_20px_rgba(220,38,38,0.5)] transition-all group">
+                                <span data-lucide="play-circle" class="w-10 h-10 text-white mb-2 group-hover:animate-pulse"></span>
+                                <span class="text-white font-bold text-lg">Watch Live Stream</span>
+                                <span class="text-red-200 text-xs mt-1">streamed.pk</span>
+                            </a>
+                            
+                            <a href="https://f1-dash.com/dashboard/track-map" target="_blank" class="flex flex-col items-center justify-center p-6 bg-gradient-to-br from-gray-700 to-gray-900 rounded-xl border border-gray-500 hover:scale-105 hover:shadow-[0_0_20px_rgba(156,163,175,0.5)] transition-all group">
+                                <span data-lucide="map" class="w-10 h-10 text-white mb-2 group-hover:text-blue-400 transition-colors"></span>
+                                <span class="text-white font-bold text-lg">Live Track Map</span>
+                                <span class="text-gray-400 text-xs mt-1">f1-dash.com</span>
+                            </a>
+                        </div>
+                    `;
+                } else {
+                    // Friendly message if they check early
+                    let timeStr = "";
+                    if (diffMins > 60) {
+                        timeStr = `in ${Math.floor(diffMins / 60)} hours`;
+                    } else {
+                        timeStr = `in ${diffMins} minutes`;
+                    }
+                    html += `
+                        <div class="text-center p-8 bg-gray-800/50 rounded-xl border border-gray-700/50 border-dashed">
+                            <span data-lucide="timer" class="w-12 h-12 text-gray-500 mx-auto mb-3"></span>
+                            <p class="text-gray-400 text-lg">Live stream and track map links will appear here <span class="text-white font-semibold">30 minutes</span> before the session starts.</p>
+                            <p class="text-gray-500 mt-2">Session begins ${timeStr}.</p>
+                        </div>
+                    `;
+                }
+                
+                content.innerHTML = html;
+                if(window.lucide) window.lucide.createIcons();
+            });
+
+            document.getElementById('close-f1-btn').addEventListener('click', () => {
+                f1Modal.classList.add('opacity-0', 'pointer-events-none');
+            });
+        };
+
+        document.addEventListener('DOMContentLoaded', initF1Logic);
+
+            const updateF1Countdown = () => {
+                if (!f1Sessions.length) return;
+                const now = new Date();
+                nextF1Session = f1Sessions.find(s => new Date(s.date_end) > now);
+                
+                const badge = document.getElementById('f1-notification-badge');
+                if (!badge || !nextF1Session) return;
+                
+                const startDate = new Date(nextF1Session.date_start);
+                const endDate = new Date(nextF1Session.date_end);
+                
+                if (now >= startDate && now <= endDate) {
+                    badge.textContent = 'LIVE';
+                    badge.classList.remove('hidden');
+                    badge.classList.add('animate-pulse');
+                } else {
+                    const diffMs = startDate - now;
+                    const diffMins = Math.floor(diffMs / 60000);
+                    
+                    // Show badge if within 30 mins
+                    if (diffMins >= 0 && diffMins <= 30) {
+                        badge.classList.remove('hidden', 'animate-pulse');
+                        
+                        // Switch to live second-by-second countdown if less than 5 mins
+                        if (diffMins < 5) {
+                            const diffSecs = Math.floor(diffMs / 1000);
+                            const m = Math.floor(diffSecs / 60);
+                            const s = diffSecs % 60;
+                            badge.textContent = `${m}:${s.toString().padStart(2, '0')}`;
+                        } else {
+                            badge.textContent = `${diffMins}m`;
+                        }
+                    } else {
+                        badge.classList.add('hidden');
+                    }
+                }
+            };
+
+            fetchF1Schedule();
+            // Update interval every 1 second for the live countdown effect
+            setInterval(updateF1Countdown, 1000);
+
+            // --- Modal Events ---
+            const f1Modal = document.getElementById('f1-modal');
+            
+            document.getElementById('menu-open-f1').addEventListener('click', async () => {
+                // Close the quick menu first
+                const quickMenu = document.getElementById('quick-menu');
+                if(quickMenu) {
+                    quickMenu.classList.add('-translate-x-10', 'opacity-0', 'pointer-events-none');
+                    quickMenu.classList.remove('translate-x-0', 'opacity-100');
+                }
+                
+                f1Modal.classList.remove('opacity-0', 'pointer-events-none');
+                
+                const content = document.getElementById('f1-modal-content');
+                if (!nextF1Session) {
+                    content.innerHTML = '<p class="text-red-400">No upcoming sessions found.</p>';
+                    return;
+                }
+                
+                const startDate = new Date(nextF1Session.date_start);
+                const isLive = new Date() >= startDate && new Date() <= new Date(nextF1Session.date_end);
+                
+                // Render Header
+                let html = `
+                    <div class="mb-6 p-4 bg-gray-800 rounded-xl border border-gray-700">
+                        <h4 class="text-2xl font-bold text-red-400 mb-1">${nextF1Session.country_name} Grand Prix</h4>
+                        <p class="text-lg font-semibold text-white mb-2">${nextF1Session.session_name} <span class="text-sm font-normal text-white/50 bg-gray-900 px-2 py-1 rounded ml-2">${isLive ? '<span class="text-red-500 animate-pulse">● LIVE</span>' : 'Upcoming'}</span></p>
+                        <p class="text-white/70 flex items-center"><span data-lucide="map-pin" class="w-4 h-4 mr-1"></span> ${nextF1Session.circuit_short_name}</p>
+                        <p class="text-white/70 flex items-center mt-1"><span data-lucide="clock" class="w-4 h-4 mr-1"></span> ${startDate.toLocaleString()}</p>
+                    </div>
+                `;
+                
+                content.innerHTML = html + '<div id="f1-live-feed"><p class="text-white/50 animate-pulse">Fetching live race control messages...</p></div>';
+                if(window.lucide) window.lucide.createIcons();
+                
+                // Fetch Live Race Control Feed (Flags, Safety Cars, Track limits, etc.)
+                try {
+                    const rcRes = await fetch(`https://api.openf1.org/v1/race_control?session_key=${nextF1Session.session_key}`);
+                    const rcData = await rcRes.json();
+                    
+                    let feedHtml = '<h5 class="text-lg font-bold mb-3 border-b border-gray-700 pb-2">Race Control Feed</h5>';
+                    
+                    if (rcData.length > 0) {
+                        // Sort by latest message and take the top 15
+                        const sortedRc = rcData.sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 15);
+                        feedHtml += '<div class="space-y-3">';
+                        sortedRc.forEach(msg => {
+                            const msgTime = new Date(msg.date).toLocaleTimeString();
+                            let borderColor = 'border-blue-500'; // Default
+                            if (msg.flag === 'RED') borderColor = 'border-red-500';
+                            else if (msg.flag === 'YELLOW' || msg.flag === 'DOUBLE YELLOW') borderColor = 'border-yellow-500';
+                            else if (msg.flag === 'GREEN') borderColor = 'border-green-500';
+                            
+                            feedHtml += `
+                                <div class="p-3 bg-gray-800/50 rounded-lg border-l-4 ${borderColor}">
+                                    <p class="text-xs text-white/50 mb-1">${msgTime} <span class="ml-2 font-semibold text-gray-300">${msg.category || 'Race Control'}</span></p>
+                                    <p class="text-sm">${msg.message}</p>
+                                </div>
+                            `;
+                        });
+                        feedHtml += '</div>';
+                    } else {
+                        feedHtml += `<p class="text-white/50 italic">No race control messages yet for this session.</p>`;
+                    }
+                    document.getElementById('f1-live-feed').innerHTML = feedHtml;
+                } catch (e) {
+                    document.getElementById('f1-live-feed').innerHTML = '<p class="text-red-400">Failed to load live feed.</p>';
+                }
+            });
+
+            document.getElementById('close-f1-btn').addEventListener('click', () => {
+                f1Modal.classList.add('opacity-0', 'pointer-events-none');
+            });
+
+        // Start logic when the document is ready
+        document.addEventListener('DOMContentLoaded', initF1Logic);
     </script>
 </head>
 <body class="bg-gray-900">
@@ -2641,9 +2935,13 @@
 
     <div class="fixed bottom-5 left-5 z-50 flex items-center h-12">
         <button id="toggle-quick-menu-btn" class="relative group p-3 rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition flex items-center justify-center z-20">
+    
+            <div id="f1-notification-badge" class="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-3 bg-gradient-to-b from-red-500 to-red-800 border border-red-900 text-white font-extrabold tracking-widest px-3 py-1 rounded-xl shadow-[0_0_15px_rgba(220,38,38,0.6)] hidden transition-all duration-300 z-50 whitespace-nowrap drop-shadow-lg after:content-[''] after:absolute after:top-full after:left-1/2 after:-translate-x-1/2 after:border-[6px] after:border-transparent after:border-t-red-800 group-hover:opacity-0 group-hover:pointer-events-none group-hover:-translate-y-1">
+            </div>
+            
             <span data-lucide="square-menu" class="w-6 h-6 text-white"></span>
             
-            <div class="absolute bottom-full mb-3 left-1/2 transform -translate-x-1/2 px-3 py-1.5 bg-gray-800 text-white text-xs font-bold rounded-lg shadow-xl opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-50">
+            <div class="absolute bottom-full mb-3 left-1/2 transform -translate-x-1/2 px-3 py-1.5 bg-gray-800 text-white text-xs font-bold rounded-lg shadow-xl opacity-0 group-hover:opacity-100 transition-all duration-300 pointer-events-none whitespace-nowrap z-50 group-hover:-translate-y-0 translate-y-1">
                 Menu
                 <div class="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-gray-800"></div>
             </div>
@@ -2657,6 +2955,16 @@
                 <div class="absolute bottom-full mb-3 left-1/2 transform -translate-x-1/2 px-3 py-1.5 bg-purple-600 text-white text-xs font-bold rounded-lg shadow-xl opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-50">
                     Open Timetable
                     <div class="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-purple-600"></div>
+                </div>
+            </button>
+
+            <button id="menu-open-f1" class="relative group p-3 rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition flex items-center justify-center">
+
+                <span data-lucide="gauge" class="w-6 h-6 text-red-500 drop-shadow-md"></span>
+                
+                <div class="absolute bottom-full mb-3 left-1/2 transform -translate-x-1/2 px-3 py-1.5 bg-red-600 text-white text-xs font-bold rounded-lg shadow-xl opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-50">
+                    F1 Hub
+                    <div class="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-red-600"></div>
                 </div>
             </button>
             
@@ -2768,7 +3076,24 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 09/03/2026 - 10:47</div>
+    <div id="f1-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition-opacity duration-300 z-50">
+    <div class="bg-gray-900 w-full max-w-4xl rounded-2xl shadow-2xl border border-gray-700 flex flex-col max-h-[85vh] overflow-hidden">
+        <div class="flex items-center justify-between p-4 border-b border-gray-700 bg-gray-800/50">
+            <h3 class="text-xl font-bold text-white flex items-center">
+                <img src="images/f1.png" alt="F1 Logo" class="w-8 h-auto mr-3 object-contain drop-shadow-md brightness-0 invert">
+                F1 Live Data
+            </h3>
+            <button id="close-f1-btn" class="p-2 rounded-lg bg-red-600/80 hover:bg-red-600 text-white transition-colors">
+                <span data-lucide="x" class="w-5 h-5"></span>
+            </button>
+        </div>
+        <div class="p-6 overflow-y-auto custom-scroll text-white" id="f1-modal-content">
+            <p class="text-white/50">Loading session data...</p>
+        </div>
+    </div>
+</div>
+
+    <div id="version-timestamp">Last Update 13/03/2026 - 08:57</div>
     
     <style>
     /* Custom Scrollbar for horizontal scrolling */
