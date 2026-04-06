@@ -1211,22 +1211,25 @@
                 if (!file) return;
                 if (!file.type.startsWith('image/')) return alert('File must be an image.');
                 
-                const btnText = document.querySelector('#bottom-add-bg-btn span:last-child');
-                const originalText = btnText.textContent;
-                btnText.textContent = "Uploading...";
+                // Safely grab the dynamically generated "New background" span 
+                // (it is the last span in the last element of the background list)
+                const listContainer = document.getElementById('bottom-background-list');
+                const btnText = listContainer ? listContainer.querySelector('div:last-child > span:last-child') : null;
+                const originalText = btnText ? btnText.textContent : "New background";
+                
+                if (btnText) btnText.textContent = "Uploading...";
                 
                 try {
                     const base64String = await resizeAndCompressImage(file);
-                    await window.db.addBackground(base64String); // Database stores and bumps it globally
+                    await window.db.addBackground(base64String, file.name); 
                 } catch (error) { 
                     console.error("Error:", error); 
                     alert("An error occurred processing the image.");
                 } finally {
-                    btnText.textContent = originalText;
+                    if (btnText) btnText.textContent = originalText;
                     e.target.value = ''; // Reset input
                 }
             });
-
             // Toggle Background Bar logic
             const toggleBgBar = (forceClose = false) => {
                 const bgBar = document.getElementById('bottom-bg-bar');
@@ -1799,7 +1802,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 06/04/2026 - 17:56</div>
+    <div id="version-timestamp">Last Update 06/04/2026 - 21:43</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
