@@ -63,6 +63,11 @@
             box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3), 0 4px 6px -4px rgba(0, 0, 0, 0.3);
             border-color: #3b82f6;
         }
+        /* Click effect for Bookmarks and the Add Bookmark button */
+        .bookmark-icon:active, #open-bookmark-modal-btn:active {
+            transform: scale(0.95) !important;
+            transition-duration: 0.1s; /* Speeds up the animation so the click feels instantly responsive */
+        }
         
         .bookmark-favicon {
             width: 24px;
@@ -2133,7 +2138,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 07/04/2026 - 20:08</div>
+    <div id="version-timestamp">Last Update 15/04/2026 - 12:01</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
