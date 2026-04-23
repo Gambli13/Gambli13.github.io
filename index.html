@@ -501,6 +501,14 @@
             if (!db || !userId) return;
             try { await deleteDoc(doc(db, getCollectionPath('backgrounds'), id)); } catch (e) { console.error(e); }
         },
+        updateBackgroundImages: async (id, newImagesArray) => {
+            if (!db || !userId) return;
+            try {
+                await setDoc(doc(db, getCollectionPath('backgrounds'), id), {
+                    images: newImagesArray
+                }, { merge: true });
+            } catch (e) { console.error(e); }
+        },
         activateBackground: async (id) => {
             if (!db || !userId) return;
             try {
@@ -788,72 +796,178 @@
             }
         };
 
+        let editingSlideshowId = null;
+
+        window.editSlideshow = (id) => {
+            const bgBar = document.getElementById('bottom-bg-bar');
+            bgBar.classList.add('translate-y-full', 'opacity-0'); // Slide down
+            
+            setTimeout(() => {
+                editingSlideshowId = id;
+                window.renderBackgroundGallery(USER_BACKGROUNDS);
+                bgBar.classList.remove('translate-y-full', 'opacity-0'); // Slide up
+            }, 300); // Matches your CSS transition duration
+        };
+
+        window.exitSlideshowEdit = () => {
+            const bgBar = document.getElementById('bottom-bg-bar');
+            bgBar.classList.add('translate-y-full', 'opacity-0'); // Slide down
+            
+            setTimeout(() => {
+                editingSlideshowId = null;
+                window.renderBackgroundGallery(USER_BACKGROUNDS);
+                bgBar.classList.remove('translate-y-full', 'opacity-0'); // Slide up
+            }, 300);
+        };
+
+        window.removeImageFromSlideshow = async (id, index) => {
+            const bg = USER_BACKGROUNDS.find(b => b.id === id);
+            if (!bg || !bg.images) return;
+            
+            const newImages = [...bg.images];
+            newImages.splice(index, 1); // Remove the clicked image
+            
+            if (newImages.length === 0) {
+                // If it was the last image, delete the whole background to keep data clean
+                await window.db.deleteBackground(id);
+                window.exitSlideshowEdit();
+            } else {
+                if (window.db.updateBackgroundImages) {
+                    await window.db.updateBackgroundImages(id, newImages);
+                }
+            }
+        };
+
         window.renderBackgroundGallery = (userBackgrounds) => {
             const listContainer = document.getElementById('bottom-background-list');
             if (!listContainer) return;
             listContainer.innerHTML = ''; 
             
-            userBackgrounds.forEach((bg, index) => {
-                const isSelected = bg.id === currentBackgroundId;
-                const item = document.createElement('div');
-                item.className = 'flex flex-col items-center group cursor-pointer shrink-0';
+            if (editingSlideshowId) {
+                // --- SLIDESHOW EDIT MODE ---
+                const bgToEdit = userBackgrounds.find(bg => bg.id === editingSlideshowId);
                 
-                const borderClasses = isSelected 
-                    ? 'border-blue-500 shadow-[0_0_15px_rgba(59,130,246,0.5)] scale-100' 
-                    : 'border-transparent hover:border-white/30 scale-95 hover:scale-100';
-
-                const labelClasses = isSelected 
-                    ? 'text-white bg-blue-500/20' 
-                    : 'text-white/70 group-hover:text-white bg-black/50';
-
-                const isSlideshow = bg.images && bg.images.length > 1;
-                let imageContent = '';
-
-                if (isSlideshow) {
-                    const gridImages = bg.images.slice(0, 4);
-                    imageContent = `<div class="w-full h-full grid grid-cols-2 grid-rows-2 gap-0.5 bg-black/80">`;
-                    gridImages.forEach(img => {
-                        imageContent += `<div class="bg-cover bg-center w-full h-full" style="background-image: url('${img}');"></div>`;
-                    });
-                    for(let i = gridImages.length; i < 4; i++) {
-                        imageContent += `<div class="bg-gray-800 w-full h-full"></div>`;
-                    }
-                    imageContent += `</div>`;
-                } else {
-                    const imgSrc = (bg.images && bg.images.length > 0) ? bg.images[0] : bg.base64;
-                    imageContent = `<div class="w-full h-full bg-cover bg-center" style="background-image: url('${imgSrc}');"></div>`;
+                // Safety catch: if deleted from another tab
+                if (!bgToEdit) {
+                    window.exitSlideshowEdit();
+                    return;
                 }
 
-                item.innerHTML = `
-                    <div class="relative w-40 h-24 sm:w-48 sm:h-28 rounded-lg overflow-hidden border-[3px] transition-all duration-300 ${borderClasses}">
-                        ${imageContent}
-                        ${isSlideshow ? `<div class="absolute bottom-1 left-1 bg-black/80 px-1.5 py-0.5 rounded text-[10px] text-white flex items-center backdrop-blur-md border border-white/10 z-10 shadow-lg"><span data-lucide="layers" class="w-3 h-3 mr-1"></span>Slideshow</div>` : ''}
-                        <button onclick="event.stopPropagation(); window.db.deleteBackground('${bg.id}')"
-                                class="absolute top-1 right-1 bg-black/70 text-white rounded-md p-1 hover:bg-red-600 transition-all opacity-0 group-hover:opacity-100 backdrop-blur-md z-20" title="Delete Background">
-                            <span data-lucide="x" class="w-3 h-3"></span>
-                        </button>
+                // 1. Back Button
+                const backBtnWrap = document.createElement('div');
+                backBtnWrap.className = 'flex flex-col items-center cursor-pointer group shrink-0 mr-2';
+                backBtnWrap.onclick = (e) => { 
+                    e.stopPropagation(); 
+                    window.exitSlideshowEdit(); 
+                };
+                backBtnWrap.innerHTML = `
+                    <div class="w-16 h-24 sm:w-20 sm:h-28 rounded-lg border-[3px] border-transparent hover:border-white/30 bg-white/5 hover:bg-white/10 transition-all duration-300 flex flex-col items-center justify-center text-white/50 group-hover:text-white scale-95 group-hover:scale-100">
+                        <span data-lucide="arrow-left" class="w-6 h-6"></span>
                     </div>
-                    <span class="mt-2 text-xs font-medium px-3 py-1 rounded-full backdrop-blur-md transition-colors ${labelClasses}">Background ${index + 1}</span>
+                    <span class="mt-2 text-xs font-medium text-white/70 group-hover:text-white bg-black/50 px-3 py-1 rounded-full backdrop-blur-md transition-colors">Back</span>
                 `;
-                
-                item.addEventListener('click', (e) => {
-                    changeBackground(bg.id, true); 
-                    renderBackgroundGallery(USER_BACKGROUNDS); 
-                });
-                
-                listContainer.appendChild(item);
-            });
+                listContainer.appendChild(backBtnWrap);
 
-            const addBtnWrap = document.createElement('div');
-            addBtnWrap.className = 'flex flex-col items-center cursor-pointer group shrink-0 ml-2';
-            addBtnWrap.onclick = () => document.getElementById('bottom-bg-file').click();
-            addBtnWrap.innerHTML = `
-                <div class="w-40 h-24 sm:w-48 sm:h-28 rounded-lg border-[3px] border-dashed border-white/20 hover:border-white/50 bg-white/5 hover:bg-white/10 transition-all duration-300 flex flex-col items-center justify-center text-white/50 group-hover:text-white scale-95 group-hover:scale-100">
-                    <span data-lucide="plus" class="w-6 h-6 mb-1"></span>
-                </div>
-                <span class="mt-2 text-xs font-medium text-white/70 group-hover:text-white bg-black/50 px-3 py-1 rounded-full backdrop-blur-md transition-colors">New background</span>
-            `;
-            listContainer.appendChild(addBtnWrap);
+                // 2. Render individual images in this slideshow
+                bgToEdit.images.forEach((imgSrc, index) => {
+                    const item = document.createElement('div');
+                    item.className = 'flex flex-col items-center group cursor-pointer shrink-0';
+                    item.innerHTML = `
+                        <div class="relative w-40 h-24 sm:w-48 sm:h-28 rounded-lg overflow-hidden border-[3px] border-transparent hover:border-red-500/50 scale-95 hover:scale-100 transition-all duration-300">
+                            <div class="w-full h-full bg-cover bg-center" style="background-image: url('${imgSrc}');"></div>
+                            <button onclick="event.stopPropagation(); window.removeImageFromSlideshow('${bgToEdit.id}', ${index})"
+                                    class="absolute top-1 right-1 bg-black/70 text-white rounded-md p-1 hover:bg-red-600 transition-all opacity-0 group-hover:opacity-100 backdrop-blur-md z-20" title="Remove from Slideshow">
+                                <span data-lucide="x" class="w-3 h-3"></span>
+                            </button>
+                        </div>
+                        <span class="mt-2 text-xs font-medium px-3 py-1 rounded-full backdrop-blur-md transition-colors text-white/70 bg-black/50 group-hover:text-white group-hover:bg-red-500/20">Delete Image</span>
+                    `;
+                    listContainer.appendChild(item);
+                });
+
+                // 3. Add to Slideshow Button (Re-uses the hidden file input)
+                const addBtnWrap = document.createElement('div');
+                addBtnWrap.className = 'flex flex-col items-center cursor-pointer group shrink-0 ml-2';
+                addBtnWrap.onclick = () => document.getElementById('bottom-bg-file').click();
+                addBtnWrap.innerHTML = `
+                    <div class="w-40 h-24 sm:w-48 sm:h-28 rounded-lg border-[3px] border-dashed border-white/20 hover:border-white/50 bg-white/5 hover:bg-white/10 transition-all duration-300 flex flex-col items-center justify-center text-white/50 group-hover:text-white scale-95 group-hover:scale-100">
+                        <span data-lucide="plus" class="w-6 h-6 mb-1"></span>
+                    </div>
+                    <span class="mt-2 text-xs font-medium text-white/70 group-hover:text-white bg-black/50 px-3 py-1 rounded-full backdrop-blur-md transition-colors">Add Image</span>
+                `;
+                listContainer.appendChild(addBtnWrap);
+
+            } else {
+                // --- MAIN GALLERY MODE ---
+                userBackgrounds.forEach((bg, index) => {
+                    const isSelected = bg.id === currentBackgroundId;
+                    const item = document.createElement('div');
+                    item.className = 'flex flex-col items-center group cursor-pointer shrink-0';
+                    
+                    const borderClasses = isSelected 
+                        ? 'border-blue-500 shadow-[0_0_15px_rgba(59,130,246,0.5)] scale-100' 
+                        : 'border-transparent hover:border-white/30 scale-95 hover:scale-100';
+
+                    const labelClasses = isSelected 
+                        ? 'text-white bg-blue-500/20' 
+                        : 'text-white/70 group-hover:text-white bg-black/50';
+
+                    const isSlideshow = bg.images && bg.images.length > 1;
+                    let imageContent = '';
+
+                    if (isSlideshow) {
+                        const gridImages = bg.images.slice(0, 4);
+                        imageContent = `<div class="w-full h-full grid grid-cols-2 grid-rows-2 gap-0.5 bg-black/80">`;
+                        gridImages.forEach(img => {
+                            imageContent += `<div class="bg-cover bg-center w-full h-full" style="background-image: url('${img}');"></div>`;
+                        });
+                        for(let i = gridImages.length; i < 4; i++) {
+                            imageContent += `<div class="bg-gray-800 w-full h-full"></div>`;
+                        }
+                        imageContent += `</div>`;
+                    } else {
+                        const imgSrc = (bg.images && bg.images.length > 0) ? bg.images[0] : bg.base64;
+                        imageContent = `<div class="w-full h-full bg-cover bg-center" style="background-image: url('${imgSrc}');"></div>`;
+                    }
+
+                    item.innerHTML = `
+                        <div class="relative w-40 h-24 sm:w-48 sm:h-28 rounded-lg overflow-hidden border-[3px] transition-all duration-300 ${borderClasses}">
+                            ${imageContent}
+                            ${isSlideshow ? `<div class="absolute bottom-1 left-1 bg-black/80 px-1.5 py-0.5 rounded text-[10px] text-white flex items-center backdrop-blur-md border border-white/10 z-10 shadow-lg"><span data-lucide="layers" class="w-3 h-3 mr-1"></span>Slideshow</div>` : ''}
+                            
+                            ${isSlideshow ? `<button onclick="event.stopPropagation(); window.editSlideshow('${bg.id}')"
+                                    class="absolute top-1 right-8 bg-black/70 text-white rounded-md p-1 hover:bg-blue-600 transition-all opacity-0 group-hover:opacity-100 backdrop-blur-md z-20" title="Edit Slideshow">
+                                <span data-lucide="edit-2" class="w-3 h-3"></span>
+                            </button>` : ''}
+
+                            <button onclick="event.stopPropagation(); window.db.deleteBackground('${bg.id}')"
+                                    class="absolute top-1 right-1 bg-black/70 text-white rounded-md p-1 hover:bg-red-600 transition-all opacity-0 group-hover:opacity-100 backdrop-blur-md z-20" title="Delete Background">
+                                <span data-lucide="x" class="w-3 h-3"></span>
+                            </button>
+                        </div>
+                        <span class="mt-2 text-xs font-medium px-3 py-1 rounded-full backdrop-blur-md transition-colors ${labelClasses}">Background ${index + 1}</span>
+                    `;
+                    
+                    item.addEventListener('click', (e) => {
+                        changeBackground(bg.id, true); 
+                        renderBackgroundGallery(USER_BACKGROUNDS); 
+                    });
+                    
+                    listContainer.appendChild(item);
+                });
+
+                const addBtnWrap = document.createElement('div');
+                addBtnWrap.className = 'flex flex-col items-center cursor-pointer group shrink-0 ml-2';
+                addBtnWrap.onclick = () => document.getElementById('bottom-bg-file').click();
+                addBtnWrap.innerHTML = `
+                    <div class="w-40 h-24 sm:w-48 sm:h-28 rounded-lg border-[3px] border-dashed border-white/20 hover:border-white/50 bg-white/5 hover:bg-white/10 transition-all duration-300 flex flex-col items-center justify-center text-white/50 group-hover:text-white scale-95 group-hover:scale-100">
+                        <span data-lucide="plus" class="w-6 h-6 mb-1"></span>
+                    </div>
+                    <span class="mt-2 text-xs font-medium text-white/70 group-hover:text-white bg-black/50 px-3 py-1 rounded-full backdrop-blur-md transition-colors">New background</span>
+                `;
+                listContainer.appendChild(addBtnWrap);
+            }
+            
             lucide.createIcons(); 
         }
 
@@ -1559,17 +1673,25 @@
                 
                 const listContainer = document.getElementById('bottom-background-list');
                 const btnText = listContainer ? listContainer.querySelector('div:last-child > span:last-child') : null;
-                const originalText = btnText ? btnText.textContent : "New background";
+                const originalText = btnText ? btnText.textContent : (editingSlideshowId ? "Add Image" : "New background");
                 
                 if (btnText) btnText.textContent = validFiles.length > 1 ? `Uploading ${validFiles.length} images...` : "Uploading...";
                 
                 try {
-                    // Compress all files concurrently
                     const compressionPromises = validFiles.map(file => resizeAndCompressImage(file));
                     const compressedBase64Strings = await Promise.all(compressionPromises);
                     
-                    // Send to db (it accepts arrays now)
-                    await window.db.addBackground(compressedBase64Strings); 
+                    if (editingSlideshowId && window.db.updateBackgroundImages) {
+                        // Append to existing slideshow
+                        const bgToEdit = USER_BACKGROUNDS.find(bg => bg.id === editingSlideshowId);
+                        if (bgToEdit) {
+                            const newImagesArray = [...(bgToEdit.images || []), ...compressedBase64Strings];
+                            await window.db.updateBackgroundImages(editingSlideshowId, newImagesArray);
+                        }
+                    } else {
+                        // Create new background/slideshow
+                        await window.db.addBackground(compressedBase64Strings); 
+                    }
                 } catch (error) { 
                     console.error("Error processing images:", error); 
                     alert("An error occurred processing the images.");
@@ -2208,7 +2330,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 23/04/2026 - 11:43</div>
+    <div id="version-timestamp">Last Update 23/04/2026 - 11:51</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
