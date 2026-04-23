@@ -373,6 +373,8 @@
                 userBackgrounds.push({ 
                     id: doc.id, 
                     base64: data.base64,
+                    // Handle new slideshow array or fallback to legacy single base64 string
+                    images: data.images || (data.base64 ? [data.base64] : []), 
                     uploadedAt: data.uploadedAt || new Date(0).toISOString(),
                     lastActivatedAt: data.lastActivatedAt || data.uploadedAt || new Date(0).toISOString()
                 });
@@ -476,16 +478,23 @@
                 await Promise.all(promises);
             } catch (e) { console.error("Reorder failed", e); }
         },
-        addBackground: async (base64String) => {
+        addBackground: async (imagesArray) => {
             if (!db || !userId) return null;
             try {
                 const now = new Date().toISOString();
-                const docRef = await addDoc(collection(db, getCollectionPath('backgrounds')), {
-                    base64: base64String, uploadedAt: now, lastActivatedAt: now
-                });
+                const payload = { uploadedAt: now, lastActivatedAt: now };
+                
+                // Allow passing either an array of images or a single image for backwards compatibility
+                if (Array.isArray(imagesArray)) {
+                    payload.images = imagesArray;
+                } else {
+                    payload.base64 = imagesArray;
+                }
+
+                const docRef = await addDoc(collection(db, getCollectionPath('backgrounds')), payload);
                 return docRef.id;
             } catch (e) { 
-                alert("Failed to upload. The image might still be too large."); return null;
+                alert("Failed to upload. The images might be too large."); return null;
             }
         },
         deleteBackground: async (id) => {
@@ -698,6 +707,8 @@
         }
 
         let isAnimatingBg = false;
+        let slideshowInterval = null;
+        let currentSlideIndex = 0;
 
         const changeBackground = (backgroundId, updateDb = true) => {
             if (!backgroundContainer) backgroundContainer = document.getElementById('background-container');
@@ -705,12 +716,15 @@
             const bgBack = document.getElementById('bg-back');
 
             if (USER_BACKGROUNDS.length === 0 && backgroundId) return;
-            if (isAnimatingBg) return; 
+            if (isAnimatingBg && updateDb) return; 
+
+            // Clear any active slideshow loop
+            if (slideshowInterval) {
+                clearInterval(slideshowInterval);
+                slideshowInterval = null;
+            }
 
             const selectedBackground = USER_BACKGROUNDS.find(bg => bg.id === backgroundId);
-            const newBgUrl = selectedBackground 
-                ? `url('${selectedBackground.base64}')`
-                : `url('data:image/svg+xml,%3Csvg xmlns=\\'http://www.w3.org/2000/svg\\' viewBox=\\'0 0 1 1\\'%3E%3Crect width=\\'1\\' height=\\'1\\' fill=\\'%230f172a\\'/%3E%3C/svg%3E')`;
 
             if (selectedBackground) {
                 currentBackgroundId = selectedBackground.id;
@@ -723,24 +737,55 @@
                 localStorage.removeItem(CURRENT_BG_KEY);
             }
 
-            if (!bgFront.style.backgroundImage || bgFront.style.backgroundImage === newBgUrl) {
-                bgFront.style.backgroundImage = newBgUrl;
-                bgBack.style.backgroundImage = newBgUrl; 
-                return;
+            // Extracted logic to apply a specific image string
+            const applyBgImage = (imgStr) => {
+                const newBgUrl = imgStr.startsWith('url') ? imgStr : `url('${imgStr}')`;
+                
+                if (!bgFront.style.backgroundImage || bgFront.style.backgroundImage === newBgUrl) {
+                    bgFront.style.backgroundImage = newBgUrl;
+                    bgBack.style.backgroundImage = newBgUrl; 
+                    return;
+                }
+
+                isAnimatingBg = true;
+                bgBack.style.backgroundImage = newBgUrl;
+                bgFront.classList.add('wipe-out');
+
+                setTimeout(() => {
+                    bgFront.style.backgroundImage = newBgUrl;
+                    bgFront.style.transition = 'none'; 
+                    bgFront.classList.remove('wipe-out');
+                    void bgFront.offsetWidth; 
+                    bgFront.style.transition = ''; 
+                    isAnimatingBg = false;
+                }, 1000);
+            };
+
+            const defaultBg = `data:image/svg+xml,%3Csvg xmlns=\\'http://www.w3.org/2000/svg\\' viewBox=\\'0 0 1 1\\'%3E%3Crect width=\\'1\\' height=\\'1\\' fill=\\'%230f172a\\'/%3E%3C/svg%3E`;
+
+            // Setup single background vs. Slideshow
+            if (selectedBackground && selectedBackground.images && selectedBackground.images.length > 1) {
+                if (updateDb) currentSlideIndex = 0; // Reset index if clicked manually
+                
+                const updateSlide = () => {
+                    if (!selectedBackground.images.length) return;
+                    applyBgImage(selectedBackground.images[currentSlideIndex]);
+                    currentSlideIndex = (currentSlideIndex + 1) % selectedBackground.images.length;
+                };
+
+                updateSlide(); // Run immediately 
+                
+                // Set 10-minute interval (600,000 milliseconds)
+                slideshowInterval = setInterval(() => {
+                    if (!isAnimatingBg) updateSlide();
+                }, 600000);
+
+            } else {
+                const imgSrc = selectedBackground 
+                    ? (selectedBackground.images && selectedBackground.images.length > 0 ? selectedBackground.images[0] : selectedBackground.base64)
+                    : defaultBg;
+                applyBgImage(imgSrc);
             }
-
-            isAnimatingBg = true;
-            bgBack.style.backgroundImage = newBgUrl;
-            bgFront.classList.add('wipe-out');
-
-            setTimeout(() => {
-                bgFront.style.backgroundImage = newBgUrl;
-                bgFront.style.transition = 'none'; 
-                bgFront.classList.remove('wipe-out');
-                void bgFront.offsetWidth; 
-                bgFront.style.transition = ''; 
-                isAnimatingBg = false;
-            }, 1000);
         };
 
         window.renderBackgroundGallery = (userBackgrounds) => {
@@ -761,11 +806,30 @@
                     ? 'text-white bg-blue-500/20' 
                     : 'text-white/70 group-hover:text-white bg-black/50';
 
+                const isSlideshow = bg.images && bg.images.length > 1;
+                let imageContent = '';
+
+                if (isSlideshow) {
+                    const gridImages = bg.images.slice(0, 4);
+                    imageContent = `<div class="w-full h-full grid grid-cols-2 grid-rows-2 gap-0.5 bg-black/80">`;
+                    gridImages.forEach(img => {
+                        imageContent += `<div class="bg-cover bg-center w-full h-full" style="background-image: url('${img}');"></div>`;
+                    });
+                    for(let i = gridImages.length; i < 4; i++) {
+                        imageContent += `<div class="bg-gray-800 w-full h-full"></div>`;
+                    }
+                    imageContent += `</div>`;
+                } else {
+                    const imgSrc = (bg.images && bg.images.length > 0) ? bg.images[0] : bg.base64;
+                    imageContent = `<div class="w-full h-full bg-cover bg-center" style="background-image: url('${imgSrc}');"></div>`;
+                }
+
                 item.innerHTML = `
                     <div class="relative w-40 h-24 sm:w-48 sm:h-28 rounded-lg overflow-hidden border-[3px] transition-all duration-300 ${borderClasses}">
-                        <div class="w-full h-full bg-cover bg-center" style="background-image: url('${bg.base64}');"></div>
+                        ${imageContent}
+                        ${isSlideshow ? `<div class="absolute bottom-1 left-1 bg-black/80 px-1.5 py-0.5 rounded text-[10px] text-white flex items-center backdrop-blur-md border border-white/10 z-10 shadow-lg"><span data-lucide="layers" class="w-3 h-3 mr-1"></span>Slideshow</div>` : ''}
                         <button onclick="event.stopPropagation(); window.db.deleteBackground('${bg.id}')"
-                                class="absolute top-1 right-1 bg-black/70 text-white rounded-md p-1 hover:bg-red-600 transition-all opacity-0 group-hover:opacity-100 backdrop-blur-md" title="Delete Background">
+                                class="absolute top-1 right-1 bg-black/70 text-white rounded-md p-1 hover:bg-red-600 transition-all opacity-0 group-hover:opacity-100 backdrop-blur-md z-20" title="Delete Background">
                             <span data-lucide="x" class="w-3 h-3"></span>
                         </button>
                     </div>
@@ -1487,22 +1551,28 @@
             });
 
             document.getElementById('bottom-bg-file').addEventListener('change', async (e) => {
-                const file = e.target.files[0];
-                if (!file) return;
-                if (!file.type.startsWith('image/')) return alert('File must be an image.');
+                const files = Array.from(e.target.files);
+                if (files.length === 0) return;
+                
+                const validFiles = files.filter(f => f.type.startsWith('image/'));
+                if (validFiles.length === 0) return alert('Files must be images.');
                 
                 const listContainer = document.getElementById('bottom-background-list');
                 const btnText = listContainer ? listContainer.querySelector('div:last-child > span:last-child') : null;
                 const originalText = btnText ? btnText.textContent : "New background";
                 
-                if (btnText) btnText.textContent = "Uploading...";
+                if (btnText) btnText.textContent = validFiles.length > 1 ? `Uploading ${validFiles.length} images...` : "Uploading...";
                 
                 try {
-                    const base64String = await resizeAndCompressImage(file);
-                    await window.db.addBackground(base64String, file.name); 
+                    // Compress all files concurrently
+                    const compressionPromises = validFiles.map(file => resizeAndCompressImage(file));
+                    const compressedBase64Strings = await Promise.all(compressionPromises);
+                    
+                    // Send to db (it accepts arrays now)
+                    await window.db.addBackground(compressedBase64Strings); 
                 } catch (error) { 
-                    console.error("Error:", error); 
-                    alert("An error occurred processing the image.");
+                    console.error("Error processing images:", error); 
+                    alert("An error occurred processing the images.");
                 } finally {
                     if (btnText) btnText.textContent = originalText;
                     e.target.value = '';
@@ -1910,7 +1980,7 @@
 
     <div id="bottom-bg-bar" class="fixed bottom-0 left-0 w-full h-auto bg-black/70 backdrop-blur-2xl border-t border-white/10 flex flex-col justify-center z-40 transition-all duration-300 translate-y-full opacity-0 pointer-events-none pb-4 pt-6">
         
-        <input type="file" id="bottom-bg-file" accept="image/*" class="hidden">
+        <input type="file" id="bottom-bg-file" accept="image/*" multiple class="hidden">
         
         <div id="bottom-background-list" class="flex items-start justify-center gap-4 sm:gap-6 overflow-x-auto custom-scroll w-full max-w-[100vw] px-8">
             </div>
@@ -2138,7 +2208,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 15/04/2026 - 12:01</div>
+    <div id="version-timestamp">Last Update 23/04/2026 - 11:43</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
