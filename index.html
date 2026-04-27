@@ -1649,21 +1649,24 @@
 
         const closeAssignmentDetailModal = () => {
             detailModal.classList.add('opacity-0', 'pointer-events-none');
-            detailIdInput.value = ''; detailTitleInput.value = ''; detailDeadlineDateInput.value = ''; detailDeadlineTimeInput.value = ''; detailNoteInput.value = ''; currentSubtasks = [];
-            // Reset read-only state
-            detailModal.dataset.readOnly = 'false';
-            detailTitleInput.disabled = false;
-            detailDeadlineDateInput.disabled = false;
-            detailDeadlineTimeInput.disabled = false;
-            detailNoteInput.disabled = false;
-            detailNoteInput.classList.remove('opacity-70', 'cursor-default');
-            document.getElementById('save-assignment-btn')?.classList.remove('hidden');
-            document.getElementById('delete-from-detail-btn')?.classList.remove('hidden');
-            document.getElementById('add-subtask-btn')?.classList.remove('hidden');
-            const restoreBtn = document.getElementById('restore-from-detail-btn');
-            if (restoreBtn) restoreBtn.classList.add('hidden');
-            const finishedBanner = document.getElementById('detail-finished-banner');
-            if (finishedBanner) finishedBanner.classList.add('hidden');
+            // Delay state reset until after the 300ms fade-out transition,
+            // so the modal doesn't flash as editable while closing
+            setTimeout(() => {
+                detailIdInput.value = ''; detailTitleInput.value = ''; detailDeadlineDateInput.value = ''; detailDeadlineTimeInput.value = ''; detailNoteInput.value = ''; currentSubtasks = [];
+                detailModal.dataset.readOnly = 'false';
+                detailTitleInput.disabled = false;
+                detailDeadlineDateInput.disabled = false;
+                detailDeadlineTimeInput.disabled = false;
+                detailNoteInput.disabled = false;
+                detailNoteInput.classList.remove('opacity-70', 'cursor-default');
+                document.getElementById('save-assignment-btn')?.classList.remove('hidden');
+                document.getElementById('delete-from-detail-btn')?.classList.remove('hidden');
+                document.getElementById('add-subtask-btn')?.classList.remove('hidden');
+                const restoreBtn = document.getElementById('restore-from-detail-btn');
+                if (restoreBtn) restoreBtn.classList.add('hidden');
+                const finishedBanner = document.getElementById('detail-finished-banner');
+                if (finishedBanner) finishedBanner.classList.add('hidden');
+            }, 300);
         };
 
         const handleSaveDetailChanges = async () => {
@@ -2499,7 +2502,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 27/04/2026 - 11:27</div>
+    <div id="version-timestamp">Last Update 23/04/2026 - 11:37</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
