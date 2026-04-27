@@ -399,7 +399,9 @@
             const finished = [];
             snapshot.forEach(doc => {
                 const data = doc.data();
-                finished.push({ id: doc.id, ...data, deadline: parseDeadlineISO(data.deadline), completedAt: data.completedAt ? new Date(data.completedAt) : new Date() });
+                // Explicitly set id last so doc.id (Firestore document ID) always wins
+                // over any stale 'id' field that may have been spread into the document data
+                finished.push({ ...data, deadline: parseDeadlineISO(data.deadline), completedAt: data.completedAt ? new Date(data.completedAt) : new Date(), id: doc.id });
             });
             finished.sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
             window.renderFinishedAssignments(finished);
@@ -448,8 +450,11 @@
         addFinishedAssignment: async (assignmentData) => {
             if (!db || !userId) return;
             try {
+                // Destructure out 'id' so it doesn't get stored inside the Firestore document
+                // (which would then overwrite doc.id when read back, breaking deletes)
+                const { id: _assignmentId, ...dataToStore } = assignmentData;
                 await addDoc(collection(db, getCollectionPath('finished_assignments')), {
-                    ...assignmentData,
+                    ...dataToStore,
                     deadline: assignmentData.deadline instanceof Date ? assignmentData.deadline.toISOString() : assignmentData.deadline,
                     completedAt: new Date().toISOString()
                 });
@@ -457,7 +462,31 @@
         },
         deleteFinishedAssignment: async (id) => {
             if (!db || !userId) return;
-            try { await deleteDoc(doc(db, getCollectionPath('finished_assignments'), id)); } catch (e) { console.error(e); }
+            try {
+                await deleteDoc(doc(db, getCollectionPath('finished_assignments'), id));
+                // Optimistically update UI in case snapshot doesn't re-fire
+                const updated = (window.finishedAssignments || []).filter(a => a.id !== id);
+                window.renderFinishedAssignments(updated);
+            } catch (e) { console.error(e); }
+        },
+        restoreAssignment: async (id) => {
+            if (!db || !userId) return;
+            try {
+                const finishedDoc = (window.finishedAssignments || []).find(a => a.id === id);
+                if (!finishedDoc) { console.warn('Could not find finished assignment', id); return; }
+                const { completedAt, id: _id, ...restData } = finishedDoc;
+                await addDoc(collection(db, getCollectionPath('assignments')), {
+                    title: restData.title,
+                    deadline: restData.deadline instanceof Date ? restData.deadline.toISOString() : (restData.deadline || null),
+                    notes: restData.notes || '',
+                    subtasks: restData.subtasks || [],
+                    createdAt: restData.createdAt || new Date().toISOString()
+                });
+                await deleteDoc(doc(db, getCollectionPath('finished_assignments'), id));
+                // Optimistically update UI
+                const updated = (window.finishedAssignments || []).filter(a => a.id !== id);
+                window.renderFinishedAssignments(updated);
+            } catch (e) { console.error(e); }
         },
         addBookmark: async (name, url, icon) => {
             if (!db || !userId) return;
@@ -1208,6 +1237,7 @@
         };
 
         let assignments = [], finishedAssignments = [], bookmarks = [], countdownInterval;
+        window.finishedAssignments = finishedAssignments;
         const HOME_LOC = "10 Triq Grosseto, Birkirkara";
         let MAP_DESTINATIONS = { 'school': { address: "MCAST, Paola", name: "School" }, 'work': { address: "Lotus Consultancy Limited", name: "Work" } };
 
@@ -1401,6 +1431,7 @@
         
         window.renderFinishedAssignments = (newFinished) => {
             finishedAssignments = newFinished;
+            window.finishedAssignments = finishedAssignments;
             const list = document.getElementById('finished-assignment-list');
             const toggleBtn = document.getElementById('toggle-finished-btn');
             list.innerHTML = ''; 
@@ -1417,8 +1448,11 @@
                 const formattedCDate = `${String(c.getDate()).padStart(2, '0')}/${String(c.getMonth() + 1).padStart(2, '0')}/${c.getFullYear()} ${String(c.getHours()).padStart(2, '0')}:${String(c.getMinutes()).padStart(2, '0')}`;
                 
                 const item = document.createElement('div');
-                item.className = 'flex justify-between items-start p-3 rounded-lg bg-white/5 backdrop-blur-sm shadow-md transition-all duration-300 hover:bg-white/10 opacity-70 hover:opacity-100'; 
-                item.innerHTML = `<div><p class="text-sm font-semibold finished-assignment-text">${assignment.title}</p><p class="text-xs finished-assignment-text">Due: ${formattedDate}</p><p class="text-xs text-green-400 mt-1">Completed: ${formattedCDate}</p></div><div class="flex space-x-2"><button onclick="window.db.deleteFinishedAssignment('${assignment.id}')" class="text-red-400 hover:text-red-500 opacity-0 hover:opacity-100 p-1"><span data-lucide="x" class="w-4 h-4"></span></button></div>`;
+                item.className = 'finished-item flex justify-between items-start p-3 rounded-lg bg-white/5 backdrop-blur-sm shadow-md transition-all duration-300 hover:bg-white/10 opacity-70 hover:opacity-100 cursor-pointer'; 
+                item.innerHTML = `<div class="flex-1 min-w-0 pr-2"><p class="text-sm font-semibold finished-assignment-text">${assignment.title}</p><p class="text-xs finished-assignment-text">Due: ${formattedDate}</p><p class="text-xs text-green-400 mt-1">Completed: ${formattedCDate}</p></div><div class="flex flex-col space-y-1 flex-shrink-0"><button title="Mark as Unfinished" onclick="event.stopPropagation(); window.handleRestoreAssignment('${assignment.id}')" class="finished-action-btn text-yellow-400 hover:text-yellow-300 opacity-0 group-hover:opacity-100 p-1 transition-colors" style="opacity:0"><span data-lucide="rotate-ccw" class="w-4 h-4"></span></button><button title="Delete" onclick="event.stopPropagation(); window.db.deleteFinishedAssignment('${assignment.id}')" class="finished-action-btn text-red-400 hover:text-red-500 opacity-0 p-1 transition-colors" style="opacity:0"><span data-lucide="x" class="w-4 h-4"></span></button></div>`;
+                item.addEventListener('mouseenter', () => item.querySelectorAll('.finished-action-btn').forEach(b => b.style.opacity = '1'));
+                item.addEventListener('mouseleave', () => item.querySelectorAll('.finished-action-btn').forEach(b => b.style.opacity = '0'));
+                item.addEventListener('click', (e) => { if (!e.target.closest('.finished-action-btn')) openFinishedAssignmentModal(assignment); });
                 list.appendChild(item);
             });
             lucide.createIcons();
@@ -1496,7 +1530,115 @@
             setTimeout(() => { const p = document.querySelector('#assignment-detail-modal .overflow-y-auto'); if(p) p.scrollTop = p.scrollHeight; }, 50);
         };
 
+        window.handleRestoreAssignment = async (id) => {
+            if (confirm('Move this assignment back to upcoming?')) {
+                await window.db.restoreAssignment(id);
+            }
+        };
+
+        const openFinishedAssignmentModal = (assignment) => {
+            detailIdInput.value = assignment.id;
+            detailTitleInput.value = assignment.title;
+            if (assignment.deadline instanceof Date && !isNaN(assignment.deadline)) {
+                detailDeadlineDateInput.value = formatDateForInput(assignment.deadline);
+                detailDeadlineTimeInput.value = formatTimeForInput(assignment.deadline);
+            } else {
+                detailDeadlineDateInput.value = '';
+                detailDeadlineTimeInput.value = '';
+            }
+            detailNoteInput.value = assignment.notes || '';
+            currentSubtasks = assignment.subtasks ? JSON.parse(JSON.stringify(assignment.subtasks)) : [];
+            currentSubtasks.forEach(task => {
+                if (task.deadline) { const d = new Date(task.deadline); if (!isNaN(d)) { task.tempDate = formatDateForInput(d); task.tempTime = formatTimeForInput(d); } }
+            });
+
+            // Render subtasks in read-only mode
+            const container = document.getElementById('subtask-list-container');
+            container.innerHTML = '';
+            currentSubtasks.forEach((task) => {
+                const wrapper = document.createElement('div');
+                wrapper.className = 'flex flex-col mb-3 bg-gray-700/30 p-2 rounded-lg border border-gray-600/50 opacity-80';
+                const topRow = document.createElement('div');
+                topRow.className = 'flex items-center space-x-2 mb-1';
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox'; checkbox.checked = task.done; checkbox.disabled = true;
+                checkbox.className = "w-5 h-5 rounded border-gray-500 accent-green-500";
+                const label = document.createElement('span');
+                label.className = `flex-1 p-1.5 ${task.done ? 'text-green-200 line-through opacity-50' : 'text-white'}`;
+                label.textContent = task.text;
+                topRow.appendChild(checkbox); topRow.appendChild(label);
+                if (task.tempDate) {
+                    const dateSpan = document.createElement('span');
+                    dateSpan.className = 'text-xs text-white/40 pl-7 mt-0.5';
+                    dateSpan.textContent = `Due: ${task.tempDate}${task.tempTime ? ' ' + task.tempTime : ''}`;
+                    wrapper.appendChild(topRow); wrapper.appendChild(dateSpan);
+                } else {
+                    wrapper.appendChild(topRow);
+                }
+                container.appendChild(wrapper);
+            });
+            lucide.createIcons();
+
+            // Set read-only state
+            detailModal.dataset.readOnly = 'true';
+            detailTitleInput.disabled = true;
+            detailDeadlineDateInput.disabled = true;
+            detailDeadlineTimeInput.disabled = true;
+            detailNoteInput.disabled = true;
+            detailNoteInput.classList.add('opacity-70', 'cursor-default');
+
+            document.getElementById('save-assignment-btn').classList.add('hidden');
+            document.getElementById('delete-from-detail-btn').classList.add('hidden');
+            document.getElementById('add-subtask-btn').classList.add('hidden');
+
+            // Show "Mark as Unfinished" button in footer
+            let restoreBtn = document.getElementById('restore-from-detail-btn');
+            if (!restoreBtn) {
+                restoreBtn = document.createElement('button');
+                restoreBtn.id = 'restore-from-detail-btn';
+                restoreBtn.className = 'px-4 py-2 rounded-xl bg-yellow-500 text-white hover:bg-yellow-400 font-semibold transition-colors text-sm flex items-center';
+                restoreBtn.innerHTML = '<span data-lucide="rotate-ccw" class="w-4 h-4 mr-2"></span> Mark as Unfinished';
+                document.querySelector('#assignment-detail-modal .flex.justify-between.space-x-4').prepend(restoreBtn);
+                lucide.createIcons();
+            }
+            restoreBtn.classList.remove('hidden');
+            restoreBtn.onclick = async () => {
+                if (confirm('Move this assignment back to upcoming?')) {
+                    await window.db.restoreAssignment(detailIdInput.value);
+                    closeAssignmentDetailModal();
+                }
+            };
+
+            // Show a "finished" banner at top
+            let finishedBanner = document.getElementById('detail-finished-banner');
+            if (!finishedBanner) {
+                finishedBanner = document.createElement('div');
+                finishedBanner.id = 'detail-finished-banner';
+                finishedBanner.className = 'mx-6 mt-2 px-4 py-2 rounded-xl bg-green-600/20 border border-green-500/40 text-green-400 text-sm font-semibold flex items-center';
+                finishedBanner.innerHTML = '<span data-lucide="check-circle" class="w-4 h-4 mr-2"></span> This assignment has been completed';
+                document.getElementById('assignment-detail-modal').querySelector('.flex-grow').before(finishedBanner);
+                lucide.createIcons();
+            }
+            finishedBanner.classList.remove('hidden');
+
+            detailModal.classList.remove('opacity-0', 'pointer-events-none');
+        };
+
        const openAssignmentDetailModal = (assignment) => {
+            // Reset any read-only state from a previous finished-assignment view
+            detailModal.dataset.readOnly = 'false';
+            detailTitleInput.disabled = false;
+            detailDeadlineDateInput.disabled = false;
+            detailDeadlineTimeInput.disabled = false;
+            detailNoteInput.disabled = false;
+            detailNoteInput.classList.remove('opacity-70', 'cursor-default');
+            document.getElementById('save-assignment-btn').classList.remove('hidden');
+            document.getElementById('delete-from-detail-btn').classList.remove('hidden');
+            document.getElementById('add-subtask-btn').classList.remove('hidden');
+            const restoreBtn = document.getElementById('restore-from-detail-btn');
+            if (restoreBtn) restoreBtn.classList.add('hidden');
+            const finishedBanner = document.getElementById('detail-finished-banner');
+            if (finishedBanner) finishedBanner.classList.add('hidden');
             detailIdInput.value = assignment.id; detailTitleInput.value = assignment.title;
             if (assignment.deadline instanceof Date && !isNaN(assignment.deadline)) { detailDeadlineDateInput.value = formatDateForInput(assignment.deadline); detailDeadlineTimeInput.value = formatTimeForInput(assignment.deadline); } else { detailDeadlineDateInput.value = ''; detailDeadlineTimeInput.value = ''; }
             detailNoteInput.value = assignment.notes || ''; 
@@ -1505,7 +1647,24 @@
             renderSubtaskUI(); detailModal.classList.remove('opacity-0', 'pointer-events-none');
         };
 
-        const closeAssignmentDetailModal = () => { detailModal.classList.add('opacity-0', 'pointer-events-none'); detailIdInput.value = ''; detailTitleInput.value = ''; detailDeadlineDateInput.value = ''; detailDeadlineTimeInput.value = ''; detailNoteInput.value = ''; currentSubtasks = []; };
+        const closeAssignmentDetailModal = () => {
+            detailModal.classList.add('opacity-0', 'pointer-events-none');
+            detailIdInput.value = ''; detailTitleInput.value = ''; detailDeadlineDateInput.value = ''; detailDeadlineTimeInput.value = ''; detailNoteInput.value = ''; currentSubtasks = [];
+            // Reset read-only state
+            detailModal.dataset.readOnly = 'false';
+            detailTitleInput.disabled = false;
+            detailDeadlineDateInput.disabled = false;
+            detailDeadlineTimeInput.disabled = false;
+            detailNoteInput.disabled = false;
+            detailNoteInput.classList.remove('opacity-70', 'cursor-default');
+            document.getElementById('save-assignment-btn')?.classList.remove('hidden');
+            document.getElementById('delete-from-detail-btn')?.classList.remove('hidden');
+            document.getElementById('add-subtask-btn')?.classList.remove('hidden');
+            const restoreBtn = document.getElementById('restore-from-detail-btn');
+            if (restoreBtn) restoreBtn.classList.add('hidden');
+            const finishedBanner = document.getElementById('detail-finished-banner');
+            if (finishedBanner) finishedBanner.classList.add('hidden');
+        };
 
         const handleSaveDetailChanges = async () => {
             const dateString = detailDeadlineDateInput.value; const timeString = detailDeadlineTimeInput.value || null;
@@ -1645,11 +1804,21 @@
             document.getElementById('expand-notes-btn')?.addEventListener('click', (e) => {
                 e.stopPropagation();
                 expandedNotesTextarea.value = detailNoteInput.value;
+                const isReadOnly = detailModal.dataset.readOnly === 'true';
+                expandedNotesTextarea.disabled = isReadOnly;
+                expandedNotesTextarea.classList.toggle('opacity-70', isReadOnly);
+                expandedNotesTextarea.classList.toggle('cursor-default', isReadOnly);
+                document.getElementById('save-expanded-notes-btn').classList.toggle('hidden', isReadOnly);
+                document.getElementById('cancel-expanded-notes-btn').textContent = isReadOnly ? 'Close' : 'Cancel';
                 expandedNotesModal.classList.remove('opacity-0', 'pointer-events-none');
             });
 
             const closeExpandedNotes = () => {
                 expandedNotesModal.classList.add('opacity-0', 'pointer-events-none');
+                expandedNotesTextarea.disabled = false;
+                expandedNotesTextarea.classList.remove('opacity-70', 'cursor-default');
+                document.getElementById('save-expanded-notes-btn').classList.remove('hidden');
+                document.getElementById('cancel-expanded-notes-btn').textContent = 'Cancel';
             };
 
             document.getElementById('close-expanded-notes-btn')?.addEventListener('click', closeExpandedNotes);
@@ -2330,7 +2499,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 23/04/2026 - 11:51</div>
+    <div id="version-timestamp">Last Update 27/04/2026 - 11:27</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
