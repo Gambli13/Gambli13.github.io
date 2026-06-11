@@ -2002,6 +2002,10 @@
 
             ['weekly-timetable-modal', 'maps-modal', 'f1-modal'].forEach(modalId => { const modalEl = document.getElementById(modalId); if (modalEl) { modalEl.addEventListener('click', (e) => { if (e.target === e.currentTarget) e.currentTarget.classList.add('opacity-0', 'pointer-events-none'); }); } });
 
+            document.getElementById('close-timetable-btn')?.addEventListener('click', () => {
+                document.getElementById('weekly-timetable-modal').classList.add('opacity-0', 'pointer-events-none');
+            });
+
             const mapsIframe = document.getElementById('maps-iframe'); const mapsExtension = document.getElementById('maps-extension'); const mapsTitleText = document.getElementById('maps-title-text'); let isReversed = false; 
 
             const updateMap = (start, end, startName, endName) => {
@@ -2392,9 +2396,14 @@
     </div>
    
    <div id="weekly-timetable-modal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition duration-300 z-50">
-        <div class="bg-gray-900 w-auto max-w-[95vw] p-6 rounded-2xl shadow-2xl border border-gray-700 overflow-x-auto overflow-y-hidden relative custom-scroll">
-            <h2 class="text-2xl font-bold text-blue-400 mb-4 text-center sticky left-0">Weekly Timetable</h2>
-            <div id="weekly-timetable-content" class="flex flex-row gap-6 pb-4"></div>
+        <div class="bg-gray-900 w-auto max-w-[95vw] p-6 rounded-2xl shadow-2xl border border-gray-700 relative">
+            <button id="close-timetable-btn" class="absolute top-3 right-3 z-20 p-2 rounded-lg bg-gray-800 border border-gray-600 hover:bg-red-600 hover:border-red-500 text-white transition-colors shadow-lg" title="Close">
+                <span data-lucide="x" class="w-5 h-5"></span>
+            </button>
+            <h2 class="text-2xl font-bold text-blue-400 mb-4 text-center">Weekly Timetable</h2>
+            <div class="overflow-x-auto overflow-y-hidden custom-scroll">
+                <div id="weekly-timetable-content" class="flex flex-row gap-6 pb-4"></div>
+            </div>
         </div>
     </div>
 
@@ -2410,15 +2419,14 @@
             </div>
         </button>
         
-        <button id="menu-switch-work" class="radial-item radial-item-1 relative group rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition-colors flex items-center justify-center">
-            <span data-lucide="briefcase" class="w-6 h-6 text-blue-400 drop-shadow-md"></span>
-            <div class="absolute left-full ml-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-blue-600 text-white text-xs font-bold rounded-lg shadow-xl opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity z-50">
-                Switch to Work
-                <div class="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-blue-600"></div>
+        <button id="menu-open-notes" class="radial-item radial-item-1 relative group rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition-colors flex items-center justify-center">
+            <span data-lucide="notebook-pen" class="w-6 h-6 text-green-400 drop-shadow-md"></span>
+            <div class="absolute left-full ml-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-green-600 text-white text-xs font-bold rounded-lg shadow-xl opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity z-50">
+                Notes
+                <div class="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-green-600"></div>
             </div>
         </button>
 
-        
         <button id="menu-open-timetable" class="radial-item radial-item-2 relative group rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition-colors flex items-center justify-center">
             <span data-lucide="calendar" class="w-6 h-6 text-purple-400 drop-shadow-md"></span>
             <div class="absolute left-full ml-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-purple-600 text-white text-xs font-bold rounded-lg shadow-xl opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity z-50">
@@ -2427,25 +2435,21 @@
             </div>
         </button>
 
-        <button id="menu-open-notes" class="radial-item radial-item-3 relative group rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition-colors flex items-center justify-center">
-            <span data-lucide="notebook-pen" class="w-6 h-6 text-green-400 drop-shadow-md"></span>
-            <div class="absolute left-full ml-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-green-600 text-white text-xs font-bold rounded-lg shadow-xl opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity z-50">
-                Notes
-                <div class="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-green-600"></div>
-            </div>
-        </button>
-
-        <button id="menu-open-f1" class="radial-item radial-item-4 relative group rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition-colors flex items-center justify-center">
+        <button id="menu-open-f1" class="radial-item radial-item-3 relative group rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition-colors flex items-center justify-center">
             <span data-lucide="gauge" class="w-6 h-6 text-red-500 drop-shadow-md"></span>
             <div class="absolute left-full ml-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-red-600 text-white text-xs font-bold rounded-lg shadow-xl opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity z-50">
                 F1 Hub
                 <div class="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-red-600"></div>
             </div>
         </button>
-    </div>
 
-        
-        
+        <button id="menu-switch-work" class="radial-item radial-item-4 relative group rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition-colors flex items-center justify-center">
+            <span data-lucide="briefcase" class="w-6 h-6 text-blue-400 drop-shadow-md"></span>
+            <div class="absolute left-full ml-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-blue-600 text-white text-xs font-bold rounded-lg shadow-xl opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity z-50">
+                Switch to Work
+                <div class="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-blue-600"></div>
+            </div>
+        </button>
     </div>
 
     <div id="notes-app-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition-opacity duration-300 z-[70]">
@@ -2538,7 +2542,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 11/06/2026 - 13:57</div>
+    <div id="version-timestamp">Last Update 11/06/2026 - 14:03</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
