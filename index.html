@@ -1074,10 +1074,20 @@
                 const item = document.createElement('div');
                 item.className = `flex justify-between items-center p-3 cursor-pointer rounded-lg mb-2 transition-colors group ${currentNoteId === note.id ? 'bg-blue-600/30 border border-blue-500/50' : 'bg-white/5 hover:bg-white/10 border border-transparent'}`;
                 
+                // Format the date
+                let dateStr = '';
+                if (note.updatedAt) {
+                    const d = new Date(note.updatedAt);
+                    dateStr = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+                }
+
                 item.innerHTML = `
-                    <div class="flex-1 flex items-center overflow-hidden pr-2">
-                        <span data-lucide="file-text" class="w-4 h-4 mr-2 text-white/50 flex-shrink-0"></span>
-                        <input type="text" id="note-title-input-${note.id}" value="${note.title}" class="bg-transparent outline-none text-white text-sm w-full truncate pointer-events-none border-b border-transparent focus:border-blue-500 transition-colors" readonly>
+                    <div class="flex-1 flex items-start overflow-hidden pr-2">
+                        <span data-lucide="file-text" class="w-4 h-4 mr-2 mt-1 text-white/50 flex-shrink-0"></span>
+                        <div class="flex flex-col w-full overflow-hidden">
+                            <input type="text" id="note-title-input-${note.id}" value="${note.title}" placeholder="${note.title}" class="bg-transparent outline-none text-white text-sm w-full truncate pointer-events-none border-b border-transparent focus:border-blue-500 transition-colors" readonly>
+                            <span class="text-[10px] text-white/40 mt-0.5">${dateStr}</span>
+                        </div>
                     </div>
                     <div class="flex space-x-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" id="note-actions-${note.id}">
                         <button class="p-1.5 text-blue-400 hover:text-blue-300 rounded hover:bg-blue-900/40 transition-colors" onclick="event.stopPropagation(); window.enableNoteTitleEdit('${note.id}')" title="Edit Name"><span data-lucide="pencil" class="w-3.5 h-3.5"></span></button>
@@ -1092,19 +1102,28 @@
 
         window.enableNoteTitleEdit = (id) => {
             const input = document.getElementById(`note-title-input-${id}`);
+            const note = window.userNotes.find(n => n.id === id);
+            
             input.readOnly = false;
             input.classList.remove('pointer-events-none');
+            
+            // Auto-clear but keep old title as placeholder
+            input.placeholder = note.title; 
+            input.value = ''; 
             input.focus();
             
             const finishEdit = async () => {
                 input.readOnly = true;
                 input.classList.add('pointer-events-none');
-                const newTitle = input.value.trim() || "Untitled Note";
-                const note = window.userNotes.find(n => n.id === id);
+                
+                // Use typed value, or default to "New Note" if left entirely empty
+                const newTitle = input.value.trim() || "New Note"; 
+                
                 if (note && note.title !== newTitle) {
                     await window.db.updateNote(id, newTitle, note.content);
                 } else {
-                    input.value = note.title; // revert if empty or unchanged
+                    // Revert visually if it wasn't a meaningful change
+                    input.value = newTitle; 
                 }
             };
 
@@ -2543,7 +2562,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 11/06/2026 - 14:06</div>
+    <div id="version-timestamp">Last Update 11/06/2026 - 14:18</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
