@@ -193,19 +193,18 @@
             mask-position: 0% 100%;
         }
 
-        /* --- Radial Hover Menu Styles --- */
+        /* --- Vertical Sliding Menu Styles --- */
+        /* Overlay kept in DOM but disabled — no dimming when menu opens */
         #menu-overlay-bg {
             position: fixed;
             inset: 0;
-            background: rgba(0,0,0,0.7);
-            backdrop-filter: blur(8px);
+            background: transparent;
             z-index: 55;
             opacity: 0;
             pointer-events: none;
-            transition: opacity 0.35s ease;
         }
         #menu-overlay-bg.active {
-            opacity: 1;
+            /* Invisible, but catches clicks so clicking away closes the menu */
             pointer-events: auto;
         }
 
@@ -213,36 +212,63 @@
             position: fixed;
             left: 1.25rem;
             bottom: 1.25rem;
-            width: 3rem; 
-            height: 3rem;
             z-index: 60;
-            /* Use a straight transform transition to prevent any curved paths or bouncing */
-            transition: transform 0.35s ease; 
-            transform: translate(0px, 0px); 
-        }
-        #radial-menu-wrapper.active {
-            /* Center perfectly using viewport calc. 50vw minus half button (1.5rem) minus offset (1.25rem) = 2.75rem */
-            transform: translate(calc(50vw - 2.75rem), calc(-50vh + 2.75rem));
+            display: flex;
+            flex-direction: column-reverse; /* Toggle stays at bottom, items stack upward */
+            align-items: flex-start;
+            gap: 0.75rem;
         }
 
-        .radial-item {
-            position: absolute;
-            top: 0; left: 0;
-            width: 100%; height: 100%;
-            transition: all 0.35s ease; /* Smooth, no bounce */
+        /* Each menu item gets a fixed size since they're no longer absolute-positioned children.
+           Selector uses #radial-menu-wrapper to outrank Tailwind's transition-colors utility. */
+        #radial-menu-wrapper .radial-item {
+            width: 3rem;
+            height: 3rem;
             opacity: 0;
             pointer-events: none;
-            transform: translate(0px, 0px) scale(0.5); /* Match format of end state for seamless interpolation */
+            transform: translateY(25px) scale(0.6);
+            /* Include background-color so the hover state still animates nicely */
+            transition: opacity 0.35s ease,
+                        transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1),
+                        background-color 0.2s ease,
+                        border-color 0.2s ease;
         }
         #radial-menu-wrapper.active .radial-item {
             opacity: 1;
             pointer-events: auto;
+            transform: translateY(0) scale(1);
         }
-        /* Top: Notes, Right: Timetable, Bottom: F1, Left: Work */
-        #radial-menu-wrapper.active .radial-item-1 { transform: translate(0, -90px) scale(1); }
-        #radial-menu-wrapper.active .radial-item-2 { transform: translate(90px, 0) scale(1); }
-        #radial-menu-wrapper.active .radial-item-3 { transform: translate(0, 90px) scale(1); }
-        #radial-menu-wrapper.active .radial-item-4 { transform: translate(-90px, 0) scale(1); }
+        /* Staggered reveal — first item closest to button animates first */
+        #radial-menu-wrapper.active .radial-item-1 { transition-delay: 0.05s; }
+        #radial-menu-wrapper.active .radial-item-2 { transition-delay: 0.10s; }
+        #radial-menu-wrapper.active .radial-item-3 { transition-delay: 0.15s; }
+        #radial-menu-wrapper.active .radial-item-4 { transition-delay: 0.20s; }
+
+        /* Toggle button icon morph: menu ⇄ X with rotation + crossfade */
+        #menu-icon-menu, #menu-icon-x {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: opacity 0.3s ease, transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        #menu-icon-menu {
+            opacity: 1;
+            transform: rotate(0deg) scale(1);
+        }
+        #menu-icon-x {
+            opacity: 0;
+            transform: rotate(-90deg) scale(0.5);
+        }
+        #radial-menu-wrapper.active #menu-icon-menu {
+            opacity: 0;
+            transform: rotate(90deg) scale(0.5);
+        }
+        #radial-menu-wrapper.active #menu-icon-x {
+            opacity: 1;
+            transform: rotate(0deg) scale(1);
+        }
 
     </style>
 
@@ -1920,15 +1946,11 @@
             window.closeRadialMenu = () => {
                 radialWrapper.classList.remove('active');
                 menuOverlayBg.classList.remove('active');
-                const iconWrap = document.getElementById('menu-center-icon-wrap');
-                if(iconWrap) iconWrap.style.transform = 'rotate(0deg)';
             };
 
             window.openRadialMenu = () => {
                 radialWrapper.classList.add('active');
                 menuOverlayBg.classList.add('active');
-                const iconWrap = document.getElementById('menu-center-icon-wrap');
-                if(iconWrap) iconWrap.style.transform = 'rotate(45deg)';
             };
 
             document.getElementById('toggle-quick-menu-btn').addEventListener('click', (e) => {
@@ -1970,7 +1992,15 @@
                 document.getElementById('notes-app-modal').classList.add('opacity-0', 'pointer-events-none');
             });
 
-            ['weekly-timetable-modal', 'maps-modal'].forEach(modalId => { const modalEl = document.getElementById(modalId); if (modalEl) { modalEl.addEventListener('click', (e) => { if (e.target === e.currentTarget) e.currentTarget.classList.add('opacity-0', 'pointer-events-none'); }); } });
+            // Click outside the Notes modal panel to save & close
+            document.getElementById('notes-app-modal').addEventListener('click', async (e) => {
+                if (e.target === e.currentTarget) {
+                    await window.saveCurrentNote();
+                    e.currentTarget.classList.add('opacity-0', 'pointer-events-none');
+                }
+            });
+
+            ['weekly-timetable-modal', 'maps-modal', 'f1-modal'].forEach(modalId => { const modalEl = document.getElementById(modalId); if (modalEl) { modalEl.addEventListener('click', (e) => { if (e.target === e.currentTarget) e.currentTarget.classList.add('opacity-0', 'pointer-events-none'); }); } });
 
             const mapsIframe = document.getElementById('maps-iframe'); const mapsExtension = document.getElementById('maps-extension'); const mapsTitleText = document.getElementById('maps-title-text'); let isReversed = false; 
 
@@ -2371,43 +2401,44 @@
     <div id="menu-overlay-bg"></div>
     
     <div id="radial-menu-wrapper">
-        <button id="toggle-quick-menu-btn" class="relative group w-12 h-12 rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-[0_0_15px_rgba(0,0,0,0.5)] hover:bg-white/20 transition-colors flex items-center justify-center z-20">
+        <button id="toggle-quick-menu-btn" class="relative group w-12 h-12 flex-shrink-0 rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-[0_0_15px_rgba(0,0,0,0.5)] hover:bg-white/20 transition-colors flex items-center justify-center z-20">
             <div id="f1-notification-badge" class="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-3 bg-gradient-to-b from-red-500 to-red-800 border border-red-900 text-white font-extrabold tracking-widest px-3 py-1 rounded-xl shadow-[0_0_15px_rgba(220,38,38,0.6)] hidden transition-all duration-300 z-50 whitespace-nowrap drop-shadow-lg after:content-[''] after:absolute after:top-full after:left-1/2 after:-translate-x-1/2 after:border-[6px] after:border-transparent after:border-t-red-800 pointer-events-none"></div>
             
-            <div id="menu-center-icon-wrap" class="transition-transform duration-300 ease-in-out flex items-center justify-center">
-                <span data-lucide="square-menu" class="w-6 h-6 text-white"></span>
+            <div id="menu-center-icon-wrap" class="relative w-6 h-6 flex items-center justify-center">
+                <span id="menu-icon-menu"><span data-lucide="square-menu" class="w-6 h-6 text-white"></span></span>
+                <span id="menu-icon-x"><span data-lucide="x" class="w-6 h-6 text-white"></span></span>
             </div>
         </button>
         
-        <button id="menu-open-notes" class="radial-item radial-item-1 group rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition-colors flex items-center justify-center">
+        <button id="menu-open-notes" class="radial-item radial-item-1 relative group rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition-colors flex items-center justify-center">
             <span data-lucide="notebook-pen" class="w-6 h-6 text-green-400 drop-shadow-md"></span>
-            <div class="absolute top-full mt-2 left-1/2 transform -translate-x-1/2 px-3 py-1.5 bg-green-600 text-white text-xs font-bold rounded-lg shadow-xl opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity z-50">
+            <div class="absolute left-full ml-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-green-600 text-white text-xs font-bold rounded-lg shadow-xl opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity z-50">
                 Notes
-                <div class="absolute bottom-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-b-green-600"></div>
+                <div class="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-green-600"></div>
             </div>
         </button>
 
-        <button id="menu-open-timetable" class="radial-item radial-item-2 group rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition-colors flex items-center justify-center">
+        <button id="menu-open-timetable" class="radial-item radial-item-2 relative group rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition-colors flex items-center justify-center">
             <span data-lucide="calendar" class="w-6 h-6 text-purple-400 drop-shadow-md"></span>
-            <div class="absolute top-full mt-2 left-1/2 transform -translate-x-1/2 px-3 py-1.5 bg-purple-600 text-white text-xs font-bold rounded-lg shadow-xl opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity z-50">
+            <div class="absolute left-full ml-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-purple-600 text-white text-xs font-bold rounded-lg shadow-xl opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity z-50">
                 Timetable
-                <div class="absolute bottom-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-b-purple-600"></div>
+                <div class="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-purple-600"></div>
             </div>
         </button>
 
-        <button id="menu-open-f1" class="radial-item radial-item-3 group rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition-colors flex items-center justify-center">
+        <button id="menu-open-f1" class="radial-item radial-item-3 relative group rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition-colors flex items-center justify-center">
             <span data-lucide="gauge" class="w-6 h-6 text-red-500 drop-shadow-md"></span>
-            <div class="absolute top-full mt-2 left-1/2 transform -translate-x-1/2 px-3 py-1.5 bg-red-600 text-white text-xs font-bold rounded-lg shadow-xl opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity z-50">
+            <div class="absolute left-full ml-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-red-600 text-white text-xs font-bold rounded-lg shadow-xl opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity z-50">
                 F1 Hub
-                <div class="absolute bottom-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-b-red-600"></div>
+                <div class="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-red-600"></div>
             </div>
         </button>
 
-        <button id="menu-switch-work" class="radial-item radial-item-4 group rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition-colors flex items-center justify-center">
+        <button id="menu-switch-work" class="radial-item radial-item-4 relative group rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition-colors flex items-center justify-center">
             <span data-lucide="briefcase" class="w-6 h-6 text-blue-400 drop-shadow-md"></span>
-            <div class="absolute top-full mt-2 left-1/2 transform -translate-x-1/2 px-3 py-1.5 bg-blue-600 text-white text-xs font-bold rounded-lg shadow-xl opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity z-50">
+            <div class="absolute left-full ml-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-blue-600 text-white text-xs font-bold rounded-lg shadow-xl opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity z-50">
                 Switch to Work
-                <div class="absolute bottom-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-b-blue-600"></div>
+                <div class="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-blue-600"></div>
             </div>
         </button>
     </div>
@@ -2502,7 +2533,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 23/04/2026 - 11:37</div>
+    <div id="version-timestamp">Last Update 11/06/2026 - 13:50</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
