@@ -11,7 +11,15 @@
         }
     </script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://unpkg.com/lucide@0.577.0/dist/umd/lucide.min.js"></script>
+    <script>
+        // Safety net: if the icon CDN ever breaks again, stub it out so a
+        // ReferenceError can't abort window.onload and kill the whole page.
+        if (typeof lucide === "undefined") {
+            window.lucide = { createIcons: function () {} };
+            console.warn("Lucide failed to load - icons disabled, dashboard still works.");
+        }
+    </script>
     <style>
         /* Hide scrollbar for Chrome, Safari and Opera */
         .no-scrollbar::-webkit-scrollbar {
