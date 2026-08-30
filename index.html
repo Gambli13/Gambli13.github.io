@@ -33,7 +33,7 @@
             scrollbar-width: none;  /* Firefox */
         }
         /* Custom font and base styles */
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&family=DM+Serif+Display&family=Inter:wght@100..900&family=Montserrat:wght@500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
         body {
             font-family: 'Inter', sans-serif;
             margin: 0;
@@ -251,6 +251,7 @@
         #radial-menu-wrapper.active .radial-item-2 { transition-delay: 0.10s; }
         #radial-menu-wrapper.active .radial-item-3 { transition-delay: 0.15s; }
         #radial-menu-wrapper.active .radial-item-4 { transition-delay: 0.20s; }
+        #radial-menu-wrapper.active .radial-item-5 { transition-delay: 0.25s; }
 
         /* Toggle button icon morph: menu ⇄ X with rotation + crossfade */
         #menu-icon-menu, #menu-icon-x {
@@ -277,6 +278,301 @@
             opacity: 1;
             transform: rotate(0deg) scale(1);
         }
+
+        /* --- Personal Mode (Out-of-School Layout) Toggle --- */
+        /* Personal-only elements are hidden by default (school mode).
+           Body-level .personal-mode class flips which set is visible.
+           Using !important because Tailwind flex/grid utilities also target `display`. */
+        .personal-only { display: none !important; }
+        body.personal-mode .school-only { display: none !important; }
+        body.personal-mode .personal-only { display: revert !important; }
+        body.personal-mode .personal-only.pm-flex { display: flex !important; }
+        body.personal-mode .personal-only.pm-grid { display: grid !important; }
+        body.personal-mode .personal-only.pm-block { display: block !important; }
+
+        /* Keep the school controls exactly as they were, but make Manage Backgrounds
+           wider only while Personal mode is active. */
+        body.personal-mode #toggle-bg-bar-btn {
+            width: 10rem;
+            padding: 0.75rem;
+            height: 4.45rem;
+        }
+        body.personal-mode #toggle-bg-bar-btn .bg-manage-icon {
+            width: 1.75rem;
+            height: 1.75rem;
+        }
+
+        /* Personal-mode mini-calendar */
+        .pm-cal-day {
+            aspect-ratio: 1 / 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.8rem;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            position: relative;
+            transition: background-color 0.15s, transform 0.15s, border-color 0.15s;
+            color: rgba(255,255,255,0.85);
+            user-select: none;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.08);
+        }
+        .pm-cal-day.other-month {
+            color: rgba(255,255,255,0.25);
+            background: rgba(255,255,255,0.02);
+            border-color: rgba(255,255,255,0.04);
+        }
+        .pm-cal-day:hover {
+            background-color: rgba(255,255,255,0.12);
+            border-color: rgba(255,255,255,0.2);
+        }
+
+        /* Today (nothing else selected) — vivid blue */
+        .pm-cal-day.today {
+            background-color: rgba(59,130,246,0.55);
+            border-color: rgba(96,165,250,0.7);
+            color: #fff;
+            font-weight: 700;
+        }
+        /* Today when the user has picked a different day — darker, muted blue */
+        .pm-cal-day.today.other-selected {
+            background-color: rgba(30,64,175,0.4);
+            border-color: rgba(59,130,246,0.35);
+            color: rgba(255,255,255,0.75);
+            font-weight: 600;
+        }
+        /* Selected day — brightest blue with glow */
+        .pm-cal-day.selected {
+            background-color: rgba(96,165,250,0.85);
+            border-color: rgba(191,219,254,0.9);
+            color: #fff;
+            font-weight: 700;
+            box-shadow: 0 0 12px rgba(96,165,250,0.45);
+            transform: scale(1.04);
+        }
+        /* Event dot at bottom */
+        .pm-cal-day.has-event::after {
+            content: '';
+            position: absolute;
+            bottom: 3px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background-color: var(--pm-dot-color, #f87171);
+        }
+        .pm-cal-day.today.has-event::after,
+        .pm-cal-day.selected.has-event::after { background-color: #fff; }
+
+        .pm-cal-weekday {
+            font-family: 'Inter', sans-serif;
+            font-size: 0.72rem;
+            font-weight: 700;
+            text-align: center;
+            color: rgba(255,255,255,0.66);
+            padding: 5px 0;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        /* Clock cards — deliberately use the same Inter family as the Next Up lesson card. */
+        .pm-clock-card {
+            background: rgba(255,255,255,0.065);
+            border: 1px solid rgba(255,255,255,0.14);
+            border-radius: 0.75rem;
+            padding: 0.85rem 0.55rem;
+            text-align: center;
+            transition: background-color 0.2s, border-color 0.2s;
+        }
+        .pm-clock-card:hover {
+            background: rgba(255,255,255,0.11);
+            border-color: rgba(255,255,255,0.22);
+        }
+        .pm-clock-flag { font-size: 1.2rem; line-height: 1; margin-bottom: 0.35rem; }
+        .pm-clock-label {
+            font-family: 'Inter', sans-serif;
+            font-size: 0.72rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.055em;
+            color: rgba(255,255,255,0.78);
+            margin-bottom: 0.2rem;
+        }
+        .pm-clock-time {
+            font-family: 'Inter', sans-serif;
+            font-variant-numeric: tabular-nums;
+            font-size: 1.14rem;
+            font-weight: 800;
+            color: #f8fafc;
+            letter-spacing: 0.025em;
+            line-height: 1.25;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.45);
+        }
+        .pm-clock-date {
+            font-family: 'Inter', sans-serif;
+            font-size: 0.7rem;
+            font-weight: 600;
+            color: rgba(255,255,255,0.66);
+            margin-top: 0.22rem;
+        }
+        .pm-clock-card:nth-child(1) .pm-clock-time { color: #bfdbfe; }
+        .pm-clock-card:nth-child(2) .pm-clock-time { color: #bbf7d0; }
+        .pm-clock-card:nth-child(3) .pm-clock-time { color: #fde68a; }
+        .pm-clock-card:nth-child(4) .pm-clock-time { color: #ddd6fe; }
+
+        /* Countdown block */
+        .pm-countdown-cell {
+            background: rgba(255,255,255,0.065);
+            border: 1px solid rgba(255,255,255,0.14);
+            border-radius: 0.75rem;
+            padding: 0.65rem 0.3rem;
+            text-align: center;
+        }
+        .pm-countdown-num {
+            font-family: 'Inter', sans-serif;
+            font-variant-numeric: tabular-nums;
+            font-size: 1.82rem;
+            font-weight: 800;
+            color: #fff;
+            line-height: 1;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.4);
+        }
+        #pm-cd-weeks { color: #fecdd3; }
+        #pm-cd-days { color: #ddd6fe; }
+        #pm-cd-hours { color: #bfdbfe; }
+        .pm-countdown-lbl {
+            font-family: 'Inter', sans-serif;
+            font-size: 0.68rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: rgba(255,255,255,0.72);
+            margin-top: 0.3rem;
+        }
+
+        /* Selected-day events list */
+        .pm-event-row {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.58rem 0.65rem;
+            border-radius: 0.5rem;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            font-family: 'Inter', sans-serif;
+            font-size: 0.86rem;
+            font-weight: 500;
+            color: rgba(255,255,255,0.94);
+            cursor: pointer;
+            transition: background-color 0.15s;
+        }
+        .pm-event-time {
+            font-family: 'Inter', sans-serif;
+            font-size: 0.75rem;
+            font-weight: 700;
+            color: rgba(255,255,255,0.68);
+        }
+        .pm-event-row:hover { background: rgba(255,255,255,0.1); }
+        .pm-event-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #ef4444;
+            flex-shrink: 0;
+        }
+
+        /* Greeting (Google-style headline above the search bar) */
+        #pm-greeting {
+            text-align: center;
+            opacity: 0;
+            transform: translateY(-8px);
+            transition: opacity 1.4s ease, transform 1.4s ease;
+        }
+        #pm-greeting.pm-fade-in {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        #pm-greeting .pm-greeting-line {
+            font-size: 2.5rem;
+            font-weight: 300;
+            color: rgba(255,255,255,0.95);
+            letter-spacing: -0.02em;
+            line-height: 1.1;
+        }
+        #pm-greeting .pm-greeting-text {
+            font-weight: 700;
+            color: #d8b4fe;
+            transition: color 0.55s ease, font-family 0.35s ease, transform 0.35s ease;
+            display: inline-block;
+        }
+
+        /* Repeat-event controls */
+        .pm-repeat-label {
+            font-family: 'Inter', sans-serif;
+            font-size: 0.72rem;
+            font-weight: 700;
+            color: rgba(255,255,255,0.72);
+            margin-bottom: 0.35rem;
+            display: block;
+        }
+        .pm-repeat-help {
+            font-family: 'Inter', sans-serif;
+            font-size: 0.68rem;
+            color: rgba(255,255,255,0.52);
+            line-height: 1.35;
+        }
+        @media (min-width: 1024px) {
+            #pm-greeting .pm-greeting-line { font-size: 3rem; }
+        }
+
+        /* Calendar toolbar buttons */
+        .pm-cal-tool-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            padding: 0.35rem 0.7rem;
+            font-size: 0.72rem;
+            font-weight: 600;
+            border-radius: 0.5rem;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            color: rgba(255,255,255,0.85);
+            cursor: pointer;
+            transition: background-color 0.15s, border-color 0.15s;
+        }
+        .pm-cal-tool-btn:hover {
+            background: rgba(255,255,255,0.12);
+            border-color: rgba(255,255,255,0.2);
+        }
+        .pm-cal-tool-btn.primary {
+            background: rgba(59,130,246,0.3);
+            border-color: rgba(96,165,250,0.5);
+        }
+        .pm-cal-tool-btn.primary:hover { background: rgba(59,130,246,0.45); }
+
+        /* Event color picker swatches */
+        .pm-color-swatch {
+            width: 28px;
+            height: 28px;
+            border-radius: 8px;
+            border: 2px solid transparent;
+            cursor: pointer;
+            transition: transform 0.15s, border-color 0.15s;
+        }
+        .pm-color-swatch:hover { transform: scale(1.1); }
+        .pm-color-swatch.selected {
+            border-color: #fff;
+            transform: scale(1.15);
+            box-shadow: 0 0 8px rgba(255,255,255,0.3);
+        }
+
+        /* Personal event row leading tag */
+        .pm-event-row.pm-personal {
+            background: rgba(255,255,255,0.06);
+        }
+        .pm-event-row.pm-personal:hover { background: rgba(255,255,255,0.12); }
 
     </style>
 
@@ -1804,13 +2100,19 @@
 
             if (today.getTime() > currentMonthPaga.getTime()) { targetPagaDate = nextMonthPaga; startPagaDate = currentMonthPaga; } else { targetPagaDate = currentMonthPaga; startPagaDate = prevMonthPaga; }
 
-            const pagaText = document.getElementById('paga-left-text'); const pagaCircle = document.getElementById('paga-progress-circle');
-            if (pagaText && pagaCircle) {
-                const daysLeft = Math.ceil((targetPagaDate.getTime() - today.getTime()) / 86400000);
-                const totalCycleDays = Math.ceil((targetPagaDate.getTime() - startPagaDate.getTime()) / 86400000);
-                let pagaPercent = daysLeft === 0 ? 100 : ((totalCycleDays - daysLeft) / totalCycleDays) * 100;
-                pagaText.textContent = `${daysLeft}d`; pagaCircle.style.strokeDashoffset = 100.53 - (pagaPercent / 100) * 100.53;
-            }
+            const daysLeft = Math.ceil((targetPagaDate.getTime() - today.getTime()) / 86400000);
+            const totalCycleDays = Math.ceil((targetPagaDate.getTime() - startPagaDate.getTime()) / 86400000);
+            const pagaPercent = daysLeft === 0 ? 100 : ((totalCycleDays - daysLeft) / totalCycleDays) * 100;
+            [
+                ['paga-left-text', 'paga-progress-circle'],
+                ['pm2-paga-text', 'pm2-paga-circle']
+            ].forEach(([textId, circleId]) => {
+                const pagaText = document.getElementById(textId);
+                const pagaCircle = document.getElementById(circleId);
+                if (!pagaText || !pagaCircle) return;
+                pagaText.textContent = `${daysLeft}d`;
+                pagaCircle.style.strokeDashoffset = 100.53 - (pagaPercent / 100) * 100.53;
+            });
 
             const parsedDates = STIPEND_DATES.map(d => new Date(d + "T00:00:00")).sort((a, b) => a - b);
             let nextStipendDate = null, prevStipendDate = null;
@@ -2218,7 +2520,7 @@
 
         <div class="grid grid-cols-1 lg:grid-cols-7 gap-8 w-full max-w-7xl pt-16 lg:pt-0 pb-16">
 
-            <div class="lg:col-span-2 p-6 bg-white/10 rounded-3xl backdrop-blur-xl shadow-2xl h-fit">
+            <div class="school-only lg:col-span-2 p-6 bg-white/10 rounded-3xl backdrop-blur-xl shadow-2xl h-fit">
                 <div class="flex justify-between items-center mb-4 border-b border-white/10 pb-2">
                     <h2 class="text-xl font-bold text-white flex items-center">
                         <span data-lucide="graduation-cap" class="w-6 h-6 mr-2 text-blue-400"></span>
@@ -2236,10 +2538,58 @@
                 </div>
             </div>
 
+            <div id="pm-calendar-panel" class="personal-only lg:col-span-2 p-6 bg-white/10 rounded-3xl backdrop-blur-xl shadow-2xl h-fit">
+                <div class="flex justify-between items-center mb-3 border-b border-white/10 pb-2">
+                    <button id="pm-cal-prev" class="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-white transition-colors" title="Previous month">
+                        <span data-lucide="chevron-left" class="w-4 h-4"></span>
+                    </button>
+                    <h2 class="text-lg font-bold text-white flex items-center">
+                        <span data-lucide="calendar-days" class="w-5 h-5 mr-2 text-blue-400"></span>
+                        <span id="pm-cal-month-year">Month Year</span>
+                    </h2>
+                    <button id="pm-cal-next" class="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-white transition-colors" title="Next month">
+                        <span data-lucide="chevron-right" class="w-4 h-4"></span>
+                    </button>
+                </div>
+
+                <div class="flex justify-between items-center mb-3">
+                    <button id="pm-cal-today" class="pm-cal-tool-btn" title="Jump to today">
+                        <span data-lucide="locate-fixed" class="w-3.5 h-3.5"></span>
+                        Today
+                    </button>
+                    <button id="pm-cal-add-event" class="pm-cal-tool-btn primary" title="Add an event to the selected day">
+                        <span data-lucide="plus" class="w-3.5 h-3.5"></span>
+                        Event
+                    </button>
+                </div>
+
+                <div id="pm-cal-weekdays" class="grid grid-cols-7 gap-1 mb-1">
+                    <div class="pm-cal-weekday">Mon</div>
+                    <div class="pm-cal-weekday">Tue</div>
+                    <div class="pm-cal-weekday">Wed</div>
+                    <div class="pm-cal-weekday">Thu</div>
+                    <div class="pm-cal-weekday">Fri</div>
+                    <div class="pm-cal-weekday">Sat</div>
+                    <div class="pm-cal-weekday">Sun</div>
+                </div>
+                <div id="pm-cal-grid" class="grid grid-cols-7 gap-1"></div>
+
+                <div class="mt-4 pt-3 border-t border-white/10">
+                    <p class="text-xs font-semibold uppercase tracking-wider text-white/65 mb-2" id="pm-cal-selected-label">Today's events</p>
+                    <div id="pm-cal-day-events" class="space-y-2 h-40 overflow-y-auto scroll-container pr-1"></div>
+                </div>
+            </div>
+
             <div class="lg:col-span-3 flex flex-col items-center justify-center p-6 space-y-8">
                 
-                <div id="next-lesson-widget" class="w-full max-w-2xl p-4 bg-white/10 rounded-xl backdrop-blur-md shadow-lg border border-white/20">
+                <div id="next-lesson-widget" class="school-only w-full max-w-2xl p-4 bg-white/10 rounded-xl backdrop-blur-md shadow-lg border border-white/20">
                     <p class="text-white/50 text-center">Loading timetable...</p>
+                </div>
+
+                <div id="pm-greeting" class="personal-only pm-block w-full max-w-2xl">
+                    <p class="pm-greeting-line">
+                        <span id="pm-greeting-text" class="pm-greeting-text">Good Morning</span>
+                    </p>
                 </div>
                 <form id="search-form" class="w-full max-w-2xl relative">
                     <input type="text" id="search-input" placeholder="Search Google or type a URL..." 
@@ -2264,7 +2614,8 @@
                 </div>
 
                 <div class="flex justify-center items-center w-full gap-4 mt-2">
-                    <div class="flex flex-col items-center justify-center p-2 rounded-2xl bg-white/5 backdrop-blur-md shadow-inner border border-white/10 w-20 h-20 hover:bg-white/10 transition-colors">
+                    <!-- School layout keeps the original three compact counters/buttons. -->
+                    <div class="school-only flex flex-col items-center justify-center p-2 rounded-2xl bg-white/5 backdrop-blur-md shadow-inner border border-white/10 w-20 h-20 hover:bg-white/10 transition-colors">
                         <div class="relative w-10 h-10">
                             <svg viewBox="0 0 48 48" class="w-10 h-10 transform -rotate-90">
                                 <circle cx="24" cy="24" r="18" stroke="currentColor" stroke-width="3.5" fill="transparent" class="text-white/10" />
@@ -2279,11 +2630,12 @@
 
                     <button id="toggle-bg-bar-btn"
                             class="flex flex-col items-center justify-center text-white/70 hover:text-white transition-colors p-2 rounded-2xl bg-white/5 backdrop-blur-md shadow-inner border border-white/10 hover:border-white/30 hover:bg-white/10 w-20 h-20 group">
-                        <span data-lucide="images" class="w-6 h-6 mb-1 text-white/50 group-hover:text-white transition-colors"></span>
-                        <span class="text-center leading-tight text-[9px] mt-1">Manage<br>Backgrounds</span>
+                        <span data-lucide="images" class="bg-manage-icon w-6 h-6 mb-1 text-white/50 group-hover:text-white transition-colors"></span>
+                        <span class="school-only text-center leading-tight text-[9px] mt-1">Manage<br>Backgrounds</span>
+                        <span class="personal-only pm-block text-center leading-tight text-xs font-medium mt-1">Manage Backgrounds</span>
                     </button>
 
-                    <div class="flex flex-col items-center justify-center p-2 rounded-2xl bg-white/5 backdrop-blur-md shadow-inner border border-white/10 w-20 h-20 hover:bg-white/10 transition-colors">
+                    <div class="school-only flex flex-col items-center justify-center p-2 rounded-2xl bg-white/5 backdrop-blur-md shadow-inner border border-white/10 w-20 h-20 hover:bg-white/10 transition-colors">
                         <div class="relative w-10 h-10">
                             <svg viewBox="0 0 48 48" class="w-10 h-10 transform -rotate-90">
                                 <circle cx="24" cy="24" r="18" stroke="currentColor" stroke-width="3.5" fill="transparent" class="text-white/10" />
@@ -2300,7 +2652,7 @@
                 <p id="user-id-display" class="text-xs text-white/50 mt-4"></p>
             </div>
 
-            <div class="lg:col-span-2 p-5 bg-white/10 rounded-2xl backdrop-blur-xl shadow-lg h-fit">
+            <div class="school-only lg:col-span-2 p-5 bg-white/10 rounded-2xl backdrop-blur-xl shadow-lg h-fit">
     
             <div class="flex justify-between items-center mb-4">
                 <h2 class="text-xl font-semibold text-white flex items-center">
@@ -2330,6 +2682,95 @@
                 <div id="finished-assignment-list" class="space-y-3 mt-4 hidden max-h-20 overflow-y-auto scroll-container pr-2">
                     </div>
             </div>
+
+            <div id="pm-coming-home-panel" class="personal-only pm-flex lg:col-span-2 p-5 bg-white/10 rounded-2xl backdrop-blur-xl shadow-lg h-fit flex-col">
+                <div class="mb-4">
+                    <h2 class="text-lg font-semibold text-white flex items-center mb-1">
+                        <span data-lucide="heart" class="w-5 h-5 mr-2 text-pink-400"></span>
+                        Coming Home
+                    </h2>
+                    <p class="text-sm font-medium text-white/70">Ireland → Malta · Dec 18</p>
+                </div>
+
+                <div class="grid grid-cols-3 gap-2 mb-5">
+                    <div class="pm-countdown-cell">
+                        <div id="pm-cd-weeks" class="pm-countdown-num">--</div>
+                        <div class="pm-countdown-lbl">Weeks</div>
+                    </div>
+                    <div class="pm-countdown-cell">
+                        <div id="pm-cd-days" class="pm-countdown-num">--</div>
+                        <div class="pm-countdown-lbl">Days</div>
+                    </div>
+                    <div class="pm-countdown-cell">
+                        <div id="pm-cd-hours" class="pm-countdown-num">--</div>
+                        <div class="pm-countdown-lbl">Hours</div>
+                    </div>
+                </div>
+                <p id="pm-cd-total" class="text-center text-xs font-medium text-white/60 -mt-2 mb-4">--</p>
+
+                <div class="border-t border-white/10 pt-4">
+                    <h3 class="text-sm font-semibold uppercase tracking-wider text-white/65 mb-3 flex items-center">
+                        <span data-lucide="globe" class="w-3.5 h-3.5 mr-1.5"></span>
+                        World Clocks
+                    </h3>
+                    <div class="grid grid-cols-2 gap-2">
+                        <div class="pm-clock-card" data-tz="Europe/Malta">
+                            <div class="pm-clock-flag">🇲🇹</div>
+                            <div class="pm-clock-label">Malta</div>
+                            <div class="pm-clock-time" data-role="time">--:--</div>
+                            <div class="pm-clock-date" data-role="date">--</div>
+                        </div>
+                        <div class="pm-clock-card" data-tz="Europe/Dublin">
+                            <div class="pm-clock-flag">🇮🇪</div>
+                            <div class="pm-clock-label">Ireland</div>
+                            <div class="pm-clock-time" data-role="time">--:--</div>
+                            <div class="pm-clock-date" data-role="date">--</div>
+                        </div>
+                        <div class="pm-clock-card" data-tz="Africa/Accra">
+                            <div class="pm-clock-flag">🇬🇭</div>
+                            <div class="pm-clock-label">Ghana</div>
+                            <div class="pm-clock-time" data-role="time">--:--</div>
+                            <div class="pm-clock-date" data-role="date">--</div>
+                        </div>
+                        <div class="pm-clock-card" data-tz="Africa/Lagos">
+                            <div class="pm-clock-flag">🇳🇬</div>
+                            <div class="pm-clock-label">Nigeria</div>
+                            <div class="pm-clock-time" data-role="time">--:--</div>
+                            <div class="pm-clock-date" data-role="date">--</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="border-t border-white/10 mt-auto pt-4">
+                    <div class="flex justify-around items-center">
+                        <div class="flex flex-col items-center" title="Days until payday">
+                            <div class="relative w-14 h-14">
+                                <svg viewBox="0 0 48 48" class="w-14 h-14 transform -rotate-90">
+                                    <circle cx="24" cy="24" r="18" stroke="currentColor" stroke-width="3.5" fill="transparent" class="text-white/10" />
+                                    <circle id="pm2-paga-circle" cx="24" cy="24" r="18" stroke="currentColor" stroke-width="3.5" fill="transparent" stroke-dasharray="100.53" stroke-dashoffset="0" class="text-blue-400 transition-all duration-1000 ease-out" />
+                                </svg>
+                                <div class="absolute inset-0 flex items-center justify-center">
+                                    <span id="pm2-paga-text" class="text-sm font-bold text-white">0d</span>
+                                </div>
+                            </div>
+                            <span class="text-[10px] text-white/50 uppercase tracking-wider mt-1">Paga</span>
+                        </div>
+
+                        <div class="flex flex-col items-center" title="Next calendar event">
+                            <div class="relative w-14 h-14">
+                                <svg viewBox="0 0 48 48" class="w-14 h-14 transform -rotate-90">
+                                    <circle cx="24" cy="24" r="18" stroke="currentColor" stroke-width="3.5" fill="transparent" class="text-white/10" />
+                                    <circle id="pm2-next-event-circle" cx="24" cy="24" r="18" stroke="currentColor" stroke-width="3.5" fill="transparent" stroke-dasharray="100.53" stroke-dashoffset="100.53" class="text-pink-400 transition-all duration-1000 ease-out" />
+                                </svg>
+                                <div class="absolute inset-0 flex items-center justify-center">
+                                    <span id="pm2-next-event-text" class="text-sm font-bold text-white">--</span>
+                                </div>
+                            </div>
+                            <span class="text-[10px] text-white/50 uppercase tracking-wider mt-1">Next Event</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -2340,6 +2781,70 @@
         <div id="bottom-background-list" class="flex items-start justify-center gap-4 sm:gap-6 overflow-x-auto custom-scroll w-full max-w-[100vw] px-8">
             </div>
 
+    </div>
+
+    <div id="pm-event-modal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 transition-opacity duration-300 opacity-0 pointer-events-none z-[70]">
+        <div class="bg-gray-800 p-6 rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto no-scrollbar border border-gray-700">
+            <h3 class="text-xl font-bold text-white mb-4" id="pm-event-modal-title">New Event</h3>
+            <input type="hidden" id="pm-event-id">
+            <div class="space-y-3">
+                <input type="text" id="pm-event-title" placeholder="Event title" class="w-full p-3 rounded-xl bg-gray-700 text-white placeholder-gray-400 border border-gray-600 focus:border-blue-500 outline-none transition-colors">
+                <div class="flex space-x-2">
+                    <input type="date" id="pm-event-date" class="w-1/2 p-3 rounded-xl bg-gray-700 text-white border border-gray-600 focus:border-blue-500 outline-none">
+                    <input type="time" id="pm-event-time" class="w-1/2 p-3 rounded-xl bg-gray-700 text-white border border-gray-600 focus:border-blue-500 outline-none" placeholder="Time (optional)">
+                </div>
+                <div>
+                    <label class="block text-white/70 text-xs font-semibold uppercase tracking-wider mb-2">Color</label>
+                    <div id="pm-event-color-picker" class="flex gap-2 flex-wrap"></div>
+                </div>
+
+                <div class="border-t border-white/10 pt-3">
+                    <label class="pm-repeat-label" for="pm-event-repeat">Repeat</label>
+                    <select id="pm-event-repeat" class="w-full p-3 rounded-xl bg-gray-700 text-white border border-gray-600 focus:border-blue-500 outline-none">
+                        <option value="none">Does not repeat</option>
+                        <option value="daily">Daily</option>
+                        <option value="weekly">Weekly</option>
+                    </select>
+
+                    <div id="pm-event-repeat-options" class="hidden mt-3 space-y-3">
+                        <div class="grid grid-cols-[auto_80px_1fr] gap-2 items-center">
+                            <span class="text-sm font-medium text-white/75">Every</span>
+                            <input type="number" id="pm-event-repeat-every" min="1" max="99" value="1" class="w-full p-2.5 rounded-lg bg-gray-700 text-white border border-gray-600 focus:border-blue-500 outline-none text-center">
+                            <span id="pm-event-repeat-every-unit" class="text-sm font-medium text-white/70">day(s)</span>
+                        </div>
+
+                        <div>
+                            <label class="pm-repeat-label" for="pm-event-repeat-end-mode">Ends</label>
+                            <select id="pm-event-repeat-end-mode" class="w-full p-2.5 rounded-lg bg-gray-700 text-white border border-gray-600 focus:border-blue-500 outline-none">
+                                <option value="duration">After a number of days / weeks</option>
+                                <option value="until">On a specific date</option>
+                            </select>
+                        </div>
+
+                        <div id="pm-event-repeat-duration-wrap" class="grid grid-cols-[auto_80px_1fr] gap-2 items-center">
+                            <span class="text-sm font-medium text-white/75">For</span>
+                            <input type="number" id="pm-event-repeat-duration" min="1" max="999" value="7" class="w-full p-2.5 rounded-lg bg-gray-700 text-white border border-gray-600 focus:border-blue-500 outline-none text-center">
+                            <span id="pm-event-repeat-duration-unit" class="text-sm font-medium text-white/70">day(s)</span>
+                        </div>
+
+                        <div id="pm-event-repeat-until-wrap" class="hidden">
+                            <label class="pm-repeat-label" for="pm-event-repeat-until">Repeat until</label>
+                            <input type="date" id="pm-event-repeat-until" class="w-full p-2.5 rounded-lg bg-gray-700 text-white border border-gray-600 focus:border-blue-500 outline-none">
+                        </div>
+                        <p class="pm-repeat-help">Examples: every 1 day for 7 days, every 1 week for 8 weeks, or repeat until a chosen date.</p>
+                    </div>
+                </div>
+
+                <textarea id="pm-event-notes" rows="2" placeholder="Notes (optional)" class="w-full p-3 rounded-xl bg-gray-700 text-white placeholder-gray-400 border border-gray-600 focus:border-blue-500 outline-none resize-none"></textarea>
+            </div>
+            <div class="flex justify-between items-center mt-6">
+                <button id="pm-event-delete-btn" class="px-4 py-2 rounded-xl bg-red-600 text-white hover:bg-red-700 font-semibold text-sm hidden">Delete</button>
+                <div class="flex gap-2 ml-auto">
+                    <button id="pm-event-cancel-btn" class="px-4 py-2 rounded-xl bg-gray-600 text-white hover:bg-gray-500 text-sm">Cancel</button>
+                    <button id="pm-event-save-btn" class="px-4 py-2 rounded-xl bg-blue-500 text-white hover:bg-blue-600 font-semibold text-sm">Save Event</button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <div id="assignment-modal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 transition-opacity duration-300 opacity-0 pointer-events-none z-50">
@@ -2446,7 +2951,7 @@
             </div>
         </button>
         
-        <button id="menu-switch-work" class="radial-item radial-item-1 relative group rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition-colors flex items-center justify-center">
+        <button id="menu-switch-work" class="school-only radial-item radial-item-1 relative group rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition-colors flex items-center justify-center">
             <span data-lucide="briefcase" class="w-6 h-6 text-blue-400 drop-shadow-md"></span>
             <div class="absolute left-full ml-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-blue-600 text-white text-xs font-bold rounded-lg shadow-xl opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity z-50">
                 Switch to Work
@@ -2455,11 +2960,20 @@
         </button>
 
         
-        <button id="menu-open-timetable" class="radial-item radial-item-2 relative group rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition-colors flex items-center justify-center">
+        <button id="menu-open-timetable" class="school-only radial-item radial-item-2 relative group rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition-colors flex items-center justify-center">
             <span data-lucide="calendar" class="w-6 h-6 text-purple-400 drop-shadow-md"></span>
             <div class="absolute left-full ml-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-purple-600 text-white text-xs font-bold rounded-lg shadow-xl opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity z-50">
                 Timetable
                 <div class="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-purple-600"></div>
+            </div>
+        </button>
+
+        <button id="menu-toggle-personal" class="radial-item radial-item-5 relative group rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition-colors flex items-center justify-center">
+            <span id="menu-toggle-personal-icon-school" data-lucide="home" class="w-6 h-6 text-pink-400 drop-shadow-md"></span>
+            <span id="menu-toggle-personal-icon-personal" data-lucide="graduation-cap" class="w-6 h-6 text-blue-400 drop-shadow-md hidden"></span>
+            <div class="absolute left-full ml-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-pink-600 text-white text-xs font-bold rounded-lg shadow-xl opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity z-50">
+                <span id="menu-toggle-personal-label">Switch to Personal</span>
+                <div class="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-pink-600"></div>
             </div>
         </button>
 
@@ -2570,7 +3084,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 11/06/2026 - 14:18</div>
+    <div id="version-timestamp">Last Update 31/08/2026 - 01:56</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
@@ -2588,6 +3102,848 @@
         textarea::-webkit-scrollbar-track, .custom-scroll::-webkit-scrollbar-track { background: transparent; }
         textarea::-webkit-scrollbar-thumb, .custom-scroll::-webkit-scrollbar-thumb { background-color: rgba(255, 255, 255, 0.3); border-radius: 3px; }
     </style>
+
+    <script>
+        // === Personal / Out-of-School Mode =========================
+        // Toggles a body-level class that swaps .school-only <-> .personal-only content.
+        // Persists mode + personal events in localStorage. Data (assignments, bookmarks,
+        // finished items, backgrounds, notes) is not touched — both layouts read the
+        // same globals.
+
+        (function () {
+            const PM_KEY = 'personalMode';
+            const PM_EVENTS_KEY = 'personalEvents';
+            // Girlfriend's return date — Dec 18 (year auto-picked so it always looks ahead)
+            const RETURN_MONTH = 11; // Dec (0-indexed)
+            const RETURN_DAY = 18;
+            const RETURN_HOUR = 0;
+
+            // Color palette for personal events
+            const EVENT_COLORS = [
+                '#f472b6', // pink
+                '#60a5fa', // blue
+                '#34d399', // green
+                '#fbbf24', // amber
+                '#f87171', // red
+                '#a78bfa', // purple
+                '#22d3ee', // cyan
+                '#fb923c', // orange
+            ];
+
+            const getReturnDate = () => {
+                const now = new Date();
+                let year = now.getFullYear();
+                let candidate = new Date(year, RETURN_MONTH, RETURN_DAY, RETURN_HOUR, 0, 0);
+                if (candidate.getTime() < now.getTime()) {
+                    candidate = new Date(year + 1, RETURN_MONTH, RETURN_DAY, RETURN_HOUR, 0, 0);
+                }
+                return candidate;
+            };
+
+            let pmCalDate = new Date(); // month currently being viewed in the mini-calendar
+            let pmSelectedDay = new Date(); // day whose events are listed below
+            let personalEvents = []; // [{id, title, date:'YYYY-MM-DD', time:'HH:MM'|'', color, notes}]
+
+            // -------- Personal events storage --------
+            const loadPersonalEvents = () => {
+                try {
+                    const raw = localStorage.getItem(PM_EVENTS_KEY);
+                    personalEvents = raw ? JSON.parse(raw) : [];
+                    if (!Array.isArray(personalEvents)) personalEvents = [];
+                } catch (e) {
+                    personalEvents = [];
+                }
+            };
+            const savePersonalEvents = () => {
+                try { localStorage.setItem(PM_EVENTS_KEY, JSON.stringify(personalEvents)); }
+                catch (e) { console.warn('Failed to save personal events', e); }
+            };
+
+            // Convert a personal event's stored start date+time into a Date object.
+            const eventDateObj = (ev) => {
+                if (!ev.date) return null;
+                const [y, m, d] = ev.date.split('-').map(Number);
+                let hh = 0, mm = 0;
+                if (ev.time) {
+                    const parts = ev.time.split(':').map(Number);
+                    hh = parts[0] || 0; mm = parts[1] || 0;
+                }
+                return new Date(y, m - 1, d, hh, mm);
+            };
+
+            const dateOnly = (value) => {
+                const d = value instanceof Date ? value : new Date(value);
+                return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+            };
+
+            const parseIsoDateOnly = (iso) => {
+                if (!iso) return null;
+                const [y, m, d] = iso.split('-').map(Number);
+                if (!y || !m || !d) return null;
+                return new Date(y, m - 1, d);
+            };
+
+            const calendarDayDiff = (start, end) => {
+                // UTC date components avoid daylight-saving jumps from turning a calendar-day
+                // difference into 23/25 hours.
+                const a = Date.UTC(start.getFullYear(), start.getMonth(), start.getDate());
+                const b = Date.UTC(end.getFullYear(), end.getMonth(), end.getDate());
+                return Math.round((b - a) / 86400000);
+            };
+
+            const personalEventOccursOn = (ev, targetDate) => {
+                const start = parseIsoDateOnly(ev.date);
+                if (!start) return false;
+                const target = dateOnly(targetDate);
+                const deltaDays = calendarDayDiff(start, target);
+                if (deltaDays < 0) return false;
+
+                const repeat = ev.repeat || 'none';
+                if (repeat === 'none') return deltaDays === 0;
+
+                const unitDays = repeat === 'weekly' ? 7 : 1;
+                if (deltaDays % unitDays !== 0) return false;
+                const elapsedUnits = deltaDays / unitDays;
+                const every = Math.max(1, Number(ev.repeatEvery) || 1);
+                if (elapsedUnits % every !== 0) return false;
+
+                const endMode = ev.repeatEndMode || 'duration';
+                if (endMode === 'until') {
+                    const until = parseIsoDateOnly(ev.repeatUntil);
+                    if (!until || target.getTime() > until.getTime()) return false;
+                } else {
+                    // "For 7 days" means the start day plus later occurrences that fall
+                    // within that seven-day window. "For 8 weeks" works the same way.
+                    const duration = Math.max(1, Number(ev.repeatDuration) || 1);
+                    if (elapsedUnits >= duration) return false;
+                }
+                return true;
+            };
+
+            const personalEventOccurrenceDate = (ev, targetDate) => {
+                if (!personalEventOccursOn(ev, targetDate)) return null;
+                let hh = 0, mm = 0;
+                if (ev.time) {
+                    const parts = ev.time.split(':').map(Number);
+                    hh = parts[0] || 0;
+                    mm = parts[1] || 0;
+                }
+                const d = dateOnly(targetDate);
+                return new Date(d.getFullYear(), d.getMonth(), d.getDate(), hh, mm);
+            };
+
+            const nextPersonalOccurrence = (ev, now = new Date()) => {
+                const start = eventDateObj(ev);
+                if (!start) return null;
+                const repeat = ev.repeat || 'none';
+                if (repeat === 'none') return start.getTime() > now.getTime() ? start : null;
+
+                const stepDays = (repeat === 'weekly' ? 7 : 1) * Math.max(1, Number(ev.repeatEvery) || 1);
+                let occurrence = new Date(start);
+                // The UI caps duration at 999 units. The larger guard also safely supports
+                // older/manual localStorage data that might have a very distant repeat-until.
+                for (let i = 0; i < 10000; i++) {
+                    if (!personalEventOccursOn(ev, occurrence)) return null;
+                    if (occurrence.getTime() > now.getTime()) return occurrence;
+                    occurrence = new Date(
+                        occurrence.getFullYear(), occurrence.getMonth(), occurrence.getDate() + stepDays,
+                        occurrence.getHours(), occurrence.getMinutes(), 0, 0
+                    );
+                }
+                return null;
+            };
+
+            const recurrenceSummary = (ev) => {
+                const repeat = ev.repeat || 'none';
+                if (repeat === 'none') return '';
+                const every = Math.max(1, Number(ev.repeatEvery) || 1);
+                const unit = repeat === 'weekly' ? 'week' : 'day';
+                const cadence = every === 1 ? `Every ${unit}` : `Every ${every} ${unit}s`;
+                if ((ev.repeatEndMode || 'duration') === 'until' && ev.repeatUntil) {
+                    const until = parseIsoDateOnly(ev.repeatUntil);
+                    const niceUntil = until ? new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }).format(until) : ev.repeatUntil;
+                    return `${cadence} until ${niceUntil}`;
+                }
+                const duration = Math.max(1, Number(ev.repeatDuration) || 1);
+                return `${cadence} for ${duration} ${unit}${duration === 1 ? '' : 's'}`;
+            };
+
+            const isPersonalMode = () => document.body.classList.contains('personal-mode');
+
+            // -------- Greeting --------
+            // The complete "Good Morning / Afternoon / Evening / Night" phrase
+            // changes to a different solid colour and font whenever the day part changes.
+            const GREETING_FONTS = [
+                "'Inter', sans-serif",
+                "'Space Grotesk', sans-serif",
+                "'Montserrat', sans-serif",
+                "'DM Serif Display', serif",
+                "'Caveat', cursive",
+                "Georgia, 'Times New Roman', serif"
+            ];
+            const GREETING_COLORS = [
+                '#fecaca', // pale red
+                '#fbcfe8', // pale pink
+                '#ddd6fe', // light purple
+                '#c4b5fd', // lavender
+                '#bfdbfe', // pale blue
+                '#bae6fd', // sky
+                '#bbf7d0', // pale green
+                '#fde68a', // pale amber
+                '#fed7aa'  // pale orange
+            ];
+            let lastGreetingWord = null;
+            let lastGreetingFont = -1;
+            let lastGreetingColor = -1;
+
+            const randomDifferentIndex = (arr, previous) => {
+                if (arr.length <= 1) return 0;
+                let next = Math.floor(Math.random() * arr.length);
+                while (next === previous) next = Math.floor(Math.random() * arr.length);
+                return next;
+            };
+
+            const randomizeGreetingStyle = () => {
+                const greetingEl = document.getElementById('pm-greeting-text');
+                if (!greetingEl) return;
+                lastGreetingFont = randomDifferentIndex(GREETING_FONTS, lastGreetingFont);
+                lastGreetingColor = randomDifferentIndex(GREETING_COLORS, lastGreetingColor);
+                greetingEl.style.fontFamily = GREETING_FONTS[lastGreetingFont];
+                greetingEl.style.color = GREETING_COLORS[lastGreetingColor];
+            };
+
+            const updateGreeting = () => {
+                const greetingEl = document.getElementById('pm-greeting-text');
+                if (!greetingEl) return;
+
+                const h = new Date().getHours();
+                let word = 'Morning';
+                if (h >= 5 && h < 12) word = 'Morning';
+                else if (h >= 12 && h < 17) word = 'Afternoon';
+                else if (h >= 17 && h < 21) word = 'Evening';
+                else word = 'Night';
+
+                const changed = word !== lastGreetingWord;
+                greetingEl.textContent = `Good ${word}`;
+
+                if (changed) {
+                    lastGreetingWord = word;
+                    randomizeGreetingStyle();
+                }
+            };
+            const showGreeting = () => {
+                const el = document.getElementById('pm-greeting');
+                if (!el) return;
+                el.classList.remove('pm-fade-in');
+                // Force reflow so the transition retriggers
+                void el.offsetWidth;
+                requestAnimationFrame(() => el.classList.add('pm-fade-in'));
+            };
+
+            const syncPersonalPanelHeights = () => {
+                const calendarPanel = document.getElementById('pm-calendar-panel');
+                const homePanel = document.getElementById('pm-coming-home-panel');
+                if (!calendarPanel || !homePanel) return;
+                if (!isPersonalMode() || window.innerWidth < 1024) {
+                    homePanel.style.height = 'auto';
+                    return;
+                }
+                homePanel.style.height = 'auto';
+                requestAnimationFrame(() => {
+                    homePanel.style.height = `${Math.ceil(calendarPanel.getBoundingClientRect().height)}px`;
+                });
+            };
+
+            let schoolLinkModeBeforePersonal = null;
+
+            const applyPersonalMode = (on) => {
+                // Personal mode should never alter the user's school dashboard state.
+                // Snapshot the active semester on entry and restore it on return.
+                if (on) {
+                    schoolLinkModeBeforePersonal = currentLinkMode;
+                } else if (schoolLinkModeBeforePersonal) {
+                    currentLinkMode = schoolLinkModeBeforePersonal;
+                    localStorage.setItem('mcastLinkMode', currentLinkMode);
+                    if (typeof window.renderMCASTLinks === 'function') window.renderMCASTLinks();
+                    schoolLinkModeBeforePersonal = null;
+                }
+
+                document.body.classList.toggle('personal-mode', on);
+                const schoolIcon = document.getElementById('menu-toggle-personal-icon-school');
+                const personalIcon = document.getElementById('menu-toggle-personal-icon-personal');
+                const label = document.getElementById('menu-toggle-personal-label');
+                if (schoolIcon && personalIcon && label) {
+                    schoolIcon.classList.toggle('hidden', on);
+                    personalIcon.classList.toggle('hidden', !on);
+                    label.textContent = on ? 'Switch to School' : 'Switch to Personal';
+                }
+                if (on) {
+                    pmSelectedDay = new Date();
+                    pmCalDate = new Date();
+                    updateGreeting();
+                    showGreeting();
+                    renderPmCalendar();
+                    renderPmDayEvents();
+                    updatePmCountdown();
+                    updatePmClocks();
+                    updatePmNextEvent();
+                    updateCircularWidgets();
+                    syncPersonalPanelHeights();
+                }
+                if (window.lucide) window.lucide.createIcons();
+            };
+
+            // -------- Countdown (weeks / days / hours) --------
+            const updatePmCountdown = () => {
+                const target = getReturnDate();
+                const now = new Date();
+                let diffMs = target.getTime() - now.getTime();
+                const weeksEl = document.getElementById('pm-cd-weeks');
+                const daysEl = document.getElementById('pm-cd-days');
+                const hoursEl = document.getElementById('pm-cd-hours');
+                const totalEl = document.getElementById('pm-cd-total');
+                if (!weeksEl || !daysEl || !hoursEl) return;
+
+                if (diffMs <= 0) {
+                    weeksEl.textContent = '0';
+                    daysEl.textContent = '0';
+                    hoursEl.textContent = '0';
+                    if (totalEl) totalEl.textContent = "She's home! 💖";
+                    return;
+                }
+
+                const totalHours = Math.floor(diffMs / (1000 * 60 * 60));
+                const totalDays = Math.floor(totalHours / 24);
+                const weeks = Math.floor(totalDays / 7);
+                const days = totalDays - weeks * 7;
+                const hours = totalHours - totalDays * 24;
+
+                weeksEl.textContent = weeks;
+                daysEl.textContent = days;
+                hoursEl.textContent = hours;
+                if (totalEl) totalEl.textContent = `${totalDays} days · ${totalHours.toLocaleString()} hours total`;
+            };
+
+            // -------- World clocks --------
+            const updatePmClocks = () => {
+                const cards = document.querySelectorAll('.pm-clock-card');
+                const now = new Date();
+                cards.forEach(card => {
+                    const tz = card.getAttribute('data-tz');
+                    if (!tz) return;
+                    try {
+                        const timeStr = new Intl.DateTimeFormat('en-GB', {
+                            timeZone: tz, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+                        }).format(now);
+                        const dateStr = new Intl.DateTimeFormat('en-GB', {
+                            timeZone: tz, weekday: 'short', day: '2-digit', month: 'short'
+                        }).format(now);
+                        const timeEl = card.querySelector('[data-role="time"]');
+                        const dateEl = card.querySelector('[data-role="date"]');
+                        if (timeEl) timeEl.textContent = timeStr;
+                        if (dateEl) dateEl.textContent = dateStr;
+                    } catch (e) {
+                        const timeEl = card.querySelector('[data-role="time"]');
+                        if (timeEl) timeEl.textContent = '—';
+                    }
+                });
+            };
+
+            // -------- Mini-calendar --------
+            const isSameDay = (a, b) => a && b &&
+                a.getDate() === b.getDate() &&
+                a.getMonth() === b.getMonth() &&
+                a.getFullYear() === b.getFullYear();
+
+            // Aggregates BOTH school assignments and personal events for a given date
+            const eventsOnDay = (dateObj) => {
+                const src = (typeof assignments !== 'undefined') ? assignments : [];
+                const out = [];
+                src.forEach(a => {
+                    if (a.deadline && isSameDay(a.deadline, dateObj)) {
+                        out.push({ kind: 'assignment', type: 'main', title: a.title, date: a.deadline, ref: a, color: '#ef4444' });
+                    }
+                    if (a.subtasks) {
+                        a.subtasks.forEach(sub => {
+                            if (sub.deadline) {
+                                const subDate = sub.deadline instanceof Date ? sub.deadline : new Date(sub.deadline);
+                                if (!isNaN(subDate) && isSameDay(subDate, dateObj) && !sub.done) {
+                                    out.push({ kind: 'assignment', type: 'sub', title: sub.text, date: subDate, parent: a, color: '#a855f7' });
+                                }
+                            }
+                        });
+                    }
+                });
+                personalEvents.forEach(ev => {
+                    const occurrence = personalEventOccurrenceDate(ev, dateObj);
+                    if (occurrence) {
+                        out.push({ kind: 'personal', title: ev.title, date: occurrence, ref: ev, color: ev.color || '#60a5fa' });
+                    }
+                });
+                out.sort((x, y) => x.date - y.date);
+                return out;
+            };
+
+            const renderPmCalendar = () => {
+                const grid = document.getElementById('pm-cal-grid');
+                const label = document.getElementById('pm-cal-month-year');
+                if (!grid || !label) return;
+
+                const year = pmCalDate.getFullYear();
+                const month = pmCalDate.getMonth();
+                label.textContent = new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' }).format(pmCalDate);
+
+                const firstDayRaw = new Date(year, month, 1).getDay();
+                const firstDayIndex = firstDayRaw === 0 ? 6 : firstDayRaw - 1; // Mon-first
+                const daysInMonth = new Date(year, month + 1, 0).getDate();
+                const prevMonthLastDate = new Date(year, month, 0).getDate();
+                const today = new Date();
+                const selectedIsToday = isSameDay(pmSelectedDay, today);
+
+                grid.innerHTML = '';
+
+                const makeCell = (dateObj, inMonth) => {
+                    const cell = document.createElement('div');
+                    cell.className = 'pm-cal-day';
+                    if (!inMonth) cell.classList.add('other-month');
+                    if (isSameDay(dateObj, today)) {
+                        cell.classList.add('today');
+                        // Today gets darkened when the user has picked a different day
+                        if (!selectedIsToday) cell.classList.add('other-selected');
+                    }
+                    if (isSameDay(dateObj, pmSelectedDay)) cell.classList.add('selected');
+                    const dayEvents = eventsOnDay(dateObj);
+                    if (dayEvents.length > 0) {
+                        cell.classList.add('has-event');
+                        // Colour the dot after the first event (personal events keep their pick;
+                        // pure-assignment days stay red).
+                        const dotColor = dayEvents[0].color || '#f87171';
+                        cell.style.setProperty('--pm-dot-color', dotColor);
+                    }
+                    cell.textContent = dateObj.getDate();
+                    cell.addEventListener('click', () => {
+                        pmSelectedDay = dateObj;
+                        if (dateObj.getMonth() !== month || dateObj.getFullYear() !== year) {
+                            pmCalDate = new Date(dateObj.getFullYear(), dateObj.getMonth(), 1);
+                        }
+                        renderPmCalendar();
+                        renderPmDayEvents();
+                    });
+                    return cell;
+                };
+
+                // Leading spill from previous month
+                for (let i = firstDayIndex - 1; i >= 0; i--) {
+                    grid.appendChild(makeCell(new Date(year, month - 1, prevMonthLastDate - i), false));
+                }
+                // Current month
+                for (let d = 1; d <= daysInMonth; d++) {
+                    grid.appendChild(makeCell(new Date(year, month, d), true));
+                }
+                // Trailing spill into next month — pad to exactly 6 rows (42 cells) so
+                // the panel height doesn't jitter between months of different length.
+                let nextDay = 1;
+                while (grid.children.length < 42) {
+                    grid.appendChild(makeCell(new Date(year, month + 1, nextDay++), false));
+                }
+                syncPersonalPanelHeights();
+            };
+
+            const renderPmDayEvents = () => {
+                const container = document.getElementById('pm-cal-day-events');
+                const label = document.getElementById('pm-cal-selected-label');
+                if (!container || !label) return;
+
+                const today = new Date();
+                const nice = new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'long' }).format(pmSelectedDay);
+                label.textContent = isSameDay(pmSelectedDay, today) ? `Today · ${nice}` : nice;
+
+                const events = eventsOnDay(pmSelectedDay);
+                container.innerHTML = '';
+                if (events.length === 0) {
+                    container.innerHTML = '<p class="text-xs text-white/40 italic px-1">Nothing scheduled.</p>';
+                    return;
+                }
+                events.forEach(ev => {
+                    const row = document.createElement('div');
+                    row.className = 'pm-event-row' + (ev.kind === 'personal' ? ' pm-personal' : '');
+                    const hh = String(ev.date.getHours()).padStart(2, '0');
+                    const mm = String(ev.date.getMinutes()).padStart(2, '0');
+                    const allDay = ev.kind === 'personal' ? (!ev.ref.time) : (hh === '23' && mm === '59');
+                    const timeLabel = allDay ? 'All day' : `${hh}:${mm}`;
+                    const dotColor = ev.color || '#ef4444';
+                    const repeatText = ev.kind === 'personal' ? recurrenceSummary(ev.ref) : '';
+                    const repeatMark = repeatText ? '↻ ' : '';
+                    if (repeatText) row.title = repeatText;
+                    row.innerHTML = `
+                        <div class="pm-event-dot" style="background: ${dotColor}"></div>
+                        <div class="flex-1 truncate">${ev.type === 'sub' ? '<span class="opacity-50">↳</span> ' : ''}${escapeHtml(ev.title || '(untitled)')}</div>
+                        <div class="pm-event-time flex-shrink-0">${repeatMark}${timeLabel}</div>
+                    `;
+                    row.addEventListener('click', () => {
+                        if (ev.kind === 'personal') {
+                            openEventModal(ev.ref);
+                        } else {
+                            const target = ev.type === 'sub' ? ev.parent : ev.ref;
+                            if (target && typeof openAssignmentDetailModal === 'function') {
+                                openAssignmentDetailModal(target);
+                            }
+                        }
+                    });
+                    container.appendChild(row);
+                });
+            };
+
+            // Tiny HTML escape to keep event titles from breaking the DOM
+            const escapeHtml = (s) => String(s)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+            // -------- Next event counter (uses assignments + personal events) --------
+            const updatePmNextEvent = () => {
+                const now = new Date();
+                let next = null;
+
+                const src = (typeof assignments !== 'undefined') ? assignments : [];
+                src.forEach(a => {
+                    if (a.deadline && a.deadline.getTime() > now.getTime()) {
+                        if (!next || a.deadline < next) next = a.deadline;
+                    }
+                    if (a.subtasks) {
+                        a.subtasks.forEach(sub => {
+                            if (sub.deadline && !sub.done) {
+                                const sd = sub.deadline instanceof Date ? sub.deadline : new Date(sub.deadline);
+                                if (!isNaN(sd) && sd.getTime() > now.getTime()) {
+                                    if (!next || sd < next) next = sd;
+                                }
+                            }
+                        });
+                    }
+                });
+                personalEvents.forEach(ev => {
+                    const d = nextPersonalOccurrence(ev, now);
+                    if (d && d.getTime() > now.getTime()) {
+                        if (!next || d < next) next = d;
+                    }
+                });
+
+                const setPair = (txtId, circleId) => {
+                    const txt = document.getElementById(txtId);
+                    const circle = document.getElementById(circleId);
+                    if (!txt || !circle) return;
+                    if (!next) {
+                        txt.textContent = '--';
+                        circle.style.strokeDashoffset = 100.53;
+                        return;
+                    }
+                    const diffMs = next.getTime() - now.getTime();
+                    const daysLeft = Math.ceil(diffMs / 86400000);
+                    const hoursLeft = Math.ceil(diffMs / 3600000);
+                    txt.textContent = daysLeft >= 1 ? `${daysLeft}d` : `${hoursLeft}h`;
+                    const windowDays = 14;
+                    const pct = Math.max(0, Math.min(1, (windowDays - daysLeft) / windowDays));
+                    circle.style.strokeDashoffset = 100.53 - pct * 100.53;
+                };
+                setPair('pm-next-event-text', 'pm-next-event-circle');
+                setPair('pm2-next-event-text', 'pm2-next-event-circle');
+            };
+
+            // -------- Mirror the school Paga counter into the personal-mode duplicate --------
+            const mirrorCounters = () => {
+                const pagaSrcText = document.getElementById('paga-left-text');
+                const pagaSrcCircle = document.getElementById('paga-progress-circle');
+                const pagaDstText = document.getElementById('pm2-paga-text');
+                const pagaDstCircle = document.getElementById('pm2-paga-circle');
+                if (pagaSrcText && pagaDstText) pagaDstText.textContent = pagaSrcText.textContent;
+                if (pagaSrcCircle && pagaDstCircle) pagaDstCircle.style.strokeDashoffset = pagaSrcCircle.style.strokeDashoffset;
+            };
+
+            // -------- Event modal --------
+            let currentEditingEventId = null;
+            let currentPickedColor = EVENT_COLORS[0];
+
+            const buildColorPicker = () => {
+                const wrap = document.getElementById('pm-event-color-picker');
+                if (!wrap) return;
+                wrap.innerHTML = '';
+                EVENT_COLORS.forEach(c => {
+                    const sw = document.createElement('button');
+                    sw.type = 'button';
+                    sw.className = 'pm-color-swatch';
+                    sw.style.backgroundColor = c;
+                    sw.setAttribute('data-color', c);
+                    if (c === currentPickedColor) sw.classList.add('selected');
+                    sw.addEventListener('click', () => {
+                        currentPickedColor = c;
+                        wrap.querySelectorAll('.pm-color-swatch').forEach(s => s.classList.remove('selected'));
+                        sw.classList.add('selected');
+                    });
+                    wrap.appendChild(sw);
+                });
+            };
+
+            const syncRepeatControls = (setSmartDefaults = false) => {
+                const repeatEl = document.getElementById('pm-event-repeat');
+                const options = document.getElementById('pm-event-repeat-options');
+                const everyUnit = document.getElementById('pm-event-repeat-every-unit');
+                const durationUnit = document.getElementById('pm-event-repeat-duration-unit');
+                const endMode = document.getElementById('pm-event-repeat-end-mode');
+                const durationWrap = document.getElementById('pm-event-repeat-duration-wrap');
+                const untilWrap = document.getElementById('pm-event-repeat-until-wrap');
+                const durationInput = document.getElementById('pm-event-repeat-duration');
+                if (!repeatEl || !options) return;
+
+                const repeat = repeatEl.value;
+                const isRepeating = repeat !== 'none';
+                options.classList.toggle('hidden', !isRepeating);
+                const unit = repeat === 'weekly' ? 'week(s)' : 'day(s)';
+                if (everyUnit) everyUnit.textContent = unit;
+                if (durationUnit) durationUnit.textContent = unit;
+
+                if (setSmartDefaults && durationInput) {
+                    durationInput.value = repeat === 'weekly' ? '8' : '7';
+                }
+
+                const untilMode = endMode?.value === 'until';
+                durationWrap?.classList.toggle('hidden', untilMode);
+                untilWrap?.classList.toggle('hidden', !untilMode);
+            };
+
+            const openEventModal = (existing = null) => {
+                const modal = document.getElementById('pm-event-modal');
+                const title = document.getElementById('pm-event-modal-title');
+                const idInput = document.getElementById('pm-event-id');
+                const titleInput = document.getElementById('pm-event-title');
+                const dateInput = document.getElementById('pm-event-date');
+                const timeInput = document.getElementById('pm-event-time');
+                const notesInput = document.getElementById('pm-event-notes');
+                const repeatInput = document.getElementById('pm-event-repeat');
+                const repeatEveryInput = document.getElementById('pm-event-repeat-every');
+                const repeatEndModeInput = document.getElementById('pm-event-repeat-end-mode');
+                const repeatDurationInput = document.getElementById('pm-event-repeat-duration');
+                const repeatUntilInput = document.getElementById('pm-event-repeat-until');
+                const deleteBtn = document.getElementById('pm-event-delete-btn');
+                if (!modal) return;
+
+                if (existing) {
+                    currentEditingEventId = existing.id;
+                    title.textContent = 'Edit Event';
+                    idInput.value = existing.id;
+                    titleInput.value = existing.title || '';
+                    dateInput.value = existing.date || '';
+                    timeInput.value = existing.time || '';
+                    notesInput.value = existing.notes || '';
+                    repeatInput.value = existing.repeat || 'none';
+                    repeatEveryInput.value = String(Math.max(1, Number(existing.repeatEvery) || 1));
+                    repeatEndModeInput.value = existing.repeatEndMode || 'duration';
+                    repeatDurationInput.value = String(Math.max(1, Number(existing.repeatDuration) || (existing.repeat === 'weekly' ? 8 : 7)));
+                    repeatUntilInput.value = existing.repeatUntil || '';
+                    currentPickedColor = existing.color || EVENT_COLORS[0];
+                    deleteBtn.classList.remove('hidden');
+                } else {
+                    currentEditingEventId = null;
+                    title.textContent = 'New Event';
+                    idInput.value = '';
+                    titleInput.value = '';
+                    // Default date is whichever day is currently selected in the calendar
+                    const d = pmSelectedDay;
+                    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                    dateInput.value = iso;
+                    timeInput.value = '';
+                    notesInput.value = '';
+                    repeatInput.value = 'none';
+                    repeatEveryInput.value = '1';
+                    repeatEndModeInput.value = 'duration';
+                    repeatDurationInput.value = '7';
+                    repeatUntilInput.value = '';
+                    currentPickedColor = EVENT_COLORS[0];
+                    deleteBtn.classList.add('hidden');
+                }
+                if (repeatUntilInput) repeatUntilInput.min = dateInput.value || '';
+                syncRepeatControls(false);
+                buildColorPicker();
+                modal.classList.remove('opacity-0', 'pointer-events-none');
+                setTimeout(() => titleInput.focus(), 60);
+            };
+
+            const closeEventModal = () => {
+                const modal = document.getElementById('pm-event-modal');
+                if (modal) modal.classList.add('opacity-0', 'pointer-events-none');
+            };
+
+            const saveEventFromModal = () => {
+                const titleInput = document.getElementById('pm-event-title');
+                const dateInput = document.getElementById('pm-event-date');
+                const timeInput = document.getElementById('pm-event-time');
+                const notesInput = document.getElementById('pm-event-notes');
+                const repeatInput = document.getElementById('pm-event-repeat');
+                const repeatEveryInput = document.getElementById('pm-event-repeat-every');
+                const repeatEndModeInput = document.getElementById('pm-event-repeat-end-mode');
+                const repeatDurationInput = document.getElementById('pm-event-repeat-duration');
+                const repeatUntilInput = document.getElementById('pm-event-repeat-until');
+                const title = (titleInput.value || '').trim();
+                const date = dateInput.value;
+                if (!title) { titleInput.focus(); return; }
+                if (!date) { dateInput.focus(); return; }
+
+                const repeat = repeatInput?.value || 'none';
+                const repeatEvery = repeat === 'none' ? 1 : Math.max(1, parseInt(repeatEveryInput?.value || '1', 10) || 1);
+                const repeatEndMode = repeat === 'none' ? 'duration' : (repeatEndModeInput?.value || 'duration');
+                const repeatDuration = repeat === 'none' ? 1 : Math.max(1, parseInt(repeatDurationInput?.value || '1', 10) || 1);
+                const repeatUntil = repeat === 'none' ? '' : (repeatUntilInput?.value || '');
+                if (repeat !== 'none' && repeatEndMode === 'until' && !repeatUntil) {
+                    repeatUntilInput?.focus();
+                    return;
+                }
+                if (repeat !== 'none' && repeatEndMode === 'until') {
+                    const startDate = parseIsoDateOnly(date);
+                    const untilDate = parseIsoDateOnly(repeatUntil);
+                    if (startDate && untilDate && untilDate.getTime() < startDate.getTime()) {
+                        repeatUntilInput?.focus();
+                        return;
+                    }
+                }
+
+                const recurrence = { repeat, repeatEvery, repeatEndMode, repeatDuration, repeatUntil };
+
+                if (currentEditingEventId) {
+                    const idx = personalEvents.findIndex(e => e.id === currentEditingEventId);
+                    if (idx >= 0) {
+                        personalEvents[idx] = {
+                            ...personalEvents[idx],
+                            title, date, time: timeInput.value || '',
+                            color: currentPickedColor, notes: notesInput.value || '',
+                            ...recurrence
+                        };
+                    }
+                } else {
+                    personalEvents.push({
+                        id: 'pe_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+                        title, date, time: timeInput.value || '',
+                        color: currentPickedColor, notes: notesInput.value || '',
+                        ...recurrence
+                    });
+                }
+                savePersonalEvents();
+                closeEventModal();
+                // Jump the selected day to the event's date so the user sees it appear
+                const [y, m, d] = date.split('-').map(Number);
+                pmSelectedDay = new Date(y, m - 1, d);
+                if (pmCalDate.getMonth() !== m - 1 || pmCalDate.getFullYear() !== y) {
+                    pmCalDate = new Date(y, m - 1, 1);
+                }
+                renderPmCalendar();
+                renderPmDayEvents();
+                updatePmNextEvent();
+            };
+
+            const deleteEventFromModal = () => {
+                if (!currentEditingEventId) return;
+                personalEvents = personalEvents.filter(e => e.id !== currentEditingEventId);
+                savePersonalEvents();
+                closeEventModal();
+                renderPmCalendar();
+                renderPmDayEvents();
+                updatePmNextEvent();
+            };
+
+            // -------- Wire up on DOM ready --------
+            const initPersonalMode = () => {
+                loadPersonalEvents();
+
+                const toggleBtn = document.getElementById('menu-toggle-personal');
+                if (toggleBtn) {
+                    toggleBtn.addEventListener('click', () => {
+                        const next = !isPersonalMode();
+                        localStorage.setItem(PM_KEY, next ? '1' : '0');
+                        applyPersonalMode(next);
+                        if (typeof window.closeRadialMenu === 'function') window.closeRadialMenu();
+                    });
+                }
+                const prevBtn = document.getElementById('pm-cal-prev');
+                const nextBtn = document.getElementById('pm-cal-next');
+                const todayBtn = document.getElementById('pm-cal-today');
+                const addBtn = document.getElementById('pm-cal-add-event');
+                if (prevBtn) prevBtn.addEventListener('click', () => {
+                    pmCalDate = new Date(pmCalDate.getFullYear(), pmCalDate.getMonth() - 1, 1);
+                    renderPmCalendar();
+                });
+                if (nextBtn) nextBtn.addEventListener('click', () => {
+                    pmCalDate = new Date(pmCalDate.getFullYear(), pmCalDate.getMonth() + 1, 1);
+                    renderPmCalendar();
+                });
+                if (todayBtn) todayBtn.addEventListener('click', () => {
+                    const today = new Date();
+                    pmSelectedDay = today;
+                    pmCalDate = new Date(today.getFullYear(), today.getMonth(), 1);
+                    renderPmCalendar();
+                    renderPmDayEvents();
+                });
+                if (addBtn) addBtn.addEventListener('click', () => openEventModal(null));
+
+                // Event modal buttons
+                document.getElementById('pm-event-repeat')?.addEventListener('change', () => syncRepeatControls(true));
+                document.getElementById('pm-event-repeat-end-mode')?.addEventListener('change', () => syncRepeatControls(false));
+                document.getElementById('pm-event-date')?.addEventListener('change', () => {
+                    const untilInput = document.getElementById('pm-event-repeat-until');
+                    if (untilInput) untilInput.min = document.getElementById('pm-event-date').value || '';
+                });
+                document.getElementById('pm-event-cancel-btn')?.addEventListener('click', closeEventModal);
+                document.getElementById('pm-event-save-btn')?.addEventListener('click', saveEventFromModal);
+                document.getElementById('pm-event-delete-btn')?.addEventListener('click', deleteEventFromModal);
+                document.getElementById('pm-event-modal')?.addEventListener('click', (e) => {
+                    if (e.target === e.currentTarget) closeEventModal();
+                });
+                // Enter in title/date submits, Escape closes
+                document.getElementById('pm-event-modal')?.addEventListener('keydown', (e) => {
+                    if (e.key === 'Escape') closeEventModal();
+                    if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA') {
+                        e.preventDefault();
+                        saveEventFromModal();
+                    }
+                });
+
+                // Refresh greeting if the tab is left open across day parts
+                setInterval(updateGreeting, 60 * 1000);
+
+                // Restore saved mode
+                const saved = localStorage.getItem(PM_KEY) === '1';
+                applyPersonalMode(saved);
+
+                // Live updaters
+                setInterval(updatePmClocks, 1000);
+                setInterval(updatePmCountdown, 60 * 1000);
+                setInterval(updatePmNextEvent, 60 * 1000);
+                setInterval(() => {
+                    if (isPersonalMode()) {
+                        renderPmCalendar();
+                        renderPmDayEvents();
+                    }
+                }, 5 * 60 * 1000);
+                window.addEventListener('resize', syncPersonalPanelHeights);
+
+                // Hook into assignment updates so the personal-mode calendar and
+                // next-event counter stay in sync with the school data.
+                const origRender = window.renderAssignments;
+                if (typeof origRender === 'function') {
+                    window.renderAssignments = function (newAssignments) {
+                        origRender.apply(this, arguments);
+                        if (isPersonalMode()) {
+                            renderPmCalendar();
+                            renderPmDayEvents();
+                        }
+                        updatePmNextEvent();
+                    };
+                }
+            };
+
+            if (document.readyState === 'complete') {
+                initPersonalMode();
+            } else {
+                window.addEventListener('load', initPersonalMode);
+            }
+        })();
+    </script>
 
 </body>
 </html>
