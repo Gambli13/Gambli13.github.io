@@ -476,6 +476,11 @@
             color: rgba(255,255,255,0.68);
         }
         .pm-event-row:hover { background: rgba(255,255,255,0.1); }
+        .pm-event-row.pm-next-focus {
+            background: rgba(244,114,182,0.14);
+            border-color: rgba(244,114,182,0.55);
+            box-shadow: 0 0 0 2px rgba(244,114,182,0.12);
+        }
         .pm-event-dot {
             width: 14px;
             height: 3px;
@@ -2755,7 +2760,9 @@
                             <span class="text-[10px] text-white/50 uppercase tracking-wider mt-1">Paga</span>
                         </div>
 
-                        <div class="flex flex-col items-center" title="Next calendar event">
+                        <button type="button" id="pm2-next-event-button"
+                                class="flex flex-col items-center rounded-xl px-2 py-1 -mx-2 -my-1 hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-pink-300/60 transition-colors disabled:opacity-50 disabled:cursor-default"
+                                title="Go to the next calendar event" aria-label="Go to the next calendar event">
                             <div class="relative w-14 h-14">
                                 <svg viewBox="0 0 48 48" class="w-14 h-14 transform -rotate-90">
                                     <circle cx="24" cy="24" r="18" stroke="currentColor" stroke-width="3.5" fill="transparent" class="text-white/10" />
@@ -2766,7 +2773,7 @@
                                 </div>
                             </div>
                             <span class="text-[10px] text-white/50 uppercase tracking-wider mt-1">Next Event</span>
-                        </div>
+                        </button>
                     </div>
                 </div>
             </div>
@@ -3105,7 +3112,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 31/08/2026 - 08:29</div>
+    <div id="version-timestamp">Last Update 31/08/2026 - 09:27</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
@@ -3552,7 +3559,7 @@
                             if (sub.deadline) {
                                 const subDate = sub.deadline instanceof Date ? sub.deadline : new Date(sub.deadline);
                                 if (!isNaN(subDate) && isSameDay(subDate, dateObj) && !sub.done) {
-                                    out.push({ kind: 'assignment', type: 'sub', title: sub.text, date: subDate, parent: a, color: '#a855f7' });
+                                    out.push({ kind: 'assignment', type: 'sub', title: sub.text, date: subDate, parent: a, ref: sub, color: '#a855f7' });
                                 }
                             }
                         });
@@ -3655,6 +3662,12 @@
                 events.forEach(ev => {
                     const row = document.createElement('div');
                     row.className = 'pm-event-row' + (ev.kind === 'personal' ? ' pm-personal' : '');
+                    if (currentNextEventTarget &&
+                        ev.kind === currentNextEventTarget.kind &&
+                        ev.ref === currentNextEventTarget.ref &&
+                        isSameDay(ev.date, currentNextEventTarget.date)) {
+                        row.classList.add('pm-next-focus');
+                    }
                     const hh = String(ev.date.getHours()).padStart(2, '0');
                     const mm = String(ev.date.getMinutes()).padStart(2, '0');
                     const dotColor = ev.color || '#ef4444';
@@ -3723,33 +3736,44 @@
                 .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
             // -------- Next event counter (uses assignments + personal events) --------
+            let currentNextEventTarget = null;
+
             const updatePmNextEvent = () => {
                 const now = new Date();
                 let next = null;
+                let nextTarget = null;
+
+                const considerNext = (date, target) => {
+                    if (!date || isNaN(date.getTime()) || date.getTime() <= now.getTime()) return;
+                    if (!next || date < next) {
+                        next = date;
+                        nextTarget = { ...target, date };
+                    }
+                };
 
                 const src = (typeof assignments !== 'undefined') ? assignments : [];
                 src.forEach(a => {
-                    if (a.deadline && a.deadline.getTime() > now.getTime()) {
-                        if (!next || a.deadline < next) next = a.deadline;
+                    if (a.deadline) {
+                        const ad = a.deadline instanceof Date ? a.deadline : new Date(a.deadline);
+                        considerNext(ad, { kind: 'assignment', ref: a, parent: a, type: 'main', title: a.title || 'Assignment' });
                     }
                     if (a.subtasks) {
                         a.subtasks.forEach(sub => {
                             if (sub.deadline && !sub.done) {
                                 const sd = sub.deadline instanceof Date ? sub.deadline : new Date(sub.deadline);
-                                if (!isNaN(sd) && sd.getTime() > now.getTime()) {
-                                    if (!next || sd < next) next = sd;
-                                }
+                                considerNext(sd, { kind: 'assignment', ref: sub, parent: a, type: 'sub', title: sub.text || a.title || 'Assignment' });
                             }
                         });
                     }
                 });
+
                 personalEvents.forEach(ev => {
                     if (ev.feast) return; // Feasts remain visible on the calendar but do not drive this counter.
                     const d = nextPersonalOccurrence(ev, now);
-                    if (d && d.getTime() > now.getTime()) {
-                        if (!next || d < next) next = d;
-                    }
+                    considerNext(d, { kind: 'personal', ref: ev, title: ev.title || 'Event' });
                 });
+
+                currentNextEventTarget = nextTarget;
 
                 const setPair = (txtId, circleId) => {
                     const txt = document.getElementById(txtId);
@@ -3770,6 +3794,40 @@
                 };
                 setPair('pm-next-event-text', 'pm-next-event-circle');
                 setPair('pm2-next-event-text', 'pm2-next-event-circle');
+
+                const btn = document.getElementById('pm2-next-event-button');
+                if (btn) {
+                    btn.disabled = !currentNextEventTarget;
+                    const title = currentNextEventTarget
+                        ? `Go to: ${currentNextEventTarget.title}`
+                        : 'No upcoming calendar event';
+                    btn.title = title;
+                    btn.setAttribute('aria-label', title);
+                }
+            };
+
+            const goToCurrentNextEvent = () => {
+                const target = currentNextEventTarget;
+                if (!target || !target.date) return;
+
+                const d = new Date(target.date);
+                pmSelectedDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+                pmCalDate = new Date(d.getFullYear(), d.getMonth(), 1);
+                renderPmCalendar();
+                renderPmDayEvents();
+
+                const calendarPanel = document.getElementById('pm-calendar-panel');
+                if (calendarPanel) {
+                    calendarPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                }
+
+                requestAnimationFrame(() => {
+                    const focusedRow = document.querySelector('#pm-cal-day-events .pm-event-row.pm-next-focus');
+                    if (focusedRow) {
+                        focusedRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                        setTimeout(() => focusedRow.classList.remove('pm-next-focus'), 1800);
+                    }
+                });
             };
 
             // -------- Mirror the school Paga counter into the personal-mode duplicate --------
@@ -4036,6 +4094,7 @@
                     renderPmDayEvents();
                 });
                 if (addBtn) addBtn.addEventListener('click', () => openEventModal(null));
+                document.getElementById('pm2-next-event-button')?.addEventListener('click', goToCurrentNextEvent);
 
                 // Event modal buttons
                 document.getElementById('pm-event-repeat')?.addEventListener('change', () => syncRepeatControls(true));
