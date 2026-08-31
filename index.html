@@ -351,21 +351,61 @@
             box-shadow: 0 0 12px rgba(96,165,250,0.45);
             transform: scale(1.04);
         }
-        /* Event indicator at bottom — a short line is easier to notice than a dot. */
-        .pm-cal-day.has-event::after {
-            content: '';
+        /* Event indicators: show the two earliest events as stacked lines. */
+        .pm-cal-event-lines {
             position: absolute;
             bottom: 3px;
             left: 50%;
             transform: translateX(-50%);
             width: 55%;
             max-width: 20px;
-            height: 3px;
-            border-radius: 999px;
-            background-color: var(--pm-dot-color, #f87171);
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            pointer-events: none;
         }
-        .pm-cal-day.today.has-event::after,
-        .pm-cal-day.selected.has-event::after { background-color: #fff; }
+        .pm-cal-event-line {
+            display: block;
+            width: 100%;
+            height: 2.5px;
+            border-radius: 999px;
+            background: #f87171;
+        }
+        /* Feast-only list mode. */
+        .pm-feasts-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            max-height: 25rem;
+            overflow-y: auto;
+            padding-right: 0.25rem;
+        }
+        .pm-feast-list-row {
+            display: flex;
+            align-items: center;
+            gap: 0.7rem;
+            width: 100%;
+            text-align: left;
+            padding: 0.65rem 0.75rem;
+            border-radius: 0.7rem;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            color: rgba(255,255,255,0.95);
+            cursor: pointer;
+            transition: background-color 0.15s, border-color 0.15s, transform 0.15s;
+        }
+        .pm-feast-list-row:hover {
+            background: rgba(239,68,68,0.12);
+            border-color: rgba(248,113,113,0.35);
+        }
+        .pm-feast-list-date {
+            min-width: 3.2rem;
+            text-align: center;
+            font-size: 0.72rem;
+            font-weight: 800;
+            line-height: 1.05;
+            color: #fecaca;
+        }
 
         .pm-cal-weekday {
             font-family: 'Inter', sans-serif;
@@ -579,6 +619,19 @@
             background: rgba(255,255,255,0.06);
         }
         .pm-event-row.pm-personal:hover { background: rgba(255,255,255,0.12); }
+
+        .pm-event-row.pm-hardcoded-feast {
+            background: rgba(239,68,68,0.075);
+            border-color: rgba(248,113,113,0.2);
+            cursor: pointer;
+        }
+        .pm-event-row.pm-hardcoded-feast:hover { background: rgba(239,68,68,0.13); }
+        .pm-event-row.pm-public-holiday {
+            background: rgba(52,211,153,0.075);
+            border-color: rgba(52,211,153,0.2);
+            cursor: pointer;
+        }
+        .pm-event-row.pm-public-holiday:hover { background: rgba(52,211,153,0.13); }
 
     </style>
 
@@ -2548,7 +2601,11 @@
                         <span data-lucide="chevron-left" class="w-4 h-4"></span>
                     </button>
                     <h2 class="text-lg font-bold text-white flex items-center">
-                        <span data-lucide="calendar-days" class="w-5 h-5 mr-2 text-blue-400"></span>
+                        <button type="button" id="pm-cal-mode-toggle"
+                                class="p-1 -ml-1 mr-1 rounded-lg hover:bg-white/10 transition-colors"
+                                title="Show all 2026 feasts" aria-label="Show all 2026 feasts">
+                            <span id="pm-cal-mode-icon" data-lucide="calendar-days" class="w-5 h-5 text-blue-400"></span>
+                        </button>
                         <span id="pm-cal-month-year">Month Year</span>
                     </h2>
                     <button id="pm-cal-next" class="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-white transition-colors" title="Next month">
@@ -2556,7 +2613,7 @@
                     </button>
                 </div>
 
-                <div class="flex justify-between items-center mb-3">
+                <div id="pm-cal-toolbar" class="flex justify-between items-center mb-3">
                     <button id="pm-cal-today" class="pm-cal-tool-btn" title="Jump to today">
                         <span data-lucide="locate-fixed" class="w-3.5 h-3.5"></span>
                         Today
@@ -2578,7 +2635,8 @@
                 </div>
                 <div id="pm-cal-grid" class="grid grid-cols-7 gap-1"></div>
 
-                <div class="mt-4 pt-3 border-t border-white/10">
+
+                <div id="pm-cal-day-events-section" class="mt-4 pt-3 border-t border-white/10">
                     <p class="text-xs font-semibold uppercase tracking-wider text-white/65 mb-2" id="pm-cal-selected-label">Today's events</p>
                     <div id="pm-cal-day-events" class="space-y-2 h-40 overflow-y-auto scroll-container pr-1"></div>
                 </div>
@@ -2795,6 +2853,7 @@
             <input type="hidden" id="pm-event-id">
             <div class="space-y-3">
                 <input type="text" id="pm-event-title" placeholder="Event title" class="w-full p-3 rounded-xl bg-gray-700 text-white placeholder-gray-400 border border-gray-600 focus:border-blue-500 outline-none transition-colors">
+                <div id="pm-event-hardcoded-meta" class="hidden p-3 rounded-xl bg-white/5 border border-white/10 text-xs text-white/65 leading-relaxed"></div>
 
                 <div class="space-y-2">
                     <label class="pm-repeat-label">Starts</label>
@@ -2821,12 +2880,12 @@
                     </span>
                 </label>
 
-                <div>
+                <div id="pm-event-color-section">
                     <label class="block text-white/70 text-xs font-semibold uppercase tracking-wider mb-2">Color</label>
                     <div id="pm-event-color-picker" class="flex gap-2 flex-wrap"></div>
                 </div>
 
-                <div class="border-t border-white/10 pt-3">
+                <div id="pm-event-repeat-section" class="border-t border-white/10 pt-3">
                     <label class="pm-repeat-label" for="pm-event-repeat">Repeat</label>
                     <select id="pm-event-repeat" class="w-full p-3 rounded-xl bg-gray-700 text-white border border-gray-600 focus:border-blue-500 outline-none">
                         <option value="none">Does not repeat</option>
@@ -3112,7 +3171,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 31/08/2026 - 09:27</div>
+    <div id="version-timestamp">Last Update 31/08/2026 - 12:40</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
@@ -3141,6 +3200,7 @@
         (function () {
             const PM_KEY = 'personalMode';
             const PM_EVENTS_KEY = 'personalEvents';
+            const HARDCODED_OVERRIDES_KEY = 'hardcodedEventOverrides2026';
             // Girlfriend's return date — Dec 18 (year auto-picked so it always looks ahead)
             const RETURN_MONTH = 11; // Dec (0-indexed)
             const RETURN_DAY = 18;
@@ -3157,6 +3217,1520 @@
                 '#22d3ee', // cyan
                 '#fb923c', // orange
             ];
+
+            // -------- Hardcoded 2026 calendar reference events --------
+            // These are code-defined only: they do NOT live in localStorage, so replacing
+            // the HTML automatically updates them without touching the user's own events.
+            // Hardcoded feasts are always treated as feasts and never drive Next Event.
+            const HARDCODED_FEASTS_2026 = [
+                {
+                                "id": "feast-2026-2026-01-18-1",
+                                "date": "2026-01-18",
+                                "title": "Il-Konverżjoni ta' San Pawl",
+                                "location": "Mdina",
+                                "phone": "21456620",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-01-31-2",
+                                "date": "2026-01-31",
+                                "title": "Il-Familja Mqaddsa",
+                                "location": "Iklin",
+                                "phone": "79972444 / 21423003",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-02-01-3",
+                                "date": "2026-02-01",
+                                "title": "Il-Konverżjoni ta' San Pawl",
+                                "location": "Birkirkara (St Helen)",
+                                "phone": "21444725",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-02-10-4",
+                                "date": "2026-02-10",
+                                "title": "San Pawl",
+                                "location": "St Paul’s Bay",
+                                "phone": "21579266 / 99457234",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-02-10-5",
+                                "date": "2026-02-10",
+                                "title": "In-Nawfraġju ta' San Pawl",
+                                "location": "Valletta (St Paul)",
+                                "phone": "21223348 / 79081904",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-02-22-6",
+                                "date": "2026-02-22",
+                                "title": "San Franġisk u Santa Ġaċinta Marto",
+                                "location": "Gwardamanġa",
+                                "phone": "21220050",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-03-06-7",
+                                "date": "2026-03-06",
+                                "title": "Ġesù Nazzarenu",
+                                "location": "Tas-Sliema (Jesus the Nazarene)",
+                                "phone": "21316191",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-03-19-8",
+                                "date": "2026-03-19",
+                                "title": "San Ġużepp",
+                                "location": "Rabat (Ta’ Ġieżu)",
+                                "phone": "21454594 / 77001930",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-03-27-9",
+                                "date": "2026-03-27",
+                                "title": "Id-Duluri",
+                                "location": "St Paul’s Bay",
+                                "phone": "21579266 / 99457234",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-03-30-10",
+                                "date": "2026-03-30",
+                                "title": "Ir-Redentur",
+                                "location": "St Paul’s Bay",
+                                "phone": "21579266 / 99457234",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-04-05-11",
+                                "date": "2026-04-05",
+                                "title": "Kristu Rxoxt",
+                                "location": "Pembroke",
+                                "phone": "21372740",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-04-19-12",
+                                "date": "2026-04-19",
+                                "title": "San Publju",
+                                "location": "Floriana",
+                                "phone": "21247106",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-05-01-13",
+                                "date": "2026-05-01",
+                                "title": "San Ġużepp Ħaddiem",
+                                "location": "Birkirkara (St Joseph the Worker)",
+                                "phone": "21483245",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-05-02-14",
+                                "date": "2026-05-02",
+                                "title": "San Vinċenz Ferreri",
+                                "location": "Valletta (St Dominic)",
+                                "phone": "21247535",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-05-03-15",
+                                "date": "2026-05-03",
+                                "title": "Is-Salib Imqaddes",
+                                "location": "Birkirkara (St Helen)",
+                                "phone": "21444725",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-05-03-16",
+                                "date": "2026-05-03",
+                                "title": "San Ġużepp",
+                                "location": "Ħamrun (St Cajetan)",
+                                "phone": "21238593",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-05-03-17",
+                                "date": "2026-05-03",
+                                "title": "San Ġużepp",
+                                "location": "Mellieħa",
+                                "phone": "21523449",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-05-09-18",
+                                "date": "2026-05-09",
+                                "title": "San Ġorġ Preca",
+                                "location": "Swatar",
+                                "phone": "21498757",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-05-10-19",
+                                "date": "2026-05-10",
+                                "title": "San Ġużepp",
+                                "location": "Birkirkara (St Helen)",
+                                "phone": "21444725",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-05-13-20",
+                                "date": "2026-05-13",
+                                "title": "Pellegrinaġġ tal-Ewwel Dehra",
+                                "location": "Gwardamanġa",
+                                "phone": "21220050",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-05-17-21",
+                                "date": "2026-05-17",
+                                "title": "Sant'Antnin",
+                                "location": "Birkirkara (St Helen)",
+                                "phone": "21444724",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-05-18-22",
+                                "date": "2026-05-18",
+                                "title": "Il-Lunzjata",
+                                "location": "Gudja",
+                                "phone": "79030801",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-05-21-23",
+                                "date": "2026-05-21",
+                                "title": "Santa Rita",
+                                "location": "Birkirkara (St Helen)",
+                                "phone": "21444725",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-05-22-24",
+                                "date": "2026-05-22",
+                                "title": "Santa Rita",
+                                "location": "Valletta (St Augustine)",
+                                "phone": "79286785",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-05-24-25",
+                                "date": "2026-05-24",
+                                "title": "Sant'Antnin",
+                                "location": "Ghajnsielem",
+                                "phone": "21554615",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-05-24-26",
+                                "date": "2026-05-24",
+                                "title": "It-Transitu ta' San Duminku",
+                                "location": "Tas-Sliema (Jesus the Nazarene)",
+                                "phone": "21316191",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-05-29-27",
+                                "date": "2026-05-29",
+                                "title": "Il-Madonna tad-Duttrina",
+                                "location": "Birkirkara (St Helen)",
+                                "phone": "21444725",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-05-31-28",
+                                "date": "2026-05-31",
+                                "title": "San Pawl",
+                                "location": "Munxar",
+                                "phone": "21553764",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-06-07-29",
+                                "date": "2026-06-07",
+                                "title": "Corpus Christi",
+                                "location": "Għasri",
+                                "phone": "27033256",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-06-07-30",
+                                "date": "2026-06-07",
+                                "title": "Corpus Christi",
+                                "location": "Gwardamanġa",
+                                "phone": "21220050",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-06-07-31",
+                                "date": "2026-06-07",
+                                "title": "Il-Madonna ta' Fatima",
+                                "location": "Gwardamanġa",
+                                "phone": "21220050",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-06-07-32",
+                                "date": "2026-06-07",
+                                "title": "San Ġużepp",
+                                "location": "Ħal Għaxaq",
+                                "phone": "21667825",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-06-07-33",
+                                "date": "2026-06-07",
+                                "title": "Il-Lunzjata",
+                                "location": "Ħal Tarxien",
+                                "phone": "21828153",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-06-14-34",
+                                "date": "2026-06-14",
+                                "title": "Il-Qalb ta' Ġesù",
+                                "location": "Fontana",
+                                "phone": "21556097",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-06-14-35",
+                                "date": "2026-06-14",
+                                "title": "San Filep ta' Agira",
+                                "location": "Ħaż-Żebbuġ",
+                                "phone": "21460800",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-06-14-36",
+                                "date": "2026-06-14",
+                                "title": "It-Trinità Qaddisa",
+                                "location": "Marsa (Holy Trinity)",
+                                "phone": "21246516",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-06-21-37",
+                                "date": "2026-06-21",
+                                "title": "Il-Madonna tal-Ġilju",
+                                "location": "Mqabba",
+                                "phone": "21649306",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-06-21-38",
+                                "date": "2026-06-21",
+                                "title": "Corpus Christi",
+                                "location": "Rabat",
+                                "phone": "21454467",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-06-21-39",
+                                "date": "2026-06-21",
+                                "title": "San Ġwann Battista",
+                                "location": "Xewkija",
+                                "phone": "21556793",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-06-21-40",
+                                "date": "2026-06-21",
+                                "title": "Santa Katerina",
+                                "location": "Żejtun",
+                                "phone": "21694563",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-06-28-41",
+                                "date": "2026-06-28",
+                                "title": "Il-Qalb Bla Tebgħa ta' Marija",
+                                "location": "Burmarrad",
+                                "phone": "77622275 / 21573045",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-06-28-42",
+                                "date": "2026-06-28",
+                                "title": "San Ġorġ",
+                                "location": "Ħal Qormi (St George)",
+                                "phone": "21492997",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-06-28-43",
+                                "date": "2026-06-28",
+                                "title": "Il-Madonna ta' Lourdes",
+                                "location": "Qrendi",
+                                "phone": "21649395",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-06-28-44",
+                                "date": "2026-06-28",
+                                "title": "San Nikola ta' Bari",
+                                "location": "Siġġiewi",
+                                "phone": "21460827",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-06-29-45",
+                                "date": "2026-06-29",
+                                "title": "San Pietru u San Pawl",
+                                "location": "Nadur",
+                                "phone": "21551649",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-07-05-46",
+                                "date": "2026-07-05",
+                                "title": "Il-Madonna tal-Karmnu",
+                                "location": "Fleur-de-Lys",
+                                "phone": "21441769",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-07-05-47",
+                                "date": "2026-07-05",
+                                "title": "Il-Viżitazzjoni tal-Madonna",
+                                "location": "Għarb",
+                                "phone": "21556129",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-07-05-48",
+                                "date": "2026-07-05",
+                                "title": "Sant'Andrija",
+                                "location": "Ħal Luqa",
+                                "phone": "21809310",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-07-05-49",
+                                "date": "2026-07-05",
+                                "title": "Il-Kunċizzjoni",
+                                "location": "Ħamrun (Immaculate Conception)",
+                                "phone": "21232643",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-07-05-50",
+                                "date": "2026-07-05",
+                                "title": "San Pawl",
+                                "location": "Rabat",
+                                "phone": "21454467",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-07-05-51",
+                                "date": "2026-07-05",
+                                "title": "Il-Madonna tal-Qalb ta' Ġesù",
+                                "location": "Tas-Sliema (Sacro Cuor)",
+                                "phone": "99240433 / 21313505",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-07-12-52",
+                                "date": "2026-07-12",
+                                "title": "Il-Madonna tal-Karmnu",
+                                "location": "Fgura",
+                                "phone": "21661745 / 21827900",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-07-12-53",
+                                "date": "2026-07-12",
+                                "title": "Il-Madonna tal-Karmnu",
+                                "location": "Gżira",
+                                "phone": "21335841",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-07-12-54",
+                                "date": "2026-07-12",
+                                "title": "Il-Lunzjata",
+                                "location": "Ħal Balzan",
+                                "phone": "21448630",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-07-12-55",
+                                "date": "2026-07-12",
+                                "title": "San Ġużepp",
+                                "location": "Ħal Kirkop",
+                                "phone": "99296042",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-07-12-56",
+                                "date": "2026-07-12",
+                                "title": "Il-Madonna tad-Duttrina",
+                                "location": "Ħal Tarxien",
+                                "phone": "21828153",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-07-12-57",
+                                "date": "2026-07-12",
+                                "title": "Il-Madonna tas-Sokkors",
+                                "location": "Ta’ Kerċem",
+                                "phone": "21551355",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-07-16-58",
+                                "date": "2026-07-16",
+                                "title": "Il-Madonna tal-Karmnu",
+                                "location": "Valletta",
+                                "phone": "21233808",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-07-19-59",
+                                "date": "2026-07-19",
+                                "title": "San Bastjan",
+                                "location": "Ħal Qormi (St Sebastian)",
+                                "phone": "21486350",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-07-19-60",
+                                "date": "2026-07-19",
+                                "title": "San Ġużepp",
+                                "location": "Kalkara",
+                                "phone": "21826438 / 79201361",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-07-19-61",
+                                "date": "2026-07-19",
+                                "title": "Il-Familja Mqaddsa",
+                                "location": "Mosta",
+                                "phone": "21433826",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-07-19-62",
+                                "date": "2026-07-19",
+                                "title": "San Ġużepp",
+                                "location": "Msida",
+                                "phone": "21334949",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-07-19-63",
+                                "date": "2026-07-19",
+                                "title": "San Ġorġ",
+                                "location": "Victoria",
+                                "phone": "21556377",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-07-26-64",
+                                "date": "2026-07-26",
+                                "title": "Il-Madonna tal-Karmnu",
+                                "location": "Balluta",
+                                "phone": "21344306",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-07-26-65",
+                                "date": "2026-07-26",
+                                "title": "San Ġużepp",
+                                "location": "Ħaż-Żebbuġ",
+                                "phone": "21460800",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-07-26-66",
+                                "date": "2026-07-26",
+                                "title": "Sant'Anna",
+                                "location": "Marsaskala",
+                                "phone": "21636704",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-07-26-67",
+                                "date": "2026-07-26",
+                                "title": "Kristu Re",
+                                "location": "Paola (Christ the King)",
+                                "phone": "21695022",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-07-26-68",
+                                "date": "2026-07-26",
+                                "title": "Santa Venera",
+                                "location": "Santa Venera",
+                                "phone": "21482851",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-07-26-69",
+                                "date": "2026-07-26",
+                                "title": "Marija Addolorata",
+                                "location": "St Paul’s Bay",
+                                "phone": "21579266 / 99457234",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-07-26-70",
+                                "date": "2026-07-26",
+                                "title": "Santa Margerita",
+                                "location": "Ta’ Sannat",
+                                "phone": "21551435 / 79316964",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-07-26-71",
+                                "date": "2026-07-26",
+                                "title": "Il-Madonna tal-Karmnu",
+                                "location": "Żurrieq",
+                                "phone": "79729252",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-02-72",
+                                "date": "2026-08-02",
+                                "title": "San Pietru fil-Ktajjen",
+                                "location": "Birżebbuġa",
+                                "phone": "21651200",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-02-73",
+                                "date": "2026-08-02",
+                                "title": "Il-Madonna ta' Pompei",
+                                "location": "Marsaxlokk",
+                                "phone": "21650662",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-02-74",
+                                "date": "2026-08-02",
+                                "title": "San Ġużepp",
+                                "location": "Qala",
+                                "phone": "21556684",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-02-75",
+                                "date": "2026-08-02",
+                                "title": "Il-Madonna ta' Lourdes",
+                                "location": "San Ġwann",
+                                "phone": "21386112",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-02-76",
+                                "date": "2026-08-02",
+                                "title": "San Duminku",
+                                "location": "Valletta (St Dominic)",
+                                "phone": "21247535",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-06-77",
+                                "date": "2026-08-06",
+                                "title": "Kristu Salvatur",
+                                "location": "Ħal Lija",
+                                "phone": "21442553 / 79907969",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-09-78",
+                                "date": "2026-08-09",
+                                "title": "San Massimiljanu Kolbe",
+                                "location": "Buġibba",
+                                "phone": "27577088",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-09-79",
+                                "date": "2026-08-09",
+                                "title": "San Gejtanu",
+                                "location": "Ħamrun (St Cajetan)",
+                                "phone": "21238593",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-09-80",
+                                "date": "2026-08-09",
+                                "title": "San Lawrenz",
+                                "location": "San Lawrenz",
+                                "phone": "21556073",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-10-81",
+                                "date": "2026-08-10",
+                                "title": "San Lawrenz",
+                                "location": "Vittoriosa",
+                                "phone": "21827057",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-15-82",
+                                "date": "2026-08-15",
+                                "title": "Santa Marija",
+                                "location": "Birkirkara (St Mary)",
+                                "phone": "21448026",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-15-83",
+                                "date": "2026-08-15",
+                                "title": "Santa Marija",
+                                "location": "Gudja",
+                                "phone": "79030801",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-15-84",
+                                "date": "2026-08-15",
+                                "title": "Santa Marija",
+                                "location": "Ħ’Attard",
+                                "phone": "21434949",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-15-85",
+                                "date": "2026-08-15",
+                                "title": "Santa Marija",
+                                "location": "Ħal Għaxaq",
+                                "phone": "21667825",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-15-86",
+                                "date": "2026-08-15",
+                                "title": "Santa Marija",
+                                "location": "Mosta",
+                                "phone": "21433826",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-15-87",
+                                "date": "2026-08-15",
+                                "title": "Santa Marija",
+                                "location": "Mqabba",
+                                "phone": "21649306",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-15-88",
+                                "date": "2026-08-15",
+                                "title": "Santa Marija",
+                                "location": "Qrendi",
+                                "phone": "21649395",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-15-89",
+                                "date": "2026-08-15",
+                                "title": "Santa Marija",
+                                "location": "Victoria",
+                                "phone": "21554101",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-23-90",
+                                "date": "2026-08-23",
+                                "title": "Santa Liena",
+                                "location": "Birkirkara (St Helen)",
+                                "phone": "21444725",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-23-91",
+                                "date": "2026-08-23",
+                                "title": "Santa Marija",
+                                "location": "Ħad-Dingli",
+                                "phone": "21455738",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-23-92",
+                                "date": "2026-08-23",
+                                "title": "Santa Marija",
+                                "location": "Mġarr, Malta",
+                                "phone": "21572578",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-23-93",
+                                "date": "2026-08-23",
+                                "title": "Il-Madonna ta' Lourdes",
+                                "location": "Paola (Our Lady of Lourdes)",
+                                "phone": "21695081",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-23-94",
+                                "date": "2026-08-23",
+                                "title": "San Piju X",
+                                "location": "Santa Luċija",
+                                "phone": "21828931",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-23-95",
+                                "date": "2026-08-23",
+                                "title": "Stella Maris",
+                                "location": "Tas-Sliema (Stella Maris)",
+                                "phone": "21334941",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-23-96",
+                                "date": "2026-08-23",
+                                "title": "Santa Marija",
+                                "location": "Żebbuġ, Gozo",
+                                "phone": "21554882",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-30-97",
+                                "date": "2026-08-30",
+                                "title": "Il-Madonna ta' Loreto",
+                                "location": "Għajnsielem",
+                                "phone": "21554615",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-30-98",
+                                "date": "2026-08-30",
+                                "title": "San Bartilmew",
+                                "location": "Ħal Għargħur",
+                                "phone": "21411853",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-30-99",
+                                "date": "2026-08-30",
+                                "title": "Il-Konverżjoni ta' San Pawl",
+                                "location": "Ħal Safi",
+                                "phone": "21649223",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-30-100",
+                                "date": "2026-08-30",
+                                "title": "San Ġużepp",
+                                "location": "Manikata",
+                                "phone": "21575679",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-30-101",
+                                "date": "2026-08-30",
+                                "title": "Marija Reġina",
+                                "location": "Marsa (Marija Reġina)",
+                                "phone": "99332199",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-30-102",
+                                "date": "2026-08-30",
+                                "title": "San Ġiljan",
+                                "location": "St Julian’s",
+                                "phone": "21380270",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-08-30-103",
+                                "date": "2026-08-30",
+                                "title": "San Duminku",
+                                "location": "Vittoriosa",
+                                "phone": "21827057",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-09-05-104",
+                                "date": "2026-09-05",
+                                "title": "Il-Madonna tal-Konsolazzjoni",
+                                "location": "Valletta (St Augustine)",
+                                "phone": "79286785",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-09-06-105",
+                                "date": "2026-09-06",
+                                "title": "San Franġisk t'Assisi",
+                                "location": "Qawra",
+                                "phone": "21577088",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-09-06-106",
+                                "date": "2026-09-06",
+                                "title": "San Girgor il-Kbir",
+                                "location": "Tas-Sliema (St Gregory)",
+                                "phone": "21330740",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-09-06-107",
+                                "date": "2026-09-06",
+                                "title": "Il-Madonna tal-Karmnu",
+                                "location": "Xlendi",
+                                "phone": "21554611 / 21564288",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-09-06-108",
+                                "date": "2026-09-06",
+                                "title": "Santa Katerina",
+                                "location": "Żurrieq",
+                                "phone": "79729252",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-09-08-109",
+                                "date": "2026-09-08",
+                                "title": "Marija Bambina",
+                                "location": "Mellieħa",
+                                "phone": "21523449",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-09-08-110",
+                                "date": "2026-09-08",
+                                "title": "Marija Bambina",
+                                "location": "Naxxar",
+                                "phone": "21435376",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-09-08-111",
+                                "date": "2026-09-08",
+                                "title": "Marija Bambina",
+                                "location": "Senglea",
+                                "phone": "21827203",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-09-08-112",
+                                "date": "2026-09-08",
+                                "title": "Marija Bambina",
+                                "location": "Xagħra",
+                                "phone": "21551042",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-09-13-113",
+                                "date": "2026-09-13",
+                                "title": "Il-Madonna tal-Grazzja",
+                                "location": "Ħaż-Żabbar",
+                                "phone": "21824383",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-09-20-114",
+                                "date": "2026-09-20",
+                                "title": "San Leonardu",
+                                "location": "Ħal Kirkop",
+                                "phone": "99296042",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-09-20-115",
+                                "date": "2026-09-20",
+                                "title": "Santu Wistin",
+                                "location": "Valletta (St Augustine)",
+                                "phone": "79286785",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-09-20-116",
+                                "date": "2026-09-20",
+                                "title": "Il-Madonna tal-Grazzja",
+                                "location": "Victoria",
+                                "phone": "21556608",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-09-27-117",
+                                "date": "2026-09-27",
+                                "title": "L-Istimmati ta' San Franġisk t'Assisi",
+                                "location": "Marsa (Holy Trinity)",
+                                "phone": "21246516",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-09-27-118",
+                                "date": "2026-09-27",
+                                "title": "Il-Madonna tal-Mellieħa",
+                                "location": "Mellieħa",
+                                "phone": "21523449",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-10-04-119",
+                                "date": "2026-10-04",
+                                "title": "Il-Madonna tar-Rużarju",
+                                "location": "Gudja",
+                                "phone": "79030801",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-10-04-120",
+                                "date": "2026-10-04",
+                                "title": "Il-Madonna tar-Rużarju",
+                                "location": "Mellieħa",
+                                "phone": "21523449",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-10-04-121",
+                                "date": "2026-10-04",
+                                "title": "Il-Madonna tar-Rużarju",
+                                "location": "Tas-Sliema (Jesus the Nazarene)",
+                                "phone": "21316191",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-10-10-122",
+                                "date": "2026-10-10",
+                                "title": "Il-Madonna tar-Rużarju",
+                                "location": "Marsa (Holy Trinity)",
+                                "phone": "21246516",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-10-10-123",
+                                "date": "2026-10-10",
+                                "title": "Il-Madonna tar-Rużarju",
+                                "location": "Valletta (St Dominic)",
+                                "phone": "21247535",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-10-11-124",
+                                "date": "2026-10-11",
+                                "title": "San Franġisk t'Assisi",
+                                "location": "Tas-Sliema (Sacro Cuor)",
+                                "phone": "99240433 / 21313505",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-10-13-125",
+                                "date": "2026-10-13",
+                                "title": "Pellegrinaġġ tal-Aħħar Dehra",
+                                "location": "Gwardamanġa",
+                                "phone": "21220050",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-10-25-126",
+                                "date": "2026-10-25",
+                                "title": "Il-Madonna tal-Konsolazzjoni",
+                                "location": "Gudja",
+                                "phone": "79030801",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-11-15-127",
+                                "date": "2026-11-15",
+                                "title": "San Ġwann tas-Salib",
+                                "location": "Ta’ Xbiex",
+                                "phone": "21317001 / 21332280",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-12-08-128",
+                                "date": "2026-12-08",
+                                "title": "Il-Kunċizzjoni",
+                                "location": "Cospicua",
+                                "phone": "21828413",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-12-08-129",
+                                "date": "2026-12-08",
+                                "title": "Il-Kunċizzjoni",
+                                "location": "Ħamrun (Immaculate Conception)",
+                                "phone": "21232643",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-12-08-130",
+                                "date": "2026-12-08",
+                                "title": "Il-Kunċizzjoni",
+                                "location": "Mqabba",
+                                "phone": "21649306",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-12-08-131",
+                                "date": "2026-12-08",
+                                "title": "Marija Immakulata, Omm il-Knisja",
+                                "location": "Tal-Ibraġ",
+                                "phone": "21370196",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-12-13-132",
+                                "date": "2026-12-13",
+                                "title": "Il-Madonna ta' Loreto",
+                                "location": "Gudja",
+                                "phone": "79030801",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-12-13-133",
+                                "date": "2026-12-13",
+                                "title": "Santa Luċija",
+                                "location": "Mtarfa",
+                                "phone": "21454234",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                },
+                {
+                                "id": "feast-2026-2026-12-13-134",
+                                "date": "2026-12-13",
+                                "title": "Il-Madonna tal-Istennija",
+                                "location": "St Paul’s Bay",
+                                "phone": "21579266 / 99457234",
+                                "feast": true,
+                                "hardcoded": true,
+                                "color": "#ef4444"
+                }
+];
+
+            // Official Malta public/national holidays for 2026.
+            // These are displayed as calendar reference events and are intentionally
+            // excluded from Next Event as well, so that counter remains focused on the
+            // user's own events and assignments.
+            const HARDCODED_PUBLIC_HOLIDAYS_2026 = [
+                {
+                                "id": "holiday-2026-01-01",
+                                "date": "2026-01-01",
+                                "title": "L-Ewwel tas-Sena",
+                                "publicHoliday": true,
+                                "hardcoded": true,
+                                "color": "#34d399"
+                },
+                {
+                                "id": "holiday-2026-02-10",
+                                "date": "2026-02-10",
+                                "title": "In-Nawfraġju ta' San Pawl",
+                                "publicHoliday": true,
+                                "hardcoded": true,
+                                "color": "#34d399"
+                },
+                {
+                                "id": "holiday-2026-03-19",
+                                "date": "2026-03-19",
+                                "title": "San Ġużepp",
+                                "publicHoliday": true,
+                                "hardcoded": true,
+                                "color": "#34d399"
+                },
+                {
+                                "id": "holiday-2026-03-31",
+                                "date": "2026-03-31",
+                                "title": "Jum il-Ħelsien",
+                                "publicHoliday": true,
+                                "hardcoded": true,
+                                "color": "#34d399"
+                },
+                {
+                                "id": "holiday-2026-04-03",
+                                "date": "2026-04-03",
+                                "title": "Il-Ġimgħa l-Kbira",
+                                "publicHoliday": true,
+                                "hardcoded": true,
+                                "color": "#34d399"
+                },
+                {
+                                "id": "holiday-2026-05-01",
+                                "date": "2026-05-01",
+                                "title": "Jum il-Ħaddiem",
+                                "publicHoliday": true,
+                                "hardcoded": true,
+                                "color": "#34d399"
+                },
+                {
+                                "id": "holiday-2026-06-07",
+                                "date": "2026-06-07",
+                                "title": "Sette Giugno",
+                                "publicHoliday": true,
+                                "hardcoded": true,
+                                "color": "#34d399"
+                },
+                {
+                                "id": "holiday-2026-06-29",
+                                "date": "2026-06-29",
+                                "title": "L-Imnarja · San Pietru u San Pawl",
+                                "publicHoliday": true,
+                                "hardcoded": true,
+                                "color": "#34d399"
+                },
+                {
+                                "id": "holiday-2026-08-15",
+                                "date": "2026-08-15",
+                                "title": "Santa Marija",
+                                "publicHoliday": true,
+                                "hardcoded": true,
+                                "color": "#34d399"
+                },
+                {
+                                "id": "holiday-2026-09-08",
+                                "date": "2026-09-08",
+                                "title": "Jum il-Vitorja",
+                                "publicHoliday": true,
+                                "hardcoded": true,
+                                "color": "#34d399"
+                },
+                {
+                                "id": "holiday-2026-09-21",
+                                "date": "2026-09-21",
+                                "title": "Jum l-Indipendenza",
+                                "publicHoliday": true,
+                                "hardcoded": true,
+                                "color": "#34d399"
+                },
+                {
+                                "id": "holiday-2026-12-08",
+                                "date": "2026-12-08",
+                                "title": "Il-Kunċizzjoni",
+                                "publicHoliday": true,
+                                "hardcoded": true,
+                                "color": "#34d399"
+                },
+                {
+                                "id": "holiday-2026-12-13",
+                                "date": "2026-12-13",
+                                "title": "Jum ir-Repubblika",
+                                "publicHoliday": true,
+                                "hardcoded": true,
+                                "color": "#34d399"
+                },
+                {
+                                "id": "holiday-2026-12-25",
+                                "date": "2026-12-25",
+                                "title": "Il-Milied",
+                                "publicHoliday": true,
+                                "hardcoded": true,
+                                "color": "#34d399"
+                }
+];
+
+            const HARDCODED_2026_EVENTS = [
+                ...HARDCODED_FEASTS_2026,
+                ...HARDCODED_PUBLIC_HOLIDAYS_2026
+            ];
+
+            // Official dates/categories are code-defined. Optional user edits such as notes,
+            // title and time are stored separately in localStorage and merged at runtime.
+            let hardcodedEventOverrides = {};
+            let pmFeastsMode = false;
+            let pmNormalCalDateBeforeFeasts = null;
+            let pmNormalSelectedDayBeforeFeasts = null;
+
+            const loadHardcodedEventOverrides = () => {
+                try {
+                    const raw = localStorage.getItem(HARDCODED_OVERRIDES_KEY);
+                    hardcodedEventOverrides = raw ? JSON.parse(raw) : {};
+                    if (!hardcodedEventOverrides || Array.isArray(hardcodedEventOverrides) || typeof hardcodedEventOverrides !== 'object') {
+                        hardcodedEventOverrides = {};
+                    }
+                } catch (e) {
+                    hardcodedEventOverrides = {};
+                }
+            };
+
+            const saveHardcodedEventOverrides = () => {
+                try {
+                    localStorage.setItem(HARDCODED_OVERRIDES_KEY, JSON.stringify(hardcodedEventOverrides));
+                } catch (e) {
+                    console.warn('Failed to save hardcoded 2026 event notes', e);
+                }
+            };
+
+            const effectiveHardcodedEvent = (base) => {
+                const override = hardcodedEventOverrides[base.id] || {};
+                return {
+                    ...base,
+                    title: override.title || base.title,
+                    time: override.time || '',
+                    endTime: override.endTime || '',
+                    notes: override.notes || '',
+                    date: base.date,
+                    feast: Boolean(base.feast),
+                    publicHoliday: Boolean(base.publicHoliday),
+                    hardcoded: true,
+                    color: base.feast ? '#ef4444' : '#34d399'
+                };
+            };
 
             const getReturnDate = () => {
                 const now = new Date();
@@ -3546,10 +5120,44 @@
                 a.getMonth() === b.getMonth() &&
                 a.getFullYear() === b.getFullYear();
 
-            // Aggregates BOTH school assignments and personal events for a given date
+            // Returns the entries that belong on one mini-calendar day.
+            // Normal mode intentionally excludes the hardcoded feast list, while Feast mode
+            // uses the very same calendar UI and shows the complete 2026 feast calendar,
+            // including feasts that have already happened earlier in the year.
             const eventsOnDay = (dateObj) => {
-                const src = (typeof assignments !== 'undefined') ? assignments : [];
                 const out = [];
+
+                if (pmFeastsMode) {
+                    const targetDay = dateOnly(dateObj);
+
+                    HARDCODED_FEASTS_2026.forEach(base => {
+                        const ev = effectiveHardcodedEvent(base);
+                        const d = parseIsoDateOnly(ev.date);
+                        if (!d || !isSameDay(d, targetDay)) return;
+
+                        let startHH = 0, startMM = 0;
+                        if (ev.time) [startHH, startMM] = ev.time.split(':').map(Number);
+                        let endHH = 23, endMM = 59;
+                        if (ev.endTime) [endHH, endMM] = ev.endTime.split(':').map(Number);
+                        else if (ev.time) [endHH, endMM] = [startHH, startMM];
+
+                        out.push({
+                            kind: 'hardcoded',
+                            subtype: 'feast',
+                            title: ev.title,
+                            date: new Date(d.getFullYear(), d.getMonth(), d.getDate(), startHH || 0, startMM || 0, 0, 0),
+                            endDate: new Date(d.getFullYear(), d.getMonth(), d.getDate(), endHH || 0, endMM || 0, 59, 999),
+                            ref: ev,
+                            color: '#ef4444'
+                        });
+                    });
+
+                    out.sort((x, y) => x.date - y.date);
+                    return out;
+                }
+
+                // Normal personal calendar: school assignments/subtasks + personal events.
+                const src = (typeof assignments !== 'undefined') ? assignments : [];
                 src.forEach(a => {
                     if (a.deadline && isSameDay(a.deadline, dateObj)) {
                         out.push({ kind: 'assignment', type: 'main', title: a.title, date: a.deadline, ref: a, color: '#ef4444' });
@@ -3565,6 +5173,7 @@
                         });
                     }
                 });
+
                 personalEvents.forEach(ev => {
                     const occurrence = personalEventOccurrenceForDay(ev, dateObj);
                     if (occurrence) {
@@ -3575,8 +5184,71 @@
                         });
                     }
                 });
+
+                // All 2026 public holidays — including those earlier in the year — stay on the
+                // normal calendar in green. The hardcoded feast list is deliberately NOT
+                // added here; it only appears in Feast mode.
+                HARDCODED_PUBLIC_HOLIDAYS_2026.forEach(base => {
+                    const ev = effectiveHardcodedEvent(base);
+                    const d = parseIsoDateOnly(ev.date);
+                    if (!d || !isSameDay(d, dateObj)) return;
+
+                    let startHH = 0, startMM = 0;
+                    if (ev.time) [startHH, startMM] = ev.time.split(':').map(Number);
+                    let endHH = 23, endMM = 59;
+                    if (ev.endTime) [endHH, endMM] = ev.endTime.split(':').map(Number);
+                    else if (ev.time) [endHH, endMM] = [startHH, startMM];
+
+                    out.push({
+                        kind: 'hardcoded',
+                        subtype: 'public-holiday',
+                        title: ev.title,
+                        date: new Date(d.getFullYear(), d.getMonth(), d.getDate(), startHH || 0, startMM || 0, 0, 0),
+                        endDate: new Date(d.getFullYear(), d.getMonth(), d.getDate(), endHH || 0, endMM || 0, 59, 999),
+                        ref: ev,
+                        color: '#34d399'
+                    });
+                });
+
                 out.sort((x, y) => x.date - y.date);
                 return out;
+            };
+
+            const nextUpcomingHardcodedFeast = () => {
+                const now = new Date();
+                const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                return HARDCODED_FEASTS_2026
+                    .map(base => ({ ev: effectiveHardcodedEvent(base), date: parseIsoDateOnly(base.date) }))
+                    .filter(x => x.date && x.date.getTime() >= today.getTime())
+                    .sort((a, b) => a.date - b.date)[0] || null;
+            };
+
+            const setCalendarModeUi = () => {
+                const toggle = document.getElementById('pm-cal-mode-toggle');
+                const icon = document.getElementById('pm-cal-mode-icon');
+                const addBtn = document.getElementById('pm-cal-add-event');
+
+                // Keep the same month navigation, weekday grid, day cells and selected-day
+                // event area in both modes. Only the data source changes.
+                if (toggle) {
+                    const title = pmFeastsMode ? 'Return to personal calendar' : 'Show all 2026 feasts';
+                    toggle.title = title;
+                    toggle.setAttribute('aria-label', title);
+                    toggle.classList.toggle('bg-red-500/15', pmFeastsMode);
+                }
+                if (icon) {
+                    icon.setAttribute('data-lucide', pmFeastsMode ? 'calendar' : 'calendar-days');
+                    icon.classList.toggle('text-red-300', pmFeastsMode);
+                    icon.classList.toggle('text-blue-400', !pmFeastsMode);
+                }
+                if (addBtn) {
+                    addBtn.disabled = pmFeastsMode;
+                    addBtn.classList.toggle('opacity-35', pmFeastsMode);
+                    addBtn.classList.toggle('cursor-not-allowed', pmFeastsMode);
+                    addBtn.title = pmFeastsMode
+                        ? 'Switch back to the personal calendar to add an event'
+                        : 'Add an event to the selected day';
+                }
             };
 
             const renderPmCalendar = () => {
@@ -3584,12 +5256,14 @@
                 const label = document.getElementById('pm-cal-month-year');
                 if (!grid || !label) return;
 
+                setCalendarModeUi();
+
                 const year = pmCalDate.getFullYear();
                 const month = pmCalDate.getMonth();
                 label.textContent = new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' }).format(pmCalDate);
 
                 const firstDayRaw = new Date(year, month, 1).getDay();
-                const firstDayIndex = firstDayRaw === 0 ? 6 : firstDayRaw - 1; // Mon-first
+                const firstDayIndex = firstDayRaw === 0 ? 6 : firstDayRaw - 1;
                 const daysInMonth = new Date(year, month + 1, 0).getDate();
                 const prevMonthLastDate = new Date(year, month, 0).getDate();
                 const today = new Date();
@@ -3603,19 +5277,29 @@
                     if (!inMonth) cell.classList.add('other-month');
                     if (isSameDay(dateObj, today)) {
                         cell.classList.add('today');
-                        // Today gets darkened when the user has picked a different day
                         if (!selectedIsToday) cell.classList.add('other-selected');
                     }
                     if (isSameDay(dateObj, pmSelectedDay)) cell.classList.add('selected');
+
                     const dayEvents = eventsOnDay(dateObj);
+                    if (dayEvents.length > 0) cell.classList.add('has-event');
+
+                    const dayNumber = document.createElement('span');
+                    dayNumber.textContent = dateObj.getDate();
+                    cell.appendChild(dayNumber);
+
                     if (dayEvents.length > 0) {
-                        cell.classList.add('has-event');
-                        // Colour the event line after the first event (personal events keep their pick;
-                        // pure-assignment days stay red).
-                        const dotColor = dayEvents[0].color || '#f87171';
-                        cell.style.setProperty('--pm-dot-color', dotColor);
+                        const lines = document.createElement('span');
+                        lines.className = 'pm-cal-event-lines';
+                        dayEvents.slice(0, 2).forEach(ev => {
+                            const line = document.createElement('span');
+                            line.className = 'pm-cal-event-line';
+                            line.style.backgroundColor = ev.color || '#f87171';
+                            lines.appendChild(line);
+                        });
+                        cell.appendChild(lines);
                     }
-                    cell.textContent = dateObj.getDate();
+
                     cell.addEventListener('click', () => {
                         pmSelectedDay = dateObj;
                         if (dateObj.getMonth() !== month || dateObj.getFullYear() !== year) {
@@ -3627,20 +5311,17 @@
                     return cell;
                 };
 
-                // Leading spill from previous month
                 for (let i = firstDayIndex - 1; i >= 0; i--) {
                     grid.appendChild(makeCell(new Date(year, month - 1, prevMonthLastDate - i), false));
                 }
-                // Current month
                 for (let d = 1; d <= daysInMonth; d++) {
                     grid.appendChild(makeCell(new Date(year, month, d), true));
                 }
-                // Trailing spill into next month — pad to exactly 6 rows (42 cells) so
-                // the panel height doesn't jitter between months of different length.
                 let nextDay = 1;
                 while (grid.children.length < 42) {
                     grid.appendChild(makeCell(new Date(year, month + 1, nextDay++), false));
                 }
+                if (window.lucide) window.lucide.createIcons();
                 syncPersonalPanelHeights();
             };
 
@@ -3656,12 +5337,17 @@
                 const events = eventsOnDay(pmSelectedDay);
                 container.innerHTML = '';
                 if (events.length === 0) {
-                    container.innerHTML = '<p class="text-xs text-white/40 italic px-1">Nothing scheduled.</p>';
+                    container.innerHTML = pmFeastsMode
+                        ? '<p class="text-xs text-white/40 italic px-1">L-ebda festa skedata f’dan il-jum.</p>'
+                        : '<p class="text-xs text-white/40 italic px-1">Nothing scheduled.</p>';
                     return;
                 }
                 events.forEach(ev => {
                     const row = document.createElement('div');
                     row.className = 'pm-event-row' + (ev.kind === 'personal' ? ' pm-personal' : '');
+                    if (ev.kind === 'hardcoded') {
+                        row.classList.add(ev.subtype === 'feast' ? 'pm-hardcoded-feast' : 'pm-public-holiday');
+                    }
                     if (currentNextEventTarget &&
                         ev.kind === currentNextEventTarget.kind &&
                         ev.ref === currentNextEventTarget.ref &&
@@ -3673,9 +5359,17 @@
                     const dotColor = ev.color || '#ef4444';
                     const repeatText = ev.kind === 'personal' ? recurrenceSummary(ev.ref) : '';
                     const repeatMark = repeatText ? '↻ ' : '';
-                    const feastMark = ev.kind === 'personal' && ev.ref.feast
-                        ? '<span class="ml-1 text-[9px] font-bold uppercase tracking-wider text-amber-200/90">Feast</span>'
-                        : '';
+                    const isFeastEntry = (ev.kind === 'personal' && ev.ref.feast) ||
+                        (ev.kind === 'hardcoded' && ev.ref.feast);
+                    const isPublicHoliday = ev.kind === 'hardcoded' && ev.ref.publicHoliday;
+                    const feastMark = isFeastEntry
+                        ? '<span class="ml-1 text-[9px] font-bold uppercase tracking-wider text-red-200/90">Festa</span>'
+                        : (isPublicHoliday
+                            ? '<span class="ml-1 text-[9px] font-bold uppercase tracking-wider text-emerald-200/90">Festa Pubblika</span>'
+                            : '');
+                    const displayTitle = ev.kind === 'hardcoded' && ev.ref.location
+                        ? `${ev.title} · ${ev.ref.location}${ev.ref.notes ? ' · 📝' : ''}`
+                        : ev.title;
 
                     let timeLabel;
                     if (ev.kind === 'personal') {
@@ -3702,6 +5396,19 @@
                         } else {
                             timeLabel = 'All day';
                         }
+                    } else if (ev.kind === 'hardcoded') {
+                        const hasStartTime = Boolean(ev.ref.time);
+                        const hasEndTime = Boolean(ev.ref.endTime);
+                        const endHH = String(ev.endDate.getHours()).padStart(2, '0');
+                        const endMM = String(ev.endDate.getMinutes()).padStart(2, '0');
+                        if (!hasStartTime && !hasEndTime) {
+                            timeLabel = 'All day';
+                        } else {
+                            const startText = hasStartTime ? `${hh}:${mm}` : '00:00';
+                            timeLabel = hasEndTime && ev.endDate.getTime() > ev.date.getTime()
+                                ? `${startText}–${endHH}:${endMM}`
+                                : startText;
+                        }
                     } else {
                         const allDay = hh === '23' && mm === '59';
                         timeLabel = allDay ? 'All day' : `${hh}:${mm}`;
@@ -3710,14 +5417,25 @@
                     const titleBits = [];
                     if (repeatText) titleBits.push(repeatText);
                     if (ev.kind === 'personal' && ev.ref.feast) titleBits.push('Feast — excluded from the Next Event countdown');
+                    if (ev.kind === 'hardcoded' && ev.ref.feast) {
+                        titleBits.push(`Festa 2026${ev.ref.location ? ` · ${ev.ref.location}` : ''}${ev.ref.phone ? ` · Kuntatt: ${ev.ref.phone}` : ''}`);
+                    }
+                    if (ev.kind === 'hardcoded' && ev.ref.publicHoliday) {
+                        titleBits.push('Festa pubblika/nazzjonali ta’ Malta · 2026');
+                    }
+                    if (ev.kind === 'hardcoded' && ev.ref.notes) {
+                        titleBits.push(`Noti: ${ev.ref.notes}`);
+                    }
                     if (titleBits.length) row.title = titleBits.join(' · ');
                     row.innerHTML = `
                         <div class="pm-event-dot" style="background: ${dotColor}"></div>
-                        <div class="flex-1 min-w-0 truncate">${ev.type === 'sub' ? '<span class="opacity-50">↳</span> ' : ''}${escapeHtml(ev.title || '(untitled)')}${feastMark}</div>
+                        <div class="flex-1 min-w-0 truncate">${ev.type === 'sub' ? '<span class="opacity-50">↳</span> ' : ''}${escapeHtml(displayTitle || '(untitled)')}${feastMark}</div>
                         <div class="pm-event-time flex-shrink-0">${repeatMark}${timeLabel}</div>
                     `;
                     row.addEventListener('click', () => {
                         if (ev.kind === 'personal') {
+                            openEventModal(ev.ref);
+                        } else if (ev.kind === 'hardcoded') {
                             openEventModal(ev.ref);
                         } else {
                             const target = ev.type === 'sub' ? ev.parent : ev.ref;
@@ -3735,7 +5453,7 @@
                 .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
                 .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
-            // -------- Next event counter (uses assignments + personal events) --------
+            // -------- Next event counter (user assignments + user-created personal events only) --------
             let currentNextEventTarget = null;
 
             const updatePmNextEvent = () => {
@@ -3811,6 +5529,7 @@
                 if (!target || !target.date) return;
 
                 const d = new Date(target.date);
+                pmFeastsMode = false;
                 pmSelectedDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
                 pmCalDate = new Date(d.getFullYear(), d.getMonth(), 1);
                 renderPmCalendar();
@@ -3842,6 +5561,7 @@
 
             // -------- Event modal --------
             let currentEditingEventId = null;
+            let currentEditingHardcodedId = null;
             let currentPickedColor = EVENT_COLORS[0];
 
             const buildColorPicker = () => {
@@ -3908,9 +5628,61 @@
                 const repeatDurationInput = document.getElementById('pm-event-repeat-duration');
                 const repeatUntilInput = document.getElementById('pm-event-repeat-until');
                 const deleteBtn = document.getElementById('pm-event-delete-btn');
+                const colorSection = document.getElementById('pm-event-color-section');
+                const repeatSection = document.getElementById('pm-event-repeat-section');
+                const meta = document.getElementById('pm-event-hardcoded-meta');
                 if (!modal) return;
 
-                if (existing) {
+                dateInput.disabled = false;
+                endDateInput.disabled = false;
+                feastInput.disabled = false;
+                colorSection?.classList.remove('hidden');
+                repeatSection?.classList.remove('hidden');
+                meta?.classList.add('hidden');
+                if (meta) meta.innerHTML = '';
+
+                const isHardcoded = Boolean(existing?.hardcoded);
+
+                if (isHardcoded) {
+                    currentEditingEventId = null;
+                    currentEditingHardcodedId = existing.id;
+                    title.textContent = existing.feast ? 'Edit Feast' : 'Edit Public Holiday';
+                    idInput.value = existing.id;
+                    titleInput.value = existing.title || '';
+                    dateInput.value = existing.date || '';
+                    timeInput.value = existing.time || '';
+                    endDateInput.value = existing.date || '';
+                    endTimeInput.value = existing.endTime || '';
+                    feastInput.checked = Boolean(existing.feast);
+                    feastInput.disabled = true;
+                    notesInput.value = existing.notes || '';
+
+                    repeatInput.value = 'none';
+                    repeatEveryInput.value = '1';
+                    repeatEndModeInput.value = 'duration';
+                    repeatDurationInput.value = '1';
+                    repeatUntilInput.value = '';
+
+                    currentPickedColor = existing.feast ? '#ef4444' : '#34d399';
+
+                    dateInput.disabled = true;
+                    endDateInput.disabled = true;
+                    colorSection?.classList.add('hidden');
+                    repeatSection?.classList.add('hidden');
+                    deleteBtn.classList.add('hidden');
+
+                    if (meta) {
+                        const bits = [
+                            existing.feast ? 'Festa 2026' : 'Festa Pubblika 2026',
+                            existing.location || '',
+                            existing.phone ? `Kuntatt: ${existing.phone}` : '',
+                            'Id-data hija hardcoded u ma tistax tinbidel.'
+                        ].filter(Boolean);
+                        meta.textContent = bits.join(' · ');
+                        meta.classList.remove('hidden');
+                    }
+                } else if (existing) {
+                    currentEditingHardcodedId = null;
                     currentEditingEventId = existing.id;
                     title.textContent = 'Edit Event';
                     idInput.value = existing.id;
@@ -3929,11 +5701,11 @@
                     currentPickedColor = existing.color || EVENT_COLORS[0];
                     deleteBtn.classList.remove('hidden');
                 } else {
+                    currentEditingHardcodedId = null;
                     currentEditingEventId = null;
                     title.textContent = 'New Event';
                     idInput.value = '';
                     titleInput.value = '';
-                    // Default date is whichever day is currently selected in the calendar
                     const d = pmSelectedDay;
                     const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
                     dateInput.value = iso;
@@ -3950,10 +5722,13 @@
                     currentPickedColor = EVENT_COLORS[0];
                     deleteBtn.classList.add('hidden');
                 }
+
                 if (repeatUntilInput) repeatUntilInput.min = dateInput.value || '';
-                if (endDateInput) endDateInput.min = dateInput.value || '';
+                if (endDateInput && !isHardcoded) endDateInput.min = dateInput.value || '';
+
                 syncRepeatControls(false);
-                buildColorPicker();
+                if (!isHardcoded) buildColorPicker();
+
                 modal.classList.remove('opacity-0', 'pointer-events-none');
                 setTimeout(() => titleInput.focus(), 60);
             };
@@ -3984,6 +5759,23 @@
                 const feast = Boolean(feastInput?.checked);
                 if (!title) { titleInput.focus(); return; }
                 if (!date) { dateInput.focus(); return; }
+
+                if (currentEditingHardcodedId) {
+                    const base = HARDCODED_2026_EVENTS.find(e => e.id === currentEditingHardcodedId);
+                    if (!base) return;
+
+                    hardcodedEventOverrides[currentEditingHardcodedId] = {
+                        title,
+                        time,
+                        endTime,
+                        notes: notesInput.value || ''
+                    };
+                    saveHardcodedEventOverrides();
+                    closeEventModal();
+                    renderPmCalendar();
+                    renderPmDayEvents();
+                    return;
+                }
 
                 // Validate the optional end date/time before the event is stored.
                 const startForValidation = eventDateObj({ date, time });
@@ -4052,6 +5844,7 @@
             };
 
             const deleteEventFromModal = () => {
+                if (currentEditingHardcodedId) return;
                 if (!currentEditingEventId) return;
                 personalEvents = personalEvents.filter(e => e.id !== currentEditingEventId);
                 savePersonalEvents();
@@ -4064,6 +5857,7 @@
             // -------- Wire up on DOM ready --------
             const initPersonalMode = () => {
                 loadPersonalEvents();
+                loadHardcodedEventOverrides();
 
                 const toggleBtn = document.getElementById('menu-toggle-personal');
                 if (toggleBtn) {
@@ -4078,6 +5872,7 @@
                 const nextBtn = document.getElementById('pm-cal-next');
                 const todayBtn = document.getElementById('pm-cal-today');
                 const addBtn = document.getElementById('pm-cal-add-event');
+                const modeBtn = document.getElementById('pm-cal-mode-toggle');
                 if (prevBtn) prevBtn.addEventListener('click', () => {
                     pmCalDate = new Date(pmCalDate.getFullYear(), pmCalDate.getMonth() - 1, 1);
                     renderPmCalendar();
@@ -4094,6 +5889,24 @@
                     renderPmDayEvents();
                 });
                 if (addBtn) addBtn.addEventListener('click', () => openEventModal(null));
+                if (modeBtn) modeBtn.addEventListener('click', () => {
+                    if (!pmFeastsMode) {
+                        pmNormalCalDateBeforeFeasts = new Date(pmCalDate);
+                        pmNormalSelectedDayBeforeFeasts = new Date(pmSelectedDay);
+                        pmFeastsMode = true;
+
+                        // Stay on the same month/day when switching modes. This makes the
+                        // feast calendar behave exactly like the normal calendar and lets
+                        // the user browse backwards to feasts from earlier in 2026.
+                    } else {
+                        pmFeastsMode = false;
+                        if (pmNormalCalDateBeforeFeasts) pmCalDate = new Date(pmNormalCalDateBeforeFeasts);
+                        if (pmNormalSelectedDayBeforeFeasts) pmSelectedDay = new Date(pmNormalSelectedDayBeforeFeasts);
+                    }
+
+                    renderPmCalendar();
+                    renderPmDayEvents();
+                });
                 document.getElementById('pm2-next-event-button')?.addEventListener('click', goToCurrentNextEvent);
 
                 // Event modal buttons
