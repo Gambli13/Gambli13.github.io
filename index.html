@@ -351,16 +351,17 @@
             box-shadow: 0 0 12px rgba(96,165,250,0.45);
             transform: scale(1.04);
         }
-        /* Event dot at bottom */
+        /* Event indicator at bottom — a short line is easier to notice than a dot. */
         .pm-cal-day.has-event::after {
             content: '';
             position: absolute;
             bottom: 3px;
             left: 50%;
             transform: translateX(-50%);
-            width: 4px;
-            height: 4px;
-            border-radius: 50%;
+            width: 55%;
+            max-width: 20px;
+            height: 3px;
+            border-radius: 999px;
             background-color: var(--pm-dot-color, #f87171);
         }
         .pm-cal-day.today.has-event::after,
@@ -476,9 +477,9 @@
         }
         .pm-event-row:hover { background: rgba(255,255,255,0.1); }
         .pm-event-dot {
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
+            width: 14px;
+            height: 3px;
+            border-radius: 999px;
             background: #ef4444;
             flex-shrink: 0;
         }
@@ -2354,11 +2355,9 @@
                 document.addEventListener('click', (e) => { if (!e.target.closest('#custom-maps-dropdown-container')) customDropdownList.classList.add('hidden'); });
             }
 
-            document.getElementById('open-maps-btn').addEventListener('click', () => {
-                document.getElementById('maps-modal').classList.remove('opacity-0', 'pointer-events-none');
-                currentMapSelection = 'school'; document.getElementById('maps-destination-selected-text').textContent = MAP_DESTINATIONS['school'].name; isReversed = false; 
-                if(document.getElementById('reverse-map-btn')) document.getElementById('reverse-map-btn').classList.remove('text-blue-400');
-                window.triggerMapUpdate('school');
+            // The map-pin inside the search bar now opens Google Maps directly.
+            document.getElementById('open-maps-btn')?.addEventListener('click', () => {
+                window.open('https://www.google.com/maps', '_blank', 'noopener,noreferrer');
             });
 
             document.getElementById('reverse-map-btn').addEventListener('click', () => {
@@ -2602,7 +2601,7 @@
                         <span data-lucide="mail" class="w-5 h-5"></span>
                     </a>
                     
-                   <button type="button" id="open-maps-btn" title="Directions"
+                   <button type="button" id="open-maps-btn" title="Open Google Maps"
                     class="absolute right-12 top-1/2 transform -translate-y-1/2 text-gray-500 hover:text-green-600 transition-colors z-10">
                         <span data-lucide="map-pin" class="w-5 h-5"></span>
                     </button>
@@ -2789,10 +2788,32 @@
             <input type="hidden" id="pm-event-id">
             <div class="space-y-3">
                 <input type="text" id="pm-event-title" placeholder="Event title" class="w-full p-3 rounded-xl bg-gray-700 text-white placeholder-gray-400 border border-gray-600 focus:border-blue-500 outline-none transition-colors">
-                <div class="flex space-x-2">
-                    <input type="date" id="pm-event-date" class="w-1/2 p-3 rounded-xl bg-gray-700 text-white border border-gray-600 focus:border-blue-500 outline-none">
-                    <input type="time" id="pm-event-time" class="w-1/2 p-3 rounded-xl bg-gray-700 text-white border border-gray-600 focus:border-blue-500 outline-none" placeholder="Time (optional)">
+
+                <div class="space-y-2">
+                    <label class="pm-repeat-label">Starts</label>
+                    <div class="flex space-x-2">
+                        <input type="date" id="pm-event-date" class="w-1/2 p-3 rounded-xl bg-gray-700 text-white border border-gray-600 focus:border-blue-500 outline-none">
+                        <input type="time" id="pm-event-time" class="w-1/2 p-3 rounded-xl bg-gray-700 text-white border border-gray-600 focus:border-blue-500 outline-none" placeholder="Start time">
+                    </div>
                 </div>
+
+                <div class="space-y-2">
+                    <label class="pm-repeat-label">Ends</label>
+                    <div class="flex space-x-2">
+                        <input type="date" id="pm-event-end-date" class="w-1/2 p-3 rounded-xl bg-gray-700 text-white border border-gray-600 focus:border-blue-500 outline-none">
+                        <input type="time" id="pm-event-end-time" class="w-1/2 p-3 rounded-xl bg-gray-700 text-white border border-gray-600 focus:border-blue-500 outline-none" placeholder="End time">
+                    </div>
+                    <p class="pm-repeat-help">The event will also appear on any calendar days between its start and end dates.</p>
+                </div>
+
+                <label class="flex items-start gap-3 p-3 rounded-xl bg-gray-700/70 border border-gray-600 cursor-pointer" for="pm-event-feast">
+                    <input type="checkbox" id="pm-event-feast" class="mt-0.5 w-4 h-4 accent-blue-500">
+                    <span class="min-w-0">
+                        <span class="block text-sm font-semibold text-white">Feast</span>
+                        <span class="block text-xs text-white/55 mt-0.5">Show it on the calendar, but ignore it in the Next Event countdown.</span>
+                    </span>
+                </label>
+
                 <div>
                     <label class="block text-white/70 text-xs font-semibold uppercase tracking-wider mb-2">Color</label>
                     <div id="pm-event-color-picker" class="flex gap-2 flex-wrap"></div>
@@ -3084,7 +3105,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 31/08/2026 - 01:56</div>
+    <div id="version-timestamp">Last Update 31/08/2026 - 08:29</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
@@ -3142,7 +3163,7 @@
 
             let pmCalDate = new Date(); // month currently being viewed in the mini-calendar
             let pmSelectedDay = new Date(); // day whose events are listed below
-            let personalEvents = []; // [{id, title, date:'YYYY-MM-DD', time:'HH:MM'|'', color, notes}]
+            let personalEvents = []; // [{id, title, date, time, endDate, endTime, feast, color, notes, recurrence...}]
 
             // -------- Personal events storage --------
             const loadPersonalEvents = () => {
@@ -3169,6 +3190,45 @@
                     hh = parts[0] || 0; mm = parts[1] || 0;
                 }
                 return new Date(y, m - 1, d, hh, mm);
+            };
+
+            // Old saved events did not have an end date/time, so this deliberately
+            // falls back to the old single-time behaviour when those fields are absent.
+            const eventEndDateObj = (ev) => {
+                const start = eventDateObj(ev);
+                if (!start) return null;
+
+                const hasExplicitEnd = Boolean(ev.endDate || ev.endTime);
+                if (!hasExplicitEnd) {
+                    // A legacy all-day event occupies its full day; a legacy timed event
+                    // remains a point-in-time event until the user edits it and adds an end.
+                    if (!ev.time) return new Date(start.getFullYear(), start.getMonth(), start.getDate(), 23, 59, 59, 999);
+                    return new Date(start);
+                }
+
+                const endIso = ev.endDate || ev.date;
+                const [y, m, d] = endIso.split('-').map(Number);
+                let hh = 23, mm = 59;
+                if (ev.endTime) {
+                    const parts = ev.endTime.split(':').map(Number);
+                    hh = parts[0] || 0;
+                    mm = parts[1] || 0;
+                } else if (ev.time && endIso === ev.date) {
+                    // If the user chose an end date but left the end time blank on the
+                    // same day, keep it as a point at the start time rather than inventing a duration.
+                    const parts = ev.time.split(':').map(Number);
+                    hh = parts[0] || 0;
+                    mm = parts[1] || 0;
+                }
+                const end = new Date(y, m - 1, d, hh, mm);
+                return end.getTime() < start.getTime() ? new Date(start) : end;
+            };
+
+            const eventDurationMs = (ev) => {
+                const start = eventDateObj(ev);
+                const end = eventEndDateObj(ev);
+                if (!start || !end) return 0;
+                return Math.max(0, end.getTime() - start.getTime());
             };
 
             const dateOnly = (value) => {
@@ -3230,6 +3290,30 @@
                 }
                 const d = dateOnly(targetDate);
                 return new Date(d.getFullYear(), d.getMonth(), d.getDate(), hh, mm);
+            };
+
+            // Return the occurrence that covers targetDate. This lets a multi-day event
+            // draw an indicator on every day from its start date through its end date.
+            const personalEventOccurrenceForDay = (ev, targetDate) => {
+                const baseStart = eventDateObj(ev);
+                const baseEnd = eventEndDateObj(ev);
+                if (!baseStart || !baseEnd) return null;
+
+                const spanDays = Math.max(0, calendarDayDiff(dateOnly(baseStart), dateOnly(baseEnd)));
+                const target = dateOnly(targetDate);
+                for (let offset = 0; offset <= spanDays; offset++) {
+                    const candidateStartDay = new Date(target.getFullYear(), target.getMonth(), target.getDate() - offset);
+                    if (!personalEventOccursOn(ev, candidateStartDay)) continue;
+
+                    const occurrenceStart = personalEventOccurrenceDate(ev, candidateStartDay);
+                    if (!occurrenceStart) continue;
+                    const occurrenceEnd = new Date(occurrenceStart.getTime() + eventDurationMs(ev));
+                    const endDay = dateOnly(occurrenceEnd);
+                    if (target.getTime() >= dateOnly(occurrenceStart).getTime() && target.getTime() <= endDay.getTime()) {
+                        return { start: occurrenceStart, end: occurrenceEnd };
+                    }
+                }
+                return null;
             };
 
             const nextPersonalOccurrence = (ev, now = new Date()) => {
@@ -3475,9 +3559,13 @@
                     }
                 });
                 personalEvents.forEach(ev => {
-                    const occurrence = personalEventOccurrenceDate(ev, dateObj);
+                    const occurrence = personalEventOccurrenceForDay(ev, dateObj);
                     if (occurrence) {
-                        out.push({ kind: 'personal', title: ev.title, date: occurrence, ref: ev, color: ev.color || '#60a5fa' });
+                        out.push({
+                            kind: 'personal', title: ev.title,
+                            date: occurrence.start, endDate: occurrence.end,
+                            ref: ev, color: ev.color || '#60a5fa'
+                        });
                     }
                 });
                 out.sort((x, y) => x.date - y.date);
@@ -3515,7 +3603,7 @@
                     const dayEvents = eventsOnDay(dateObj);
                     if (dayEvents.length > 0) {
                         cell.classList.add('has-event');
-                        // Colour the dot after the first event (personal events keep their pick;
+                        // Colour the event line after the first event (personal events keep their pick;
                         // pure-assignment days stay red).
                         const dotColor = dayEvents[0].color || '#f87171';
                         cell.style.setProperty('--pm-dot-color', dotColor);
@@ -3569,15 +3657,50 @@
                     row.className = 'pm-event-row' + (ev.kind === 'personal' ? ' pm-personal' : '');
                     const hh = String(ev.date.getHours()).padStart(2, '0');
                     const mm = String(ev.date.getMinutes()).padStart(2, '0');
-                    const allDay = ev.kind === 'personal' ? (!ev.ref.time) : (hh === '23' && mm === '59');
-                    const timeLabel = allDay ? 'All day' : `${hh}:${mm}`;
                     const dotColor = ev.color || '#ef4444';
                     const repeatText = ev.kind === 'personal' ? recurrenceSummary(ev.ref) : '';
                     const repeatMark = repeatText ? '↻ ' : '';
-                    if (repeatText) row.title = repeatText;
+                    const feastMark = ev.kind === 'personal' && ev.ref.feast
+                        ? '<span class="ml-1 text-[9px] font-bold uppercase tracking-wider text-amber-200/90">Feast</span>'
+                        : '';
+
+                    let timeLabel;
+                    if (ev.kind === 'personal') {
+                        const occurrenceEnd = ev.endDate || ev.date;
+                        const selectedDay = dateOnly(pmSelectedDay);
+                        const startsToday = isSameDay(ev.date, selectedDay);
+                        const endsToday = isSameDay(occurrenceEnd, selectedDay);
+                        const hasStartTime = Boolean(ev.ref.time);
+                        const hasEndTime = Boolean(ev.ref.endTime);
+                        const endHH = String(occurrenceEnd.getHours()).padStart(2, '0');
+                        const endMM = String(occurrenceEnd.getMinutes()).padStart(2, '0');
+
+                        if (!hasStartTime && !hasEndTime) {
+                            timeLabel = 'All day';
+                        } else if (startsToday && endsToday) {
+                            const startText = hasStartTime ? `${hh}:${mm}` : '00:00';
+                            timeLabel = hasEndTime && occurrenceEnd.getTime() > ev.date.getTime()
+                                ? `${startText}–${endHH}:${endMM}`
+                                : startText;
+                        } else if (startsToday) {
+                            timeLabel = `${hasStartTime ? `${hh}:${mm}` : 'All day'} →`;
+                        } else if (endsToday) {
+                            timeLabel = hasEndTime ? `→ ${endHH}:${endMM}` : 'All day';
+                        } else {
+                            timeLabel = 'All day';
+                        }
+                    } else {
+                        const allDay = hh === '23' && mm === '59';
+                        timeLabel = allDay ? 'All day' : `${hh}:${mm}`;
+                    }
+
+                    const titleBits = [];
+                    if (repeatText) titleBits.push(repeatText);
+                    if (ev.kind === 'personal' && ev.ref.feast) titleBits.push('Feast — excluded from the Next Event countdown');
+                    if (titleBits.length) row.title = titleBits.join(' · ');
                     row.innerHTML = `
                         <div class="pm-event-dot" style="background: ${dotColor}"></div>
-                        <div class="flex-1 truncate">${ev.type === 'sub' ? '<span class="opacity-50">↳</span> ' : ''}${escapeHtml(ev.title || '(untitled)')}</div>
+                        <div class="flex-1 min-w-0 truncate">${ev.type === 'sub' ? '<span class="opacity-50">↳</span> ' : ''}${escapeHtml(ev.title || '(untitled)')}${feastMark}</div>
                         <div class="pm-event-time flex-shrink-0">${repeatMark}${timeLabel}</div>
                     `;
                     row.addEventListener('click', () => {
@@ -3621,6 +3744,7 @@
                     }
                 });
                 personalEvents.forEach(ev => {
+                    if (ev.feast) return; // Feasts remain visible on the calendar but do not drive this counter.
                     const d = nextPersonalOccurrence(ev, now);
                     if (d && d.getTime() > now.getTime()) {
                         if (!next || d < next) next = d;
@@ -3716,6 +3840,9 @@
                 const titleInput = document.getElementById('pm-event-title');
                 const dateInput = document.getElementById('pm-event-date');
                 const timeInput = document.getElementById('pm-event-time');
+                const endDateInput = document.getElementById('pm-event-end-date');
+                const endTimeInput = document.getElementById('pm-event-end-time');
+                const feastInput = document.getElementById('pm-event-feast');
                 const notesInput = document.getElementById('pm-event-notes');
                 const repeatInput = document.getElementById('pm-event-repeat');
                 const repeatEveryInput = document.getElementById('pm-event-repeat-every');
@@ -3732,6 +3859,9 @@
                     titleInput.value = existing.title || '';
                     dateInput.value = existing.date || '';
                     timeInput.value = existing.time || '';
+                    endDateInput.value = existing.endDate || existing.date || '';
+                    endTimeInput.value = existing.endTime || '';
+                    feastInput.checked = Boolean(existing.feast);
                     notesInput.value = existing.notes || '';
                     repeatInput.value = existing.repeat || 'none';
                     repeatEveryInput.value = String(Math.max(1, Number(existing.repeatEvery) || 1));
@@ -3750,6 +3880,9 @@
                     const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
                     dateInput.value = iso;
                     timeInput.value = '';
+                    endDateInput.value = iso;
+                    endTimeInput.value = '';
+                    feastInput.checked = false;
                     notesInput.value = '';
                     repeatInput.value = 'none';
                     repeatEveryInput.value = '1';
@@ -3760,6 +3893,7 @@
                     deleteBtn.classList.add('hidden');
                 }
                 if (repeatUntilInput) repeatUntilInput.min = dateInput.value || '';
+                if (endDateInput) endDateInput.min = dateInput.value || '';
                 syncRepeatControls(false);
                 buildColorPicker();
                 modal.classList.remove('opacity-0', 'pointer-events-none');
@@ -3775,6 +3909,9 @@
                 const titleInput = document.getElementById('pm-event-title');
                 const dateInput = document.getElementById('pm-event-date');
                 const timeInput = document.getElementById('pm-event-time');
+                const endDateInput = document.getElementById('pm-event-end-date');
+                const endTimeInput = document.getElementById('pm-event-end-time');
+                const feastInput = document.getElementById('pm-event-feast');
                 const notesInput = document.getElementById('pm-event-notes');
                 const repeatInput = document.getElementById('pm-event-repeat');
                 const repeatEveryInput = document.getElementById('pm-event-repeat-every');
@@ -3783,8 +3920,27 @@
                 const repeatUntilInput = document.getElementById('pm-event-repeat-until');
                 const title = (titleInput.value || '').trim();
                 const date = dateInput.value;
+                const time = timeInput.value || '';
+                const endDate = endDateInput.value || date;
+                const endTime = endTimeInput.value || '';
+                const feast = Boolean(feastInput?.checked);
                 if (!title) { titleInput.focus(); return; }
                 if (!date) { dateInput.focus(); return; }
+
+                // Validate the optional end date/time before the event is stored.
+                const startForValidation = eventDateObj({ date, time });
+                const [endY, endM, endD] = endDate.split('-').map(Number);
+                let endHH = 23, endMM = 59;
+                if (endTime) {
+                    [endHH, endMM] = endTime.split(':').map(Number);
+                } else if (time && endDate === date) {
+                    [endHH, endMM] = time.split(':').map(Number);
+                }
+                const endForValidation = new Date(endY, endM - 1, endD, endHH || 0, endMM || 0);
+                if (startForValidation && !isNaN(endForValidation) && endForValidation.getTime() < startForValidation.getTime()) {
+                    (endTime ? endTimeInput : endDateInput)?.focus();
+                    return;
+                }
 
                 const repeat = repeatInput?.value || 'none';
                 const repeatEvery = repeat === 'none' ? 1 : Math.max(1, parseInt(repeatEveryInput?.value || '1', 10) || 1);
@@ -3811,7 +3967,7 @@
                     if (idx >= 0) {
                         personalEvents[idx] = {
                             ...personalEvents[idx],
-                            title, date, time: timeInput.value || '',
+                            title, date, time, endDate, endTime, feast,
                             color: currentPickedColor, notes: notesInput.value || '',
                             ...recurrence
                         };
@@ -3819,7 +3975,7 @@
                 } else {
                     personalEvents.push({
                         id: 'pe_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
-                        title, date, time: timeInput.value || '',
+                        title, date, time, endDate, endTime, feast,
                         color: currentPickedColor, notes: notesInput.value || '',
                         ...recurrence
                     });
@@ -3885,8 +4041,14 @@
                 document.getElementById('pm-event-repeat')?.addEventListener('change', () => syncRepeatControls(true));
                 document.getElementById('pm-event-repeat-end-mode')?.addEventListener('change', () => syncRepeatControls(false));
                 document.getElementById('pm-event-date')?.addEventListener('change', () => {
+                    const startValue = document.getElementById('pm-event-date').value || '';
                     const untilInput = document.getElementById('pm-event-repeat-until');
-                    if (untilInput) untilInput.min = document.getElementById('pm-event-date').value || '';
+                    const endDateInput = document.getElementById('pm-event-end-date');
+                    if (untilInput) untilInput.min = startValue;
+                    if (endDateInput) {
+                        endDateInput.min = startValue;
+                        if (!endDateInput.value || endDateInput.value < startValue) endDateInput.value = startValue;
+                    }
                 });
                 document.getElementById('pm-event-cancel-btn')?.addEventListener('click', closeEventModal);
                 document.getElementById('pm-event-save-btn')?.addEventListener('click', saveEventFromModal);
