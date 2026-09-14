@@ -250,6 +250,8 @@
             } catch (e) { console.error("Error parsing deadline ISO:", e); return null; }
         }
 
+        let seedingLessons = false;
+
         const setupDataListeners = () => {
             if (!db || !userId) return;
 
@@ -315,6 +317,46 @@
                 window.renderNotesSidebar();
             });
 
+            // 6. Timetable lessons
+            onSnapshot(collection(db, getCollectionPath('lessons')), async (snapshot) => {
+                if (seedingLessons) return;
+
+                const lessons = [];
+                let hasSeedMarker = false;
+                snapshot.forEach(d => {
+                    if (d.id === '__seeded__') { hasSeedMarker = true; return; }
+                    lessons.push({ id: d.id, ...d.data() });
+                });
+
+                // First run on this account: push the built-in timetable into Firestore once.
+                if (!hasSeedMarker && lessons.length === 0) {
+                    seedingLessons = true;
+                    try {
+                        const seed = (typeof window.getLessons === 'function') ? window.getLessons() : [];
+                        const seeded = [];
+                        for (let i = 0; i < seed.length; i++) {
+                            const id = `seed-${i}`;
+                            const payload = {
+                                day: seed[i].day, title: seed[i].title,
+                                location: seed[i].location || null,
+                                start: seed[i].start, end: seed[i].end
+                            };
+                            await setDoc(doc(db, getCollectionPath('lessons'), id), payload);
+                            seeded.push({ id, ...payload });
+                        }
+                        await setDoc(doc(db, getCollectionPath('lessons'), '__seeded__'), { seededAt: new Date().toISOString() });
+                        if (typeof window.applyLessons === 'function') window.applyLessons(seeded);
+                    } catch (e) {
+                        console.error("Timetable seed failed:", e);
+                    } finally {
+                        seedingLessons = false;
+                    }
+                    return;
+                }
+
+                if (typeof window.applyLessons === 'function') window.applyLessons(lessons);
+            });
+
             // 4. NEW: Finished Assignments Listener (This was missing!)
             onSnapshot(collection(db, getCollectionPath('finished')), (snapshot) => {
                 const finished = [];
@@ -333,6 +375,21 @@
 
         
        window.db = {
+            addLesson: async (lesson) => {
+                if (!db || !userId) return;
+                try { await addDoc(collection(db, getCollectionPath('lessons')), lesson); }
+                catch (e) { console.error("Add lesson failed:", e); throw e; }
+            },
+            updateLesson: async (id, lesson) => {
+                if (!db || !userId) return;
+                try { await setDoc(doc(db, getCollectionPath('lessons'), id), lesson, { merge: true }); }
+                catch (e) { console.error("Update lesson failed:", e); throw e; }
+            },
+            deleteLesson: async (id) => {
+                if (!db || !userId) return;
+                try { await deleteDoc(doc(db, getCollectionPath('lessons'), id)); }
+                catch (e) { console.error("Delete lesson failed:", e); throw e; }
+            },
             addAssignment: async (title, dateString, timeString, notes = '') => {
                 if (!db || !userId) return;
                 try {
@@ -886,44 +943,119 @@
         };
         */
 
-        // Semester 2 Timetable
-        const TIMETABLE = {
-            Monday: [
-                { start: "10:00", end: "12:00", title: "CASP", location: "Gateway Room 205" },
-                { start: "12:00", end: "14:00", title: "BREAK", location: null },
-                { start: "14:00", end: "16:00", title: "Research Methods in the Social Sciences", location: "OH112" },
-                { start: "16:00", end: "23:59", title: "END OF DAY", location: null },
-            ],
-            Tuesday: [
-                { start: "09:00", end: "11:00", title: "Health, Illnes & Society", location: "LT2" },
-                { start: "11:00", end: "13:00", title: "Personal Communications", location: "Gateway Hall C" },
-                { start: "13:00", end: "17:30", title: "BREAK", location: null },
-                { start: "17:30", end: "20:30", title: "(Online) Social Media Platforms & Young People", location: "HOME YAYYY" },
-                { start: "20:30", end: "23:59", title: "END OF DAY", location: null },
-            ],
-            Wednesday: [
-                { start: "08:00", end: "10:00", title: "Media, Society & Culture", location: "Gateway Hall C" },
-                { start: "10:00", end: "12:00", title: "BREAK", location: null },
-                { start: "12:00", end: "14:00", title: "?? da fuq", location: "Gateway Hall D2" },
-                { start: "14:00", end: "23:59", title: "END OF DAY", location: null },
-            ],
-            Thursday: [
-                { start: "00:00", end: "23:59", title: "🌸𝒩𝒪 𝒮𝒞𝐻𝒪𝒪𝐿🌸", location: null },
-            ],
-            Friday: [
-                { start: "10:00", end: "12:00", title: "Foundations of Sociology: Theories & Perspectives", location: "LC217" },
-                { start: "12:00", end: "23:59", title: "END OF DAY", location: null },
-            ],
-            Saturday: [{ start: "00:00", end: "23:59", title: "WEEKEND", location: null }],
-            Sunday: [{ start: "00:00", end: "23:59", title: "WEEKEND", location: null }]
-        };
-        const DAYS_OF_WEEK = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+        // ===== Timetable =====
+        // Only real lessons are stored. BREAK / END OF DAY / NO SCHOOL boxes are generated from them.
+        const NO_SCHOOL_TITLE = "🌸𝒩𝒪 𝒮𝒞𝐻𝒪𝒪𝐿🌸";
+
+        const DEFAULT_LESSONS = [
+            { day: "Monday",    start: "10:00", end: "12:00", title: "CASP", location: "Gateway Room 205" },
+            { day: "Monday",    start: "14:00", end: "16:00", title: "Research Methods in the Social Sciences", location: "OH112" },
+            { day: "Tuesday",   start: "09:00", end: "11:00", title: "Health, Illnes & Society", location: "LT2" },
+            { day: "Tuesday",   start: "11:00", end: "13:00", title: "Personal Communications", location: "Gateway Hall C" },
+            { day: "Tuesday",   start: "17:30", end: "20:30", title: "(Online) Social Media Platforms & Young People", location: "HOME YAYYY" },
+            { day: "Wednesday", start: "08:00", end: "10:00", title: "Media, Society & Culture", location: "Gateway Hall C" },
+            { day: "Wednesday", start: "12:00", end: "14:00", title: "?? da fuq", location: "Gateway Hall D2" },
+            { day: "Friday",    start: "10:00", end: "12:00", title: "Foundations of Sociology: Theories & Perspectives", location: "LC217" }
+        ];
+
+        const DAYS_OF_WEEK  = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]; // indexed by Date.getDay()
+        const DISPLAY_DAYS  = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]; // modal column order
         let nextLessonInterval;
 
+        const ttEsc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+
         const timeToMinutes = (time) => {
-            const [h, m] = time.split(':').map(Number);
+            const [h, m] = String(time).split(':').map(Number);
             return h * 60 + m;
         }
+
+        const minutesToTime = (mins) => {
+            const h = Math.floor(mins / 60), m = mins % 60;
+            return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+        }
+
+        const END_OF_DAY_MIN = timeToMinutes("23:59");
+
+        let LESSONS = DEFAULT_LESSONS.map((l, i) => ({ id: `local-${i}`, ...l }));
+        let TIMETABLE = {};
+
+        // Turns the flat lesson list into the full day-by-day schedule,
+        // inserting BREAK gaps, the END OF DAY tail and the NO SCHOOL box.
+        const buildTimetable = () => {
+            const built = {};
+            for (const day of DAYS_OF_WEEK) {
+                const dayLessons = LESSONS
+                    .filter(l => l.day === day)
+                    .slice()
+                    .sort((a, b) => timeToMinutes(a.start) - timeToMinutes(b.start));
+
+                if (dayLessons.length === 0) {
+                    built[day] = [{ start: "00:00", end: "23:59", title: NO_SCHOOL_TITLE, location: null, type: "off" }];
+                    continue;
+                }
+
+                const items = [];
+                let cursor = null;
+                dayLessons.forEach(l => {
+                    const s = timeToMinutes(l.start);
+                    if (cursor !== null && s > cursor) {
+                        items.push({ start: minutesToTime(cursor), end: minutesToTime(s), title: "BREAK", location: null, type: "break" });
+                    }
+                    items.push({ id: l.id, start: l.start, end: l.end, title: l.title, location: l.location || null, type: "lesson" });
+                    cursor = Math.max(cursor === null ? 0 : cursor, timeToMinutes(l.end));
+                });
+
+                if (cursor < END_OF_DAY_MIN) {
+                    items.push({ start: minutesToTime(cursor), end: "23:59", title: "END OF DAY", location: null, type: "eod" });
+                }
+                built[day] = items;
+            }
+            TIMETABLE = built;
+        };
+
+        buildTimetable();
+
+        window.getLessons = () => LESSONS;
+
+        // Swap in a new lesson list (called by the Firestore listener and by local edits).
+        // Rebuilds the schedule, refreshes the countdown widget and the open timetable.
+        window.applyLessons = (lessons) => {
+            LESSONS = Array.isArray(lessons) ? lessons : [];
+            buildTimetable();
+            if (typeof renderScheduleWidget === 'function') renderScheduleWidget();
+            if (typeof window.renderWeeklyTimetable === 'function') window.renderWeeklyTimetable();
+        };
+
+        // Lessons on `day` that clash with the given start/end (in minutes)
+        window.findLessonConflicts = (day, startMin, endMin, ignoreId = null) =>
+            LESSONS.filter(l => l.day === day && l.id !== ignoreId
+                && startMin < timeToMinutes(l.end) && endMin > timeToMinutes(l.start));
+
+        window.addLesson = async ({ day, title, location, start, end }) => {
+            const lesson = { day, title, location: location || null, start, end };
+            if (window.db && typeof window.db.addLesson === 'function') {
+                await window.db.addLesson(lesson); // the snapshot listener re-renders
+            } else {
+                window.applyLessons([...LESSONS, { id: `local-${Date.now()}`, ...lesson }]);
+            }
+        };
+
+        window.updateLesson = async (id, { day, title, location, start, end }) => {
+            const lesson = { day, title, location: location || null, start, end };
+            if (window.db && typeof window.db.updateLesson === 'function' && !String(id).startsWith('local-')) {
+                await window.db.updateLesson(id, lesson); // the snapshot listener re-renders
+            } else {
+                window.applyLessons(LESSONS.map(l => l.id === id ? { id, ...lesson } : l));
+            }
+        };
+
+        window.removeLesson = async (id) => {
+            if (window.db && typeof window.db.deleteLesson === 'function' && !String(id).startsWith('local-')) {
+                await window.db.deleteLesson(id);
+            } else {
+                window.applyLessons(LESSONS.filter(l => l.id !== id));
+            }
+        };
 
         const getNextScheduleItem = () => {
             const now = new Date();
@@ -931,13 +1063,13 @@
             const currentDayName = DAYS_OF_WEEK[dayIndex];
             const nowMinutes = now.getHours() * 60 + now.getMinutes();
 
-            let todaySchedule = TIMETABLE[currentDayName];
+            let todaySchedule = TIMETABLE[currentDayName] || [];
             
             let currentItem = todaySchedule.find(item => 
                  timeToMinutes(item.start) <= nowMinutes && timeToMinutes(item.end) > nowMinutes
             );
 
-            if (currentItem && currentItem.title !== "END OF DAY" && currentItem.title !== "WEEKEND") {
+            if (currentItem && currentItem.type !== "eod" && currentItem.type !== "off") {
                  let nextItem = todaySchedule.find(item => timeToMinutes(item.start) === timeToMinutes(currentItem.end));
                  if (nextItem) {
                      return {
@@ -951,7 +1083,7 @@
 
             let nextItem = todaySchedule.find(item => timeToMinutes(item.start) > nowMinutes);
 
-            if (nextItem && nextItem.title !== "END OF DAY") {
+            if (nextItem && nextItem.type !== "eod" && nextItem.type !== "off") {
                 return {
                     ...nextItem, day: currentDayName,
                     remainingMinutes: timeToMinutes(nextItem.start) - nowMinutes,
@@ -965,7 +1097,7 @@
                 const nextDayName = DAYS_OF_WEEK[nextDayIndex];
                 const nextDaySchedule = TIMETABLE[nextDayName]; 
                 
-                const firstEvent = nextDaySchedule.find(item => item.title !== "END OF DAY" && item.title !== "WEEKEND");
+                const firstEvent = (nextDaySchedule || []).find(item => item.type === "lesson");
 
                 if (firstEvent) {
                      let remainingDaySeconds = (24 * 60 * 60) - (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()); 
@@ -985,7 +1117,7 @@
             const widgetEl = document.getElementById('next-lesson-widget');
             if (!widgetEl) return;
             const nextItem = getNextScheduleItem();
-            let { title, start, end, location, remainingSeconds, day, isNextDay, isCurrent, nextTitle } = nextItem; 
+            let { title, start, end, location, remainingSeconds, day, isNextDay, isCurrent, nextTitle, type } = nextItem; 
             
             const totalSeconds = remainingSeconds;
             const days = Math.floor(totalSeconds / (60 * 60 * 24));
@@ -1000,8 +1132,8 @@
             let locationPrefix = 'Location: ';
 
             if (isCurrent && totalSeconds > 0) {
-                 statusClass = title === "BREAK" ? "text-pink-300" : "text-pink-400";
-                 icon = title === "BREAK" ? "coffee" : "hourglass";
+                 statusClass = type === "break" ? "text-pink-300" : "text-pink-400";
+                 icon = type === "break" ? "coffee" : "hourglass";
                  subText = `<span class="whitespace-nowrap mr-1">Currently in:</span> <span class="font-bold text-dark-primary break-words">${title}</span>`;
                  countdownHTML = `<span class="font-bold">${hours}</span>h <span class="font-bold">${minutes}</span>m left`;
                  timeRangeToDisplay = `${start} - ${end}`;
@@ -1013,7 +1145,7 @@
                 timeRangeToDisplay = `${start} - ${end}`;
             } else if (totalSeconds > 0) {
                 countdownHTML = `<span class="font-bold">${hours}</span>h <span class="font-bold">${minutes}</span>m`;
-                if (title === "BREAK") { icon = "coffee"; statusClass = "text-pink-300"; } else { icon = "clock"; statusClass = "text-pink-600"; }
+                if (type === "break") { icon = "coffee"; statusClass = "text-pink-300"; } else { icon = "clock"; statusClass = "text-pink-600"; }
                 timeRangeToDisplay = `${start} - ${end}`;
             } else {
                 countdownHTML = "Finished";
@@ -1918,57 +2050,267 @@
             });
 
             // Timetable Opener & Renderer
-            document.getElementById('menu-open-timetable')?.addEventListener('click', () => {
-                slideMenuWrapper.classList.remove('active');
-                const modal = document.getElementById("weekly-timetable-modal");
+            let timetableEditMode = false;
+
+            window.renderWeeklyTimetable = () => {
                 const content = document.getElementById("weekly-timetable-content");
-                
-                const formatLesson = (item, highlight) => {
-                    let baseClasses = "p-3 rounded-lg mb-2 transition-all duration-300 border shadow-sm";
+                if (!content) return;
+
+                const formatItem = (item, highlight) => {
+                    const baseClasses = "relative p-3 rounded-lg mb-2 transition-all duration-300 border shadow-sm";
                     let bgClass, textTitleClass, subTextClass;
+
                     if (highlight) {
                         bgClass = 'bg-pink-100 border-pink-300 ring-2 ring-pink-200'; textTitleClass = 'text-pink-800'; subTextClass = 'text-pink-700';
-                    } else if (item.title === "END OF DAY" || item.title === "WEEKEND") { 
-                        bgClass = 'bg-gray-100 border-transparent opacity-60'; textTitleClass = 'text-gray-500 font-normal italic'; subTextClass = 'text-gray-400'; 
-                    } else { 
-                        bgClass = 'bg-white border-gray-200 hover:border-blue-300'; textTitleClass = 'text-dark-primary'; subTextClass = 'text-dark-secondary'; 
+                    } else if (item.type === "break") {
+                        bgClass = 'bg-gray-100/70 border-dashed border-gray-300 opacity-70 shadow-none'; textTitleClass = 'text-gray-400 font-medium tracking-widest'; subTextClass = 'text-gray-400';
+                    } else if (item.type === "eod") {
+                        bgClass = 'bg-gray-100 border-transparent opacity-50 shadow-none'; textTitleClass = 'text-gray-500 font-normal italic'; subTextClass = 'text-gray-400';
+                    } else if (item.type === "off") {
+                        bgClass = 'bg-gray-50/70 border-gray-200 opacity-90'; textTitleClass = 'text-gray-600 font-bold italic'; subTextClass = 'text-gray-400';
+                    } else {
+                        bgClass = 'bg-white border-gray-200 hover:border-blue-300'; textTitleClass = 'text-dark-primary'; subTextClass = 'text-dark-secondary';
                     }
+
+                    const editable = (timetableEditMode && item.type === 'lesson');
+                    const editAttrs = editable ? ` data-edit-lesson="${ttEsc(item.id)}" role="button" tabindex="0" title="Click to edit this lesson"` : '';
+                    const editClass = editable ? ' cursor-pointer hover:border-pink-300 hover:ring-2 hover:ring-pink-100' : '';
+
+                    const removeBtn = (timetableEditMode && item.type === 'lesson')
+                        ? `<button type="button" data-remove-lesson="${ttEsc(item.id)}" title="Remove lesson"
+                                class="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-red-500 hover:bg-red-600 text-white text-xs font-bold leading-none shadow-md flex items-center justify-center z-10 transition-colors">&times;</button>`
+                        : '';
+
                     return `
-                    <div class="${baseClasses} ${bgClass}">
-                        <p class="font-semibold ${textTitleClass} text-sm">${item.title}</p>
+                    <div class="${baseClasses} ${bgClass}${editClass}"${editAttrs}>
+                        ${removeBtn}
+                        <p class="font-semibold ${textTitleClass} text-sm">${ttEsc(item.title)}</p>
                         <p class="${subTextClass} text-xs mt-1">${item.start} - ${item.end}</p>
-                        <p class="${subTextClass} text-xs opacity-70">${item.location ?? ''}</p>
+                        <p class="${subTextClass} text-xs opacity-70">${ttEsc(item.location ?? '')}</p>
                     </div>`;
                 };
-                
-                content.innerHTML = "";
+
                 const now = new Date();
-                const dayIndex = now.getDay();
+                const todayName = DAYS_OF_WEEK[now.getDay()];
                 const nowMinutes = now.getHours() * 60 + now.getMinutes();
-                
-                for (const day of DAYS_OF_WEEK) {
-                    const lessons = TIMETABLE[day];
-                    if(!lessons) continue;
-                    let html = `
+                let out = "";
+
+                for (const day of DISPLAY_DAYS) {
+                    const items = TIMETABLE[day] || [];
+                    out += `
                     <div class="min-w-[260px] w-[260px] flex-shrink-0 bg-white/80 p-4 rounded-xl border border-gray-200 backdrop-blur-md">
                         <h3 class="text-lg font-bold text-dark-primary mb-4 border-b border-gray-200 pb-2 text-center uppercase tracking-wider">${day}</h3>
                         <div class="space-y-2">`;
-                    lessons.forEach(item => {
-                        const start = timeToMinutes(item.start);
-                        const end = timeToMinutes(item.end);
-                        const isCurrent = day === DAYS_OF_WEEK[dayIndex] && nowMinutes >= start && nowMinutes < end && item.title !== "WEEKEND";
-                        html += formatLesson(item, isCurrent);
+                    items.forEach(item => {
+                        const isCurrent = day === todayName
+                            && nowMinutes >= timeToMinutes(item.start)
+                            && nowMinutes < timeToMinutes(item.end)
+                            && item.type !== "off";
+                        out += formatItem(item, isCurrent);
                     });
-                    html += "</div></div>";
-                    content.innerHTML += html;
+                    out += "</div></div>";
                 }
-                
-                modal.classList.remove("opacity-0", "pointer-events-none");
+                content.innerHTML = out;
+            };
+
+            const timetableModal   = document.getElementById("weekly-timetable-modal");
+            const timetableEditBtn = document.getElementById("timetable-edit-btn");
+            const timetableAddBtn  = document.getElementById("timetable-add-btn");
+
+            const setTimetableEditMode = (on) => {
+                timetableEditMode = on;
+                timetableAddBtn?.classList.toggle('hidden', !on);
+                if (timetableEditBtn) {
+                    timetableEditBtn.classList.toggle('bg-pink-500', on);
+                    timetableEditBtn.classList.toggle('text-white', on);
+                    timetableEditBtn.classList.toggle('bg-white', !on);
+                    timetableEditBtn.classList.toggle('text-dark-primary', !on);
+                }
+                window.renderWeeklyTimetable();
+                if (window.lucide) window.lucide.createIcons();
+            };
+
+            document.getElementById('menu-open-timetable')?.addEventListener('click', () => {
+                slideMenuWrapper.classList.remove('active');
+                setTimetableEditMode(false);
+                timetableModal?.classList.remove("opacity-0", "pointer-events-none");
+            });
+
+            timetableEditBtn?.addEventListener('click', () => setTimetableEditMode(!timetableEditMode));
+            timetableAddBtn?.addEventListener('click', () => window.openLessonModal(null));
+
+            // X buttons + click-to-edit on the lesson boxes (event delegation)
+            document.getElementById("weekly-timetable-content")?.addEventListener('click', (e) => {
+                const removeTarget = e.target.closest('[data-remove-lesson]');
+                if (removeTarget) {
+                    openRemoveLessonConfirm(removeTarget.getAttribute('data-remove-lesson'));
+                    return;
+                }
+
+                const editTarget = e.target.closest('[data-edit-lesson]');
+                if (editTarget) window.openLessonModal(editTarget.getAttribute('data-edit-lesson'));
+            });
+
+            // Keyboard access for the editable boxes
+            document.getElementById("weekly-timetable-content")?.addEventListener('keydown', (e) => {
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                const editTarget = e.target.closest('[data-edit-lesson]');
+                if (!editTarget) return;
+                e.preventDefault();
+                window.openLessonModal(editTarget.getAttribute('data-edit-lesson'));
             });
 
             // Make sure clicking the background of the timetable closes it
             document.getElementById("weekly-timetable-modal")?.addEventListener('click', (e) => {
                  if (e.target === e.currentTarget) e.currentTarget.classList.add("opacity-0", "pointer-events-none");
+            });
+
+            // Keep the "happening now" highlight fresh while the timetable is open
+            setInterval(() => {
+                if (timetableModal && !timetableModal.classList.contains('pointer-events-none')) {
+                    window.renderWeeklyTimetable();
+                }
+            }, 20000);
+
+            // ----- Remove lesson confirmation popup -----
+            const confirmRemoveModal = document.getElementById('confirm-remove-modal');
+            let pendingRemoveId = null;
+
+            const closeRemoveLessonConfirm = () => {
+                pendingRemoveId = null;
+                confirmRemoveModal?.classList.add('opacity-0', 'pointer-events-none');
+            };
+
+            const openRemoveLessonConfirm = (id) => {
+                const lesson = window.getLessons().find(l => l.id === id);
+                if (!lesson || !confirmRemoveModal) return;
+                pendingRemoveId = id;
+                document.getElementById('confirm-remove-name').textContent = lesson.title;
+                document.getElementById('confirm-remove-details').textContent = `${lesson.day}, ${lesson.start} - ${lesson.end}`;
+                confirmRemoveModal.classList.remove('opacity-0', 'pointer-events-none');
+                if (window.lucide) window.lucide.createIcons();
+                document.getElementById('confirm-remove-cancel-btn').focus();
+            };
+
+            document.getElementById('confirm-remove-cancel-btn')?.addEventListener('click', closeRemoveLessonConfirm);
+            confirmRemoveModal?.addEventListener('click', (e) => {
+                if (e.target === e.currentTarget) closeRemoveLessonConfirm();
+            });
+
+            document.getElementById('confirm-remove-confirm-btn')?.addEventListener('click', async () => {
+                const id = pendingRemoveId;
+                if (!id) return;
+                const btn = document.getElementById('confirm-remove-confirm-btn');
+                btn.disabled = true;
+                btn.textContent = 'Removing...';
+                try { await window.removeLesson(id); }
+                catch (err) { console.error("Remove lesson failed:", err); }
+                finally {
+                    btn.disabled = false;
+                    btn.textContent = 'Remove';
+                    closeRemoveLessonConfirm();
+                }
+            });
+
+            document.addEventListener('keydown', (e) => {
+                if (e.key !== 'Escape') return;
+                if (confirmRemoveModal && !confirmRemoveModal.classList.contains('pointer-events-none')) {
+                    closeRemoveLessonConfirm();
+                } else if (addLessonModal && !addLessonModal.classList.contains('pointer-events-none')) {
+                    closeAddLessonModal();
+                }
+            });
+
+            // ----- Add lesson modal -----
+            const addLessonModal = document.getElementById('add-lesson-modal');
+            const addLessonError = document.getElementById('add-lesson-error');
+            let editingLessonId = null;
+
+            const closeAddLessonModal = () => {
+                editingLessonId = null;
+                addLessonModal?.classList.add('opacity-0', 'pointer-events-none');
+            };
+
+            // Pass a lesson id to edit an existing lesson, or nothing to add a new one
+            window.openLessonModal = (lessonId = null) => {
+                if (!addLessonModal) return;
+                const lesson = lessonId ? window.getLessons().find(l => l.id === lessonId) : null;
+                editingLessonId = lesson ? lesson.id : null;
+
+                addLessonError.classList.add('hidden');
+                addLessonError.innerHTML = '';
+                document.getElementById('add-lesson-modal-title').textContent = lesson ? 'Edit lesson' : 'Add a lesson';
+                document.getElementById('save-lesson-btn').textContent = lesson ? 'Save changes' : 'Add lesson';
+                document.getElementById('add-lesson-day').value      = lesson ? lesson.day : 'Monday';
+                document.getElementById('add-lesson-title').value    = lesson ? lesson.title : '';
+                document.getElementById('add-lesson-location').value = lesson ? (lesson.location || '') : '';
+                document.getElementById('add-lesson-start').value    = lesson ? lesson.start : '09:00';
+                document.getElementById('add-lesson-end').value      = lesson ? lesson.end : '11:00';
+
+                addLessonModal.classList.remove('opacity-0', 'pointer-events-none');
+                if (window.lucide) window.lucide.createIcons();
+                document.getElementById('add-lesson-title').focus();
+            };
+
+            // kept for backwards compatibility
+            window.openAddLessonModal = () => window.openLessonModal(null);
+
+            document.getElementById('close-add-lesson-btn')?.addEventListener('click', closeAddLessonModal);
+            document.getElementById('cancel-add-lesson-btn')?.addEventListener('click', closeAddLessonModal);
+            addLessonModal?.addEventListener('click', (e) => {
+                if (e.target === e.currentTarget) closeAddLessonModal();
+            });
+
+            document.getElementById('save-lesson-btn')?.addEventListener('click', async () => {
+                const showError = (html) => { addLessonError.innerHTML = html; addLessonError.classList.remove('hidden'); };
+                addLessonError.classList.add('hidden');
+
+                const day      = document.getElementById('add-lesson-day').value;
+                const title    = document.getElementById('add-lesson-title').value.trim();
+                const location = document.getElementById('add-lesson-location').value.trim();
+                const start    = document.getElementById('add-lesson-start').value;
+                const end      = document.getElementById('add-lesson-end').value;
+
+                if (!title) return showError("Give the lesson a name first.");
+                if (!start || !end) return showError("Pick both a start and an end time.");
+
+                const startMin = timeToMinutes(start);
+                const endMin   = timeToMinutes(end);
+                if (endMin <= startMin) return showError("The end time has to be after the start time.");
+
+                const clashes = window.findLessonConflicts(day, startMin, endMin, editingLessonId);
+                if (clashes.length) {
+                    return showError(
+                        `<p class="font-semibold mb-1">That clashes with ${clashes.length > 1 ? 'these lessons' : 'this lesson'} on ${day}:</p>
+                         <ul class="list-disc list-inside space-y-0.5">` +
+                        clashes
+                            .slice()
+                            .sort((a, b) => timeToMinutes(a.start) - timeToMinutes(b.start))
+                            .map(c => `<li><span class="font-semibold">${ttEsc(c.title)}</span> &mdash; ${c.start} - ${c.end}</li>`)
+                            .join('') +
+                        `</ul>`
+                    );
+                }
+
+                const saveBtn = document.getElementById('save-lesson-btn');
+                const originalLabel = saveBtn.textContent;
+                const idBeingEdited = editingLessonId;
+                saveBtn.disabled = true;
+                saveBtn.textContent = 'Saving...';
+                try {
+                    if (idBeingEdited) {
+                        await window.updateLesson(idBeingEdited, { day, title, location, start, end });
+                    } else {
+                        await window.addLesson({ day, title, location, start, end });
+                    }
+                    closeAddLessonModal();
+                } catch (err) {
+                    console.error(err);
+                    showError("Couldn't save that lesson. Try again.");
+                } finally {
+                    saveBtn.disabled = false;
+                    saveBtn.textContent = originalLabel;
+                }
             });
 
             // File Uploader logic (With Arrays/Compression)
@@ -2315,10 +2657,83 @@
     <div id="weekly-timetable-modal" class="fixed inset-0 bg-black/20 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition duration-300 z-50">
         <div class="w-auto max-w-[95vw] p-6 rounded-2xl shadow-2xl border border-gray-200 overflow-x-auto overflow-y-hidden relative custom-scroll"
              style="background-image: url('images/flowerBG.jpg'); background-size: cover; background-position: center;">
-            <h2 class="text-2xl font-bold text-dark-primary mb-4 text-center sticky left-0 bg-white/80 backdrop-blur-md rounded-xl py-2 shadow-sm border border-white/50">
-                Weekly Timetable
-            </h2>
+            <div class="flex items-center justify-between gap-3 mb-4 sticky left-0 bg-white/80 backdrop-blur-md rounded-xl py-2 px-3 shadow-sm border border-white/50">
+                <h2 class="text-2xl font-bold text-dark-primary flex-1 text-center pl-[84px]">Weekly Timetable</h2>
+                <div class="flex items-center gap-2 flex-shrink-0">
+                    <button id="timetable-add-btn" title="Add a lesson" class="hidden w-9 h-9 rounded-lg bg-pink-400 hover:bg-pink-500 text-white shadow-sm flex items-center justify-center transition-colors">
+                        <span data-lucide="plus" class="w-5 h-5"></span>
+                    </button>
+                    <button id="timetable-edit-btn" title="Edit timetable" class="w-9 h-9 rounded-lg bg-white text-dark-primary border border-gray-200 hover:bg-gray-100 shadow-sm flex items-center justify-center transition-colors">
+                        <span data-lucide="pencil" class="w-5 h-5"></span>
+                    </button>
+                </div>
+            </div>
             <div id="weekly-timetable-content" class="flex flex-row gap-6 pb-4"></div>
+        </div>
+    </div>
+
+    <div id="add-lesson-modal" class="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition-opacity duration-300 z-[60]">
+        <div class="bg-white w-full max-w-md rounded-2xl shadow-2xl border border-gray-200 p-6">
+            <div class="flex items-center justify-between mb-4">
+                <h3 id="add-lesson-modal-title" class="text-xl font-bold text-dark-primary">Add a lesson</h3>
+                <button id="close-add-lesson-btn" class="p-1 rounded-lg hover:bg-gray-100 text-dark-tertiary transition-colors">
+                    <span data-lucide="x" class="w-5 h-5"></span>
+                </button>
+            </div>
+
+            <div id="add-lesson-error" class="hidden mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700"></div>
+
+            <label class="block text-xs font-semibold text-dark-secondary mb-1">Day</label>
+            <select id="add-lesson-day" class="w-full mb-3 p-2 border border-gray-200 rounded-lg bg-white text-dark-primary focus:outline-none focus:ring-2 focus:ring-pink-300">
+                <option>Monday</option>
+                <option>Tuesday</option>
+                <option>Wednesday</option>
+                <option>Thursday</option>
+                <option>Friday</option>
+                <option>Saturday</option>
+                <option>Sunday</option>
+            </select>
+
+            <label class="block text-xs font-semibold text-dark-secondary mb-1">Lesson</label>
+            <input id="add-lesson-title" type="text" placeholder="e.g. Research Methods in the Social Sciences"
+                   class="w-full mb-3 p-2 border border-gray-200 rounded-lg text-dark-primary focus:outline-none focus:ring-2 focus:ring-pink-300" />
+
+            <label class="block text-xs font-semibold text-dark-secondary mb-1">Location <span class="font-normal text-dark-tertiary">(optional)</span></label>
+            <input id="add-lesson-location" type="text" placeholder="e.g. OH112"
+                   class="w-full mb-3 p-2 border border-gray-200 rounded-lg text-dark-primary focus:outline-none focus:ring-2 focus:ring-pink-300" />
+
+            <div class="grid grid-cols-2 gap-3 mb-5">
+                <div>
+                    <label class="block text-xs font-semibold text-dark-secondary mb-1">Starts</label>
+                    <input id="add-lesson-start" type="time" value="09:00" min="00:00" max="23:59"
+                           class="w-full p-2 border border-gray-200 rounded-lg text-dark-primary focus:outline-none focus:ring-2 focus:ring-pink-300" />
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-dark-secondary mb-1">Ends</label>
+                    <input id="add-lesson-end" type="time" value="11:00" min="00:00" max="23:59"
+                           class="w-full p-2 border border-gray-200 rounded-lg text-dark-primary focus:outline-none focus:ring-2 focus:ring-pink-300" />
+                </div>
+            </div>
+
+            <div class="flex gap-3">
+                <button id="cancel-add-lesson-btn" class="flex-1 py-2.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-dark-secondary font-semibold transition-colors">Cancel</button>
+                <button id="save-lesson-btn" class="flex-1 py-2.5 rounded-lg bg-pink-400 hover:bg-pink-500 text-white font-semibold transition-colors">Add lesson</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="confirm-remove-modal" class="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition-opacity duration-300 z-[70]">
+        <div class="bg-white w-full max-w-sm rounded-2xl shadow-2xl border border-gray-200 p-6 text-center">
+            <div class="w-12 h-12 mx-auto mb-4 rounded-full bg-red-50 flex items-center justify-center">
+                <span data-lucide="trash-2" class="w-6 h-6 text-red-500"></span>
+            </div>
+            <h3 class="text-lg font-bold text-dark-primary mb-2">Remove this lesson?</h3>
+            <p id="confirm-remove-name" class="text-sm font-semibold text-dark-primary"></p>
+            <p id="confirm-remove-details" class="text-xs text-dark-tertiary mb-5"></p>
+            <div class="flex gap-3">
+                <button id="confirm-remove-cancel-btn" class="flex-1 py-2.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-dark-secondary font-semibold transition-colors">Cancel</button>
+                <button id="confirm-remove-confirm-btn" class="flex-1 py-2.5 rounded-lg bg-red-500 hover:bg-red-600 text-white font-semibold transition-colors">Remove</button>
+            </div>
         </div>
     </div>
 
@@ -2355,7 +2770,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp" class="text-dark-secondary">Last Update 14/09/2026 - 11:36</div>
+    <div id="version-timestamp" class="text-dark-secondary">Last Update 14/09/2026 - 13:22</div>
     </body>
 
     <style>
