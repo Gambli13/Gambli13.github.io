@@ -14,6 +14,42 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@0.577.0/dist/umd/lucide.min.js"></script>
     <script>
+        // ===== App time zone =====
+        // Every clock in the app (timetable, countdowns, calendar, Paga/Stipend, deadlines)
+        // runs on this zone, whatever time zone the device itself is set to.
+        // Switch back to Malta with 'Europe/Malta'.
+        window.APP_TZ = 'Europe/Dublin';
+        const _tzFmt = new Intl.DateTimeFormat('en-GB', {
+            timeZone: window.APP_TZ, hourCycle: 'h23',
+            year: 'numeric', month: '2-digit', day: '2-digit',
+            hour: '2-digit', minute: '2-digit', second: '2-digit'
+        });
+        const _tzParts = (date) => {
+            const p = {};
+            _tzFmt.formatToParts(date).forEach(x => { if (x.type !== 'literal') p[x.type] = Number(x.value); });
+            return p;
+        };
+        // A Date whose getHours()/getDate()/etc. read as the wall clock in APP_TZ
+        window.tzWall = (date = new Date()) => {
+            const d = date instanceof Date ? date : new Date(date);
+            if (isNaN(d)) return d;
+            const p = _tzParts(d);
+            return new Date(p.year, p.month - 1, p.day, p.hour, p.minute, p.second, d.getMilliseconds());
+        };
+        window.tzNow = () => window.tzWall(new Date());
+        // The real moment for a wall-clock time typed in APP_TZ (DST-safe)
+        window.tzFromWall = (y, mo, d, h = 0, mi = 0) => {
+            const target = Date.UTC(y, mo, d, h, mi);
+            let guess = target;
+            for (let i = 0; i < 3; i++) {
+                const p = _tzParts(new Date(guess));
+                const shown = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute);
+                guess += target - shown;
+            }
+            return new Date(guess);
+        };
+    </script>
+    <script>
         // Set the phone/tablet layout class before first paint (no desktop-layout flash)
         if (window.matchMedia('(max-width: 1023px), (hover: none) and (pointer: coarse)').matches) {
             document.documentElement.classList.add('compact');
@@ -256,7 +292,7 @@
             const time = timeString || '23:59'; 
             const [year, month, day] = dateString.split('-').map(Number);
             const [hours, minutes] = time.split(':').map(Number);
-            const deadlineDate = new Date(year, month - 1, day, hours, minutes);
+            const deadlineDate = window.tzFromWall(year, month - 1, day, hours, minutes);
             if (isNaN(deadlineDate.getTime())) { console.error("Invalid Date components provided."); return null; }
             return deadlineDate;
         };
@@ -530,7 +566,7 @@
 
         const openCalendarModal = () => {
             const modal = document.getElementById('calendar-modal');
-            currentCalendarDate = new Date(); // Reset to today when opening
+            currentCalendarDate = window.tzNow(); // Reset to today when opening
             modal.classList.remove('opacity-0', 'pointer-events-none');
             renderCalendar();
         };
@@ -559,7 +595,7 @@
 
             const daysInMonth = new Date(year, month + 1, 0).getDate();
             const prevMonthLastDate = new Date(year, month, 0).getDate();
-            const today = new Date();
+            const today = window.tzNow();
 
             grid.innerHTML = '';
 
@@ -576,7 +612,7 @@
                     ...finishedAssignments.map(a => ({ ...a, isFinished: true }))
                 ].filter(a => {
                     if (!a.deadline) return false;
-                    const d = a.deadline instanceof Date ? a.deadline : new Date(a.deadline);
+                    const d = window.tzWall(a.deadline instanceof Date ? a.deadline : new Date(a.deadline));
                     return d.getDate() === dateObj.getDate() && 
                            d.getMonth() === dateObj.getMonth() && 
                            d.getFullYear() === dateObj.getFullYear();
@@ -1077,7 +1113,7 @@
         };
 
         const getNextScheduleItem = () => {
-            const now = new Date();
+            const now = window.tzNow();
             const dayIndex = now.getDay();
             const currentDayName = DAYS_OF_WEEK[dayIndex];
             const nowMinutes = now.getHours() * 60 + now.getMinutes();
@@ -1468,11 +1504,12 @@
             }
             assignments.forEach(assignment => {
                 const deadlineDate = assignment.deadline instanceof Date ? assignment.deadline : new Date(assignment.deadline);
-                const day = String(deadlineDate.getDate()).padStart(2, '0');
-                const month = String(deadlineDate.getMonth() + 1).padStart(2, '0');
-                const year = deadlineDate.getFullYear();
-                const hours = String(deadlineDate.getHours()).padStart(2, '0');
-                const minutes = String(deadlineDate.getMinutes()).padStart(2, '0');
+                const deadlineWall = window.tzWall(deadlineDate);
+                const day = String(deadlineWall.getDate()).padStart(2, '0');
+                const month = String(deadlineWall.getMonth() + 1).padStart(2, '0');
+                const year = deadlineWall.getFullYear();
+                const hours = String(deadlineWall.getHours()).padStart(2, '0');
+                const minutes = String(deadlineWall.getMinutes()).padStart(2, '0');
                 const formattedDate = `${day}/${month}/${year} at ${hours}:${minutes}`;
                 const deadlineISO = deadlineDate.toISOString(); 
                 const countdownHTML = `<div id="countdown-${assignment.id}" class="text-xs font-mono text-pink-300 mt-1">Calculating...</div>`;
@@ -1529,8 +1566,8 @@
             btnTextSpan.textContent = `Finished Assignments (${finishedAssignments.length})`;
 
             finishedAssignments.forEach(assignment => {
-                const deadlineDate = assignment.deadline instanceof Date ? assignment.deadline : new Date(assignment.deadline);
-                const completedAtDate = assignment.completedAt instanceof Date ? assignment.completedAt : new Date(assignment.completedAt);
+                const deadlineDate = window.tzWall(assignment.deadline instanceof Date ? assignment.deadline : new Date(assignment.deadline));
+                const completedAtDate = window.tzWall(assignment.completedAt instanceof Date ? assignment.completedAt : new Date(assignment.completedAt));
                 const day = String(deadlineDate.getDate()).padStart(2, '0');
                 const month = String(deadlineDate.getMonth() + 1).padStart(2, '0');
                 const year = deadlineDate.getFullYear();
@@ -1573,9 +1610,10 @@
                 if (!countdownEl) return;
                 const deadlineDate = assignment.deadline instanceof Date ? assignment.deadline : new Date(assignment.deadline);
                 const remaining = getTimeRemaining(deadlineDate);
-                const now = new Date();
+                const now = window.tzNow();
+                const deadlineWall = window.tzWall(deadlineDate);
                 const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-                const deadlineDay = new Date(deadlineDate.getFullYear(), deadlineDate.getMonth(), deadlineDate.getDate());
+                const deadlineDay = new Date(deadlineWall.getFullYear(), deadlineWall.getMonth(), deadlineWall.getDate());
 
                 if (deadlineDay.getTime() === today.getTime()) { countdownEl.innerHTML = '<span class="text-green-400 font-semibold">Due Today</span>'; return; }
                 if (deadlineDay.getTime() < today.getTime()) { countdownEl.innerHTML = '<span class="text-red-500 font-bold">Deadline Passed</span>'; return; }
@@ -1686,7 +1724,7 @@
             detailTitleInput.value = title;
             
             if (deadlineISO) {
-                const deadlineDate = new Date(deadlineISO);
+                const deadlineDate = window.tzWall(new Date(deadlineISO));
                 const yyyy = deadlineDate.getFullYear();
                 const mm = String(deadlineDate.getMonth() + 1).padStart(2, '0');
                 const dd = String(deadlineDate.getDate()).padStart(2, '0');
@@ -1857,7 +1895,7 @@
         ];
 
         const updateCircularWidgets = () => {
-            const now = new Date();
+            const now = window.tzNow();
             const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
             
             // 1. Update Next Paga (Strictly the Last Friday of the Month)
@@ -2015,7 +2053,7 @@
             });
 
             document.getElementById('today-btn').addEventListener('click', () => {
-                currentCalendarDate = new Date();
+                currentCalendarDate = window.tzNow();
                 renderCalendar();
             });
 
@@ -2126,7 +2164,7 @@
                     </div>`;
                 };
 
-                const now = new Date();
+                const now = window.tzNow();
                 const todayName = DAYS_OF_WEEK[now.getDay()];
                 const nowMinutes = now.getHours() * 60 + now.getMinutes();
                 let out = "";
