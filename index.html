@@ -666,6 +666,15 @@
 
     const getCollectionPath = (collectionName) => `/artifacts/${appId}/users/${userId}/${collectionName}_index`;
 
+    // Bridge for the Personal-mode calendar (classic script) so its events and
+    // feast edits are stored in Firestore and shared across every device.
+    window.pmCloud = {
+        ready: () => Boolean(db && userId),
+        saveEvent: (ev) => setDoc(doc(db, getCollectionPath('personal_events'), ev.id), JSON.parse(JSON.stringify(ev))),
+        deleteEvent: (id) => deleteDoc(doc(db, getCollectionPath('personal_events'), id)),
+        saveOverride: (id, data) => setDoc(doc(db, getCollectionPath('hardcoded_overrides'), id), JSON.parse(JSON.stringify(data)))
+    };
+
     const initFirebase = async () => {
         try {
             const app = initializeApp(firebaseConfig);
@@ -794,6 +803,20 @@
             });
             finished.sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
             window.renderFinishedAssignments(finished);
+        });
+
+        // 4b. Personal calendar events (shared across devices)
+        onSnapshot(collection(db, getCollectionPath('personal_events')), (snapshot) => {
+            const events = [];
+            snapshot.forEach(d => events.push({ ...d.data(), id: d.id }));
+            if (typeof window.pmApplyCloudEvents === 'function') window.pmApplyCloudEvents(events);
+        });
+
+        // 4c. Edits (title/time/notes) to the hardcoded feasts & public holidays
+        onSnapshot(collection(db, getCollectionPath('hardcoded_overrides')), (snapshot) => {
+            const overrides = {};
+            snapshot.forEach(d => { overrides[d.id] = d.data(); });
+            if (typeof window.pmApplyCloudOverrides === 'function') window.pmApplyCloudOverrides(overrides);
         });
 
         // 5. Map Locations Listener
@@ -2751,7 +2774,7 @@
                         <span data-lucide="heart" class="w-5 h-5 mr-2 text-pink-400"></span>
                         Coming Home
                     </h2>
-                    <p class="text-sm font-medium text-white/70">Ireland → Malta · Dec 18</p>
+                    <p class="text-sm font-medium text-white/70">Ireland → Malta · Dec 5</p>
                 </div>
 
                 <div class="grid grid-cols-3 gap-2 mb-5">
@@ -3171,7 +3194,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 31/08/2026 - 12:40</div>
+    <div id="version-timestamp">Last Update 24/09/2026 - 19:08</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
@@ -3201,9 +3224,9 @@
             const PM_KEY = 'personalMode';
             const PM_EVENTS_KEY = 'personalEvents';
             const HARDCODED_OVERRIDES_KEY = 'hardcodedEventOverrides2026';
-            // Girlfriend's return date — Dec 18 (year auto-picked so it always looks ahead)
+            // Girlfriend's return date — Dec 5 (year auto-picked so it always looks ahead)
             const RETURN_MONTH = 11; // Dec (0-indexed)
-            const RETURN_DAY = 18;
+            const RETURN_DAY = 5;
             const RETURN_HOUR = 0;
 
             // Color palette for personal events
@@ -5771,6 +5794,7 @@
                         notes: notesInput.value || ''
                     };
                     saveHardcodedEventOverrides();
+                    pmCloudCall('saveOverride', currentEditingHardcodedId, hardcodedEventOverrides[currentEditingHardcodedId]);
                     closeEventModal();
                     renderPmCalendar();
                     renderPmDayEvents();
@@ -5811,11 +5835,12 @@
                 }
 
                 const recurrence = { repeat, repeatEvery, repeatEndMode, repeatDuration, repeatUntil };
+                let savedEvent = null;
 
                 if (currentEditingEventId) {
                     const idx = personalEvents.findIndex(e => e.id === currentEditingEventId);
                     if (idx >= 0) {
-                        personalEvents[idx] = {
+                        savedEvent = personalEvents[idx] = {
                             ...personalEvents[idx],
                             title, date, time, endDate, endTime, feast,
                             color: currentPickedColor, notes: notesInput.value || '',
@@ -5823,14 +5848,16 @@
                         };
                     }
                 } else {
-                    personalEvents.push({
+                    savedEvent = {
                         id: 'pe_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
                         title, date, time, endDate, endTime, feast,
                         color: currentPickedColor, notes: notesInput.value || '',
                         ...recurrence
-                    });
+                    };
+                    personalEvents.push(savedEvent);
                 }
                 savePersonalEvents();
+                if (savedEvent) pmCloudCall('saveEvent', savedEvent);
                 closeEventModal();
                 // Jump the selected day to the event's date so the user sees it appear
                 const [y, m, d] = date.split('-').map(Number);
@@ -5848,10 +5875,66 @@
                 if (!currentEditingEventId) return;
                 personalEvents = personalEvents.filter(e => e.id !== currentEditingEventId);
                 savePersonalEvents();
+                pmCloudCall('deleteEvent', currentEditingEventId);
                 closeEventModal();
                 renderPmCalendar();
                 renderPmDayEvents();
                 updatePmNextEvent();
+            };
+
+            // -------- Cloud sync (Firestore) --------
+            // localStorage is kept only as an offline cache; Firestore is the source of truth.
+            const PM_EVENTS_MIGRATED_KEY = 'personalEventsCloudMigrated_v1';
+            const PM_OVERRIDES_MIGRATED_KEY = 'hardcodedOverridesCloudMigrated_v1';
+            let pmInitDone = false;
+
+            const pmCloudCall = (method, ...args) => {
+                const cloud = window.pmCloud;
+                if (!cloud || !cloud.ready()) return;
+                Promise.resolve(cloud[method](...args)).catch(e => console.warn('Calendar cloud sync failed', e));
+            };
+
+            const pmRefreshAll = () => {
+                if (!pmInitDone) return;
+                renderPmCalendar();
+                renderPmDayEvents();
+                updatePmNextEvent();
+            };
+
+            window.pmApplyCloudEvents = (cloudEvents) => {
+                // One-time upload of anything this device only had locally.
+                if (localStorage.getItem(PM_EVENTS_MIGRATED_KEY) !== '1') {
+                    let localOnly = [];
+                    try {
+                        const local = JSON.parse(localStorage.getItem(PM_EVENTS_KEY) || '[]');
+                        const cloudIds = new Set(cloudEvents.map(e => e.id));
+                        localOnly = Array.isArray(local) ? local.filter(e => e && e.id && !cloudIds.has(e.id)) : [];
+                    } catch (e) { localOnly = []; }
+                    localOnly.forEach(ev => pmCloudCall('saveEvent', ev));
+                    cloudEvents = cloudEvents.concat(localOnly);
+                    localStorage.setItem(PM_EVENTS_MIGRATED_KEY, '1');
+                }
+                personalEvents = cloudEvents;
+                savePersonalEvents();
+                pmRefreshAll();
+            };
+
+            window.pmApplyCloudOverrides = (cloudOverrides) => {
+                if (localStorage.getItem(PM_OVERRIDES_MIGRATED_KEY) !== '1') {
+                    try {
+                        const local = JSON.parse(localStorage.getItem(HARDCODED_OVERRIDES_KEY) || '{}') || {};
+                        Object.keys(local).forEach(id => {
+                            if (!cloudOverrides[id]) {
+                                cloudOverrides[id] = local[id];
+                                pmCloudCall('saveOverride', id, local[id]);
+                            }
+                        });
+                    } catch (e) { /* ignore bad local data */ }
+                    localStorage.setItem(PM_OVERRIDES_MIGRATED_KEY, '1');
+                }
+                hardcodedEventOverrides = cloudOverrides;
+                saveHardcodedEventOverrides();
+                pmRefreshAll();
             };
 
             // -------- Wire up on DOM ready --------
@@ -5969,6 +6052,9 @@
                         updatePmNextEvent();
                     };
                 }
+
+                pmInitDone = true;
+                pmRefreshAll();
             };
 
             if (document.readyState === 'complete') {
