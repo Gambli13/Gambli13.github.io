@@ -551,6 +551,9 @@
             }
         };
 
+                // Expose Firestore helpers for the Halloween sync
+        window.firestoreHelpers = { doc, setDoc, onSnapshot, getCollectionPath, db };
+
         initFirebase();
     </script>
 
@@ -2865,7 +2868,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp" class="text-dark-secondary">Last Update 02/10/2026 - 23:54</div>
+    <div id="version-timestamp" class="text-dark-secondary">Last Update 03/10/2026 - 00:01</div>
     </body>
 
     <style>
@@ -3699,20 +3702,56 @@
                 });
             };
 
-            const setHalloween = (on) => {
+            let isApplyingRemote = false;
+
+            const applyLocally = (on) => {
                 document.documentElement.classList.toggle('halloween', on);
                 try { localStorage.setItem(HALLOWEEN_KEY, on ? '1' : '0'); } catch (e) {}
                 if (on) applyHalloweenIcons(); else clearHalloweenIcons();
             };
 
+            const setHalloween = async (on) => {
+                applyLocally(on);
+                // Push to Firestore so other devices on this account see it too
+                if (!isApplyingRemote) {
+                    const h = window.firestoreHelpers;
+                    if (h && h.db) {
+                        try {
+                            await h.setDoc(
+                                h.doc(h.db, h.getCollectionPath('settings'), 'halloween'),
+                                { on: !!on, updatedAt: new Date().toISOString() }
+                            );
+                        } catch (e) { console.warn('Halloween sync (write) failed:', e); }
+                    }
+                }
+            };
+
             window.toggleHalloween = () => setHalloween(!document.documentElement.classList.contains('halloween'));
 
-            // Restore saved state before paint
+            // Restore local state immediately so there's no flash before Firestore responds
             if (localStorage.getItem(HALLOWEEN_KEY) === '1') {
                 document.documentElement.classList.add('halloween');
             }
 
-            // Wire the button + patch renderAssignments once the DOM is ready
+            // Subscribe to remote changes — fires whenever any device toggles it
+            const subscribeRemote = () => {
+                const h = window.firestoreHelpers;
+                if (!h || !h.db) { setTimeout(subscribeRemote, 500); return; }
+                try {
+                    h.onSnapshot(
+                        h.doc(h.db, h.getCollectionPath('settings'), 'halloween'),
+                        (snap) => {
+                            if (!snap.exists()) return;
+                            const on = snap.data().on === true;
+                            if (document.documentElement.classList.contains('halloween') === on) return;
+                            isApplyingRemote = true;
+                            applyLocally(on);
+                            isApplyingRemote = false;
+                        }
+                    );
+                } catch (e) { console.warn('Halloween sync (listen) failed:', e); }
+            };
+
             const wire = () => {
                 const btn = document.getElementById('menu-toggle-halloween');
                 const wrapper = document.getElementById('sliding-menu-wrapper');
@@ -3735,12 +3774,14 @@
                     };
                 }
 
-                // Icons for whatever assignments are already on screen
                 if (document.documentElement.classList.contains('halloween')) {
                     applyHalloweenIcons();
                 }
 
                 if (window.lucide) lucide.createIcons();
+
+                // Start listening to Firestore
+                subscribeRemote();
             };
 
             if (document.readyState === 'loading') {
