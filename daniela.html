@@ -2740,6 +2740,13 @@
                 <div class="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-dark-primary"></div>
             </div>
         </button>
+        <button id="menu-toggle-halloween" class="slide-item slide-item-3 relative w-12 h-12 rounded-xl bg-white/90 backdrop-blur-md border border-gray-200 shadow-md hover:bg-white transition-colors flex items-center justify-center group">
+            <span data-lucide="ghost" class="w-5 h-5 text-orange-500"></span>
+            <div class="menu-tooltip px-2 py-1 bg-dark-primary text-white text-xs font-bold rounded shadow-lg whitespace-nowrap">
+                Halloween
+                <div class="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-dark-primary"></div>
+            </div>
+        </button>
     </div>
     
     <div id="weekly-timetable-modal" class="fixed inset-0 bg-black/20 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition duration-300 z-50">
@@ -2858,7 +2865,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp" class="text-dark-secondary">Last Update 16/09/2026 - 13:26</div>
+    <div id="version-timestamp" class="text-dark-secondary">Last Update 02/10/2026 - 23:54</div>
     </body>
 
     <style>
@@ -2934,6 +2941,7 @@
         }
         #sliding-menu-wrapper.active .slide-item-1 { transition-delay: 0.05s; }
         #sliding-menu-wrapper.active .slide-item-2 { transition-delay: 0.1s; }
+        #sliding-menu-wrapper.active .slide-item-3 { transition-delay: 0.15s; }
         
         /* Tooltip Labels */
         .menu-tooltip {
@@ -2947,6 +2955,468 @@
         #menu-open-notes:active {
             transform: scale(0.95) !important;
             transition-duration: 0.1s;
+        }
+    </style>
+    <style>
+        /* ====== HALLOWEEN THEME ====== */
+        html.halloween body { background-color: transparent; }
+
+        /* Base text/icon palette */
+        html.halloween .text-dark-primary { color: #ffb366 !important; }
+        html.halloween .text-dark-secondary { color: #e6b89c !important; }
+        html.halloween .text-dark-tertiary { color: #b58a6a !important; }
+        html.halloween .icon-dark-primary { color: #ff8c42 !important; }
+
+        /* Cards -> deep purple glass with orange glow */
+        html.halloween #uom-card,
+        html.halloween #assignments-card,
+        html.halloween #next-lesson-widget {
+            background-color: rgba(45, 20, 70, 0.88) !important;
+            border: 2px solid #ff6b1a !important;
+            box-shadow: 0 0 25px rgba(255, 107, 26, 0.35), inset 0 0 15px rgba(168, 85, 247, 0.15) !important;
+            position: relative;
+        }
+
+        html.halloween #bookmark-container {
+            background-color: rgba(45, 20, 70, 0.75) !important;
+            border: 1px solid #a855f7 !important;
+        }
+
+        /* Any remaining white glass surfaces */
+        html.halloween .bg-white\/70,
+        html.halloween .bg-white\/90,
+        html.halloween .bg-white\/80,
+        html.halloween .bg-white\/50 {
+            background-color: rgba(60, 30, 90, 0.80) !important;
+        }
+
+        /* Finished Assignments toggle button — kill the white glass look */
+        html.halloween #toggle-finished-assignments-btn {
+            background-color: rgba(45, 20, 70, 0.6) !important;
+            color: #ffb366 !important;
+            border: 1px solid #ff8c42 !important;
+        }
+        html.halloween #toggle-finished-assignments-btn:hover {
+            background-color: rgba(60, 30, 90, 0.85) !important;
+            color: #ff8c42 !important;
+        }
+        html.halloween #toggle-finished-assignments-btn:disabled {
+            opacity: 0.5;
+        }
+
+        /* Finished assignment rows inside the drawer */
+        html.halloween .finished-item-wrap {
+            background-color: rgba(45, 20, 70, 0.55) !important;
+            border: 1px solid rgba(255, 140, 66, 0.3) !important;
+        }
+        html.halloween .bookmark-icon {
+            background-color: rgba(60, 30, 90, 0.85) !important;
+            border-color: #ff8c42 !important;
+        }
+        html.halloween .bookmark-icon:hover { border-color: #a855f7 !important; }
+
+        /* Pinks -> oranges / purples */
+        html.halloween .text-pink-500,
+        html.halloween .text-pink-400,
+        html.halloween .text-pink-300,
+        html.halloween .text-pink-600,
+        html.halloween .text-pink-700,
+        html.halloween .text-pink-800 { color: #ff8c42 !important; }
+
+        html.halloween .bg-pink-50 { background-color: rgba(60, 30, 90, 0.4) !important; }
+        html.halloween .bg-pink-100 { background-color: rgba(80, 40, 120, 0.6) !important; }
+        html.halloween .bg-pink-200 { background-color: #6b2d9a !important; }
+        html.halloween .bg-pink-300,
+        html.halloween .bg-pink-400,
+        html.halloween .bg-pink-500 { background-color: #ff6b1a !important; }
+
+        html.halloween .border-pink-100,
+        html.halloween .border-pink-200,
+        html.halloween .border-pink-300 { border-color: #a855f7 !important; }
+
+        html.halloween .ring-pink-100,
+        html.halloween .ring-pink-200,
+        html.halloween .ring-pink-300 { --tw-ring-color: #a855f7 !important; }
+
+        /* Progress circles (Paga/Stipend) */
+        html.halloween #paga-progress-circle,
+        html.halloween #stipend-progress-circle { color: #ff6b1a !important; }
+
+        /* Search bar */
+        html.halloween #search-input {
+            background-color: rgba(45, 20, 70, 0.92) !important;
+            color: #ffb366 !important;
+            border-color: #ff6b1a !important;
+        }
+        html.halloween #search-input::placeholder { color: #a67c5a !important; }
+        html.halloween #search-input:focus { border-color: #a855f7 !important; }
+
+        /* Compact top bar buttons */
+        html.halloween #compact-uom-btn,
+        html.halloween #compact-assign-btn {
+            background-color: rgba(45, 20, 70, 0.92) !important;
+            border-color: #ff6b1a !important;
+            color: #ffb366 !important;
+        }
+        /* "Last Update" version timestamp pill in the bottom-right */
+        html.halloween #version-timestamp {
+            background-color: rgba(45, 20, 70, 0.75) !important;
+            color: #ffb366 !important;
+            border: 1px solid #ff8c42 !important;
+            backdrop-filter: blur(5px);
+        }
+
+        /* Manage Backgrounds button — also had the white glass look */
+        html.halloween #toggle-bg-bar-btn {
+            background-color: rgba(45, 20, 70, 0.75) !important;
+            color: #ffb366 !important;
+            border: 1px solid #ff8c42 !important;
+        }
+        html.halloween #toggle-bg-bar-btn:hover {
+            background-color: rgba(60, 30, 90, 0.9) !important;
+        }
+
+        /* User ID text */
+        html.halloween #user-id-display {
+            color: #b58a6a !important;
+        }
+        /* Spiderweb in top-left of the UoM + Assignments cards */
+        html.halloween #uom-card::before,
+        html.halloween #assignments-card::before {
+            content: '';
+            position: absolute;
+            top: -2px; left: -2px;
+            width: 70px; height: 70px;
+            background-image: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 70 70'%3E%3Cg stroke='%23ff8c42' stroke-width='1.2' fill='none' opacity='0.85'%3E%3Cpath d='M0,0 L70,70 M0,15 L55,70 M0,30 L40,70 M0,45 L25,70 M0,60 L10,70 M15,0 L70,55 M30,0 L70,40 M45,0 L70,25 M60,0 L70,10'/%3E%3Cpath d='M0,8 Q10,10 12,0 M0,22 Q18,24 24,0 M0,36 Q25,38 36,0 M0,50 Q35,52 48,0 M0,64 Q45,66 60,0'/%3E%3C/g%3E%3C/svg%3E");
+            background-size: contain;
+            background-repeat: no-repeat;
+            pointer-events: none;
+            z-index: 15;
+        }
+        html.halloween #uom-card::before { opacity: 0.9; }
+
+        /* Flying bat on the Assignments card */
+        html.halloween #assignments-card::after {
+            content: '🦇';
+            position: absolute;
+            top: -14px; right: 24px;
+            font-size: 26px;
+            animation: hwBatFly 3s ease-in-out infinite;
+            pointer-events: none;
+            z-index: 15;
+        }
+        @keyframes hwBatFly {
+            0%, 100% { transform: translateY(0) rotate(-6deg); }
+            50% { transform: translateY(-10px) rotate(6deg); }
+        }
+
+        /* Little pumpkin on the UoM card */
+        html.halloween #uom-card > div:first-child::after {
+            content: '🎃';
+            margin-left: 8px;
+            font-size: 18px;
+            display: inline-block;
+            animation: hwBounce 2.5s ease-in-out infinite;
+        }
+        @keyframes hwBounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-3px); }
+        }
+
+        /* Random Halloween icon in the top-left of each assignment */
+        html.halloween .assignment-item {
+            position: relative;
+            overflow: visible !important;
+            border: 1px solid #ff8c42 !important;
+        }
+        html.halloween .assignment-item::before {
+            content: attr(data-halloween-icon);
+            position: absolute;
+            top: -10px; left: -10px;
+            font-size: 20px;
+            z-index: 5;
+            filter: drop-shadow(0 2px 3px rgba(0,0,0,0.6));
+            pointer-events: none;
+        }
+
+        /* Timetable modal: swap flowerBG for halloweenbg */
+        html.halloween #weekly-timetable-modal > div {
+            background-image: url('images/halloweenbg.png') !important;
+        }
+
+        /* Calendar header image swap too, so it fits the vibe */
+        html.halloween #calendar-modal > div > div:first-child {
+            background-image: url('images/halloweenbg.png') !important;
+        }
+
+        /* Toggle button when Halloween is ON */
+        html.halloween #menu-toggle-halloween {
+            background-color: #a855f7 !important;
+            border-color: #ff6b1a !important;
+            box-shadow: 0 0 15px rgba(147, 2, 184, 0.6) !important;
+        }
+        /* Ghost icon — purple when idle, white when Halloween is active */
+        #menu-toggle-halloween svg {
+            stroke: #ff6b1a !important;
+            color: #ff6b1a !important;
+        }
+        html.halloween #menu-toggle-halloween svg {
+            stroke: #ffffff !important;
+            color: #ffffff !important;
+        }
+
+               /* Compact top bar buttons */
+        html.halloween #compact-uom-btn,
+        html.halloween #compact-assign-btn {
+            background-color: rgba(45, 20, 70, 0.92) !important;
+            border-color: #ff6b1a !important;
+            color: #ffb366 !important;
+        }
+
+        /* ============================================================
+           Modals (Task Details, Add Lesson, Confirm Remove, Expanded Notes, etc.)
+           ============================================================ */
+        html.halloween #assignment-detail-modal > div,
+        html.halloween #assignment-modal > div,
+        html.halloween #bookmark-modal > div,
+        html.halloween #notes-expanded-modal > div,
+        html.halloween #notes-app-modal > div,
+        html.halloween #add-lesson-modal > div,
+        html.halloween #confirm-remove-modal > div,
+        html.halloween #calendar-modal > div {
+            background-color: #2d1548 !important;
+            border: 2px solid #ff6b1a !important;
+            box-shadow: 0 0 30px rgba(255, 107, 26, 0.4) !important;
+        }
+
+        /* Inner header/footer panels (bg-gray-50 / bg-gray-100 inside modals) */
+        html.halloween #assignment-detail-modal .bg-gray-50,
+        html.halloween #notes-expanded-modal .bg-gray-50,
+        html.halloween #notes-expanded-modal .bg-gray-100,
+        html.halloween #notes-app-modal .bg-gray-50,
+        html.halloween #notes-app-modal .bg-gray-100,
+        html.halloween #notes-app-modal .bg-white,
+        html.halloween #calendar-modal .bg-gray-50\/50 {
+            background-color: rgba(60, 30, 90, 0.6) !important;
+        }
+
+        /* Modal section borders */
+        html.halloween #assignment-detail-modal .border-gray-100,
+        html.halloween #assignment-detail-modal .border-gray-200,
+        html.halloween #assignment-detail-modal .border-gray-300,
+        html.halloween #assignment-modal .border-gray-200,
+        html.halloween #assignment-modal .border-gray-300,
+        html.halloween #bookmark-modal .border-gray-200,
+        html.halloween #bookmark-modal .border-gray-300,
+        html.halloween #add-lesson-modal .border-gray-200,
+        html.halloween #confirm-remove-modal .border-gray-200,
+        html.halloween #calendar-modal .border-gray-200,
+        html.halloween #notes-app-modal .border-gray-200,
+        html.halloween #notes-expanded-modal .border-gray-100,
+        html.halloween #notes-expanded-modal .border-gray-200 {
+            border-color: rgba(255, 140, 66, 0.3) !important;
+        }
+
+        /* Inputs / textareas / selects inside modals */
+        html.halloween #assignment-detail-modal input,
+        html.halloween #assignment-detail-modal textarea,
+        html.halloween #assignment-modal input,
+        html.halloween #assignment-modal textarea,
+        html.halloween #bookmark-modal input,
+        html.halloween #add-lesson-modal input,
+        html.halloween #add-lesson-modal select,
+        html.halloween #notes-expanded-modal textarea,
+        html.halloween #notes-app-modal input,
+        html.halloween #notes-app-modal textarea {
+            background-color: rgba(45, 20, 70, 0.7) !important;
+            color: #ffb366 !important;
+            border-color: #ff8c42 !important;
+        }
+        html.halloween #assignment-detail-modal input::placeholder,
+        html.halloween #assignment-detail-modal textarea::placeholder,
+        html.halloween #assignment-modal input::placeholder,
+        html.halloween #assignment-modal textarea::placeholder,
+        html.halloween #bookmark-modal input::placeholder,
+        html.halloween #add-lesson-modal input::placeholder,
+        html.halloween #notes-expanded-modal textarea::placeholder,
+        html.halloween #notes-app-modal textarea::placeholder {
+            color: #a67c5a !important;
+        }
+
+        /* Primary / Save buttons -> solid orange */
+        html.halloween #save-assignment-detail-btn,
+        html.halloween #add-assignment-btn,
+        html.halloween #add-bookmark-btn,
+        html.halloween #save-lesson-btn,
+        html.halloween #save-expanded-notes-btn {
+            background-color: #ff6b1a !important;
+            color: #fff !important;
+        }
+        html.halloween #save-assignment-detail-btn:hover,
+        html.halloween #add-assignment-btn:hover,
+        html.halloween #add-bookmark-btn:hover,
+        html.halloween #save-lesson-btn:hover,
+        html.halloween #save-expanded-notes-btn:hover {
+            background-color: #ff8c42 !important;
+        }
+
+        /* Cancel / Close buttons -> purple with orange text */
+        html.halloween #close-assignment-modal-btn,
+        html.halloween #close-detail-modal-btn,
+        html.halloween #close-bookmark-modal-btn,
+        html.halloween #cancel-add-lesson-btn,
+        html.halloween #cancel-expanded-notes-btn,
+        html.halloween #confirm-remove-cancel-btn {
+            background-color: #6b2d9a !important;
+            color: #ffb366 !important;
+        }
+        html.halloween #close-assignment-modal-btn:hover,
+        html.halloween #close-detail-modal-btn:hover,
+        html.halloween #close-bookmark-modal-btn:hover,
+        html.halloween #cancel-add-lesson-btn:hover,
+        html.halloween #cancel-expanded-notes-btn:hover,
+        html.halloween #confirm-remove-cancel-btn:hover {
+            background-color: #7f3cb5 !important;
+        }
+
+        /* Destructive buttons */
+        html.halloween #delete-from-detail-btn {
+            background-color: rgba(220, 38, 38, 0.3) !important;
+            color: #ff6b6b !important;
+            border-color: rgba(220, 38, 38, 0.5) !important;
+        }
+
+        /* Add Sub-task button */
+        html.halloween #add-subtask-btn {
+            background-color: rgba(255, 107, 26, 0.3) !important;
+            color: #ffb366 !important;
+            border-color: #ff8c42 !important;
+        }
+
+        /* ============================================================
+           Calendar: full purple/orange theme with light-orange off-month
+           ============================================================ */
+
+        /* Weekday header row */
+        html.halloween #calendar-modal .grid-cols-7.bg-pink-100 {
+            background-color: #d44a0a !important;
+        }
+        html.halloween #calendar-modal .grid-cols-7 > div.p-3 {
+            color: #fff5db !important;
+        }
+
+        /* Grid gap colour */
+        html.halloween #calendar-grid {
+            background-color: #fff5db !important;
+        }
+        /* Vignette inside each calendar cell for depth */
+        html.halloween #calendar-grid > div {
+            box-shadow: inset 0 0 25px rgba(0, 0, 0, 0.35) !important;
+        }
+
+        /* Current-month cells -> deep purple, orange numbers */
+        html.halloween #calendar-grid > div.bg-pink-50 {
+            background-color: #ff8c42 !important;
+        }
+        html.halloween #calendar-grid > div.bg-pink-50:hover,
+        html.halloween #calendar-grid > div.hover\:bg-pink-100:hover {
+            background-color: #ffa05c !important;
+        }
+        html.halloween #calendar-grid > div.bg-pink-50 > span.font-bold {
+            color: #5c2800 !important;
+        }
+
+        /* Off-month cells -> LIGHT ORANGE with purple numbers */
+        html.halloween #calendar-grid > div.bg-gray-50\/40 {
+            background-color: #fff5db !important;
+        }
+        html.halloween #calendar-grid > div.bg-gray-50\/40 > span.font-bold {
+            color: #ff6b1a !important;
+        }
+        /* Today ring + highlight */
+        html.halloween #calendar-grid .ring-pink-300 {
+            --tw-ring-color: #ff8c42 !important;
+        }
+        html.halloween #calendar-grid .bg-blue-50\/30 {
+            background-color: rgba(255, 140, 66, 0.2) !important;
+        }
+
+        /* Assignment pills in CURRENT month -> orange bg + purple text */
+        html.halloween #calendar-grid > div.bg-pink-50 .bg-pink-100 {
+            background-color: #fff5db !important;
+            border-color: #d44a0a !important;
+            color: #5c2800 !important;
+        }
+        html.halloween #calendar-grid > div.bg-pink-50 .text-pink-700 {
+            color: #5c2800 !important;
+        }
+        html.halloween #calendar-grid > div.bg-pink-50 .bg-pink-100:hover {
+            background-color: #ffe9b8 !important;
+        }
+
+        /* Assignment pills in OFF month -> purple bg + orange text, no fade */
+        html.halloween #calendar-grid > div.bg-gray-50\/40 .bg-gray-100 {
+            background-color: #ff8c42 !important;
+            border-color: #d44a0a !important;
+            color: #fff5db !important;
+            opacity: 1 !important;
+        }
+        html.halloween #calendar-grid > div.bg-gray-50\/40 .text-gray-400 {
+            color: #fff5db !important;
+        }
+
+        /* Prev / Next arrows -> purple with orange icons */
+        html.halloween #prev-month-btn,
+        html.halloween #next-month-btn {
+            background-color: #6b2d9a !important;
+            border-color: #ff8c42 !important;
+            color: #ff8c42 !important;
+        }
+        html.halloween #prev-month-btn:hover,
+        html.halloween #next-month-btn:hover {
+            background-color: #7f3cb5 !important;
+            color: #ffb366 !important;
+        }
+        html.halloween #prev-month-btn span,
+        html.halloween #next-month-btn span {
+            color: #ff8c42 !important;
+        }
+
+        /* "Today" button -> solid orange */
+        html.halloween #today-btn {
+            background-color: #ff6b1a !important;
+            color: #fff !important;
+        }
+        html.halloween #today-btn:hover {
+            background-color: #ff8c42 !important;
+        }
+
+        /* Calendar month/year title */
+        html.halloween #calendar-month-year {
+            color: #fff5db !important;
+            text-shadow:
+                0 0 8px rgba(0, 0, 0, 0.9),
+                0 2px 6px rgba(0, 0, 0, 0.8),
+                0 0 2px rgba(0, 0, 0, 1) !important;
+            background-color: rgba(45, 20, 70, 0.65);
+            padding: 4px 14px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 140, 66, 0.5);
+            backdrop-filter: blur(4px);
+        }
+
+        /* Timetable edit/add buttons for consistency */
+        html.halloween #timetable-edit-btn {
+            background-color: #6b2d9a !important;
+            border-color: #ff8c42 !important;
+            color: #ff8c42 !important;
+        }
+        html.halloween #timetable-edit-btn:hover {
+            background-color: #7f3cb5 !important;
+        }
+        html.halloween #timetable-add-btn {
+            background-color: #ff6b1a !important;
+            color: #fff !important;
         }
     </style>
     <style>
@@ -3131,84 +3601,153 @@
         }
     </style>
     <script>
+            (function () {
+                const root = document.documentElement;
+                // Phones, tablets (incl. iPad landscape) and small windows
+                const mq = window.matchMedia('(max-width: 1023px), (hover: none) and (pointer: coarse)');
+                const uomBtn = document.getElementById('compact-uom-btn');
+                const assignBtn = document.getElementById('compact-assign-btn');
+                const backdrop = document.getElementById('compact-backdrop');
+
+                const setOpen = (which) => {
+                    root.classList.toggle('uom-open', which === 'uom');
+                    root.classList.toggle('assign-open', which === 'assign');
+                    uomBtn.setAttribute('aria-expanded', which === 'uom');
+                    assignBtn.setAttribute('aria-expanded', which === 'assign');
+                };
+                const closeAll = () => setOpen(null);
+                window.closeCompactPanels = closeAll;
+
+                const applyMode = () => {
+                    root.classList.toggle('compact', mq.matches);
+                    if (!mq.matches) closeAll();
+                };
+                applyMode();
+                mq.addEventListener ? mq.addEventListener('change', applyMode) : mq.addListener(applyMode);
+
+                uomBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    setOpen(root.classList.contains('uom-open') ? null : 'uom');
+                });
+                assignBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    setOpen(root.classList.contains('assign-open') ? null : 'assign');
+                });
+                backdrop.addEventListener('click', closeAll);
+                document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAll(); });
+
+                // Red badge = number of pending assignments (hidden when 0)
+                const badge = document.getElementById('compact-assign-badge');
+                const updateBadge = (list) => {
+                    const n = Array.isArray(list) ? list.length : 0;
+                    badge.textContent = n > 99 ? '99+' : String(n);
+                    badge.classList.toggle('hidden', n === 0);
+                };
+                const originalRender = window.renderAssignments;
+                if (typeof originalRender === 'function') {
+                    window.renderAssignments = (list) => { originalRender(list); updateBadge(list); };
+                }
+
+                // Bookmarks: "Remove" button next to "Add" toggles the X's (phone/tablet only)
+                const bmContainer = document.getElementById('bookmark-container');
+                const injectRemoveBtn = () => {
+                    if (!bmContainer || bmContainer.querySelector('.bm-remove-btn')) return;
+                    const hasBookmarks = !!bmContainer.querySelector('.bookmark-item-wrap');
+                    if (!hasBookmarks) bmContainer.classList.remove('bm-edit');
+                    const editing = bmContainer.classList.contains('bm-edit');
+                    const btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = 'bm-remove-btn flex-col items-center justify-center w-16 h-16 sm:w-20 sm:h-20 bg-white/50 border border-white/70 rounded-2xl text-dark-tertiary hover:text-dark-primary transition-all duration-300';
+                    btn.title = editing ? 'Done removing' : 'Remove bookmarks';
+                    btn.disabled = !hasBookmarks;
+                    if (!hasBookmarks) btn.style.opacity = '0.5';
+                    btn.innerHTML = `<span data-lucide="${editing ? 'check' : 'minus'}" class="w-8 h-8 icon-dark-primary"></span><span class="text-xs mt-1">${editing ? 'Done' : 'Remove'}</span>`;
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        bmContainer.classList.toggle('bm-edit');
+                        btn.remove();
+                        injectRemoveBtn();
+                    });
+                    const addBtn = bmContainer.querySelector('#open-bookmark-modal-btn');
+                    if (addBtn) addBtn.after(btn); else bmContainer.appendChild(btn);
+                    if (window.lucide) lucide.createIcons();
+                };
+                const originalRenderBookmarks = window.renderBookmarks;
+                if (typeof originalRenderBookmarks === 'function') {
+                    window.renderBookmarks = (list) => { originalRenderBookmarks(list); injectRemoveBtn(); };
+                }
+                // Leave Remove mode when switching back to the desktop layout
+                mq.addEventListener && mq.addEventListener('change', () => { if (!mq.matches && bmContainer) bmContainer.classList.remove('bm-edit'); });
+            })();
+        </script>
+        <script>
         (function () {
-            const root = document.documentElement;
-            // Phones, tablets (incl. iPad landscape) and small windows
-            const mq = window.matchMedia('(max-width: 1023px), (hover: none) and (pointer: coarse)');
-            const uomBtn = document.getElementById('compact-uom-btn');
-            const assignBtn = document.getElementById('compact-assign-btn');
-            const backdrop = document.getElementById('compact-backdrop');
+            const HALLOWEEN_KEY = 'halloweenTheme';
+            const HALLOWEEN_ICONS = ['🎃', '🍬', '🍭', '👻', '🦇', '🕷️', '🕸️', '🧙', '💀', '🌙', '🧛', '🍫'];
 
-            const setOpen = (which) => {
-                root.classList.toggle('uom-open', which === 'uom');
-                root.classList.toggle('assign-open', which === 'assign');
-                uomBtn.setAttribute('aria-expanded', which === 'uom');
-                assignBtn.setAttribute('aria-expanded', which === 'assign');
+            const applyHalloweenIcons = () => {
+                document.querySelectorAll('.assignment-item').forEach(el => {
+                    if (!el.dataset.halloweenIcon) {
+                        el.dataset.halloweenIcon = HALLOWEEN_ICONS[Math.floor(Math.random() * HALLOWEEN_ICONS.length)];
+                    }
+                });
             };
-            const closeAll = () => setOpen(null);
-            window.closeCompactPanels = closeAll;
 
-            const applyMode = () => {
-                root.classList.toggle('compact', mq.matches);
-                if (!mq.matches) closeAll();
+            const clearHalloweenIcons = () => {
+                document.querySelectorAll('.assignment-item').forEach(el => {
+                    delete el.dataset.halloweenIcon;
+                });
             };
-            applyMode();
-            mq.addEventListener ? mq.addEventListener('change', applyMode) : mq.addListener(applyMode);
 
-            uomBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                setOpen(root.classList.contains('uom-open') ? null : 'uom');
-            });
-            assignBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                setOpen(root.classList.contains('assign-open') ? null : 'assign');
-            });
-            backdrop.addEventListener('click', closeAll);
-            document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAll(); });
-
-            // Red badge = number of pending assignments (hidden when 0)
-            const badge = document.getElementById('compact-assign-badge');
-            const updateBadge = (list) => {
-                const n = Array.isArray(list) ? list.length : 0;
-                badge.textContent = n > 99 ? '99+' : String(n);
-                badge.classList.toggle('hidden', n === 0);
+            const setHalloween = (on) => {
+                document.documentElement.classList.toggle('halloween', on);
+                try { localStorage.setItem(HALLOWEEN_KEY, on ? '1' : '0'); } catch (e) {}
+                if (on) applyHalloweenIcons(); else clearHalloweenIcons();
             };
-            const originalRender = window.renderAssignments;
-            if (typeof originalRender === 'function') {
-                window.renderAssignments = (list) => { originalRender(list); updateBadge(list); };
+
+            window.toggleHalloween = () => setHalloween(!document.documentElement.classList.contains('halloween'));
+
+            // Restore saved state before paint
+            if (localStorage.getItem(HALLOWEEN_KEY) === '1') {
+                document.documentElement.classList.add('halloween');
             }
 
-            // Bookmarks: "Remove" button next to "Add" toggles the X's (phone/tablet only)
-            const bmContainer = document.getElementById('bookmark-container');
-            const injectRemoveBtn = () => {
-                if (!bmContainer || bmContainer.querySelector('.bm-remove-btn')) return;
-                const hasBookmarks = !!bmContainer.querySelector('.bookmark-item-wrap');
-                if (!hasBookmarks) bmContainer.classList.remove('bm-edit');
-                const editing = bmContainer.classList.contains('bm-edit');
-                const btn = document.createElement('button');
-                btn.type = 'button';
-                btn.className = 'bm-remove-btn flex-col items-center justify-center w-16 h-16 sm:w-20 sm:h-20 bg-white/50 border border-white/70 rounded-2xl text-dark-tertiary hover:text-dark-primary transition-all duration-300';
-                btn.title = editing ? 'Done removing' : 'Remove bookmarks';
-                btn.disabled = !hasBookmarks;
-                if (!hasBookmarks) btn.style.opacity = '0.5';
-                btn.innerHTML = `<span data-lucide="${editing ? 'check' : 'minus'}" class="w-8 h-8 icon-dark-primary"></span><span class="text-xs mt-1">${editing ? 'Done' : 'Remove'}</span>`;
-                btn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    bmContainer.classList.toggle('bm-edit');
-                    btn.remove();
-                    injectRemoveBtn();
-                });
-                const addBtn = bmContainer.querySelector('#open-bookmark-modal-btn');
-                if (addBtn) addBtn.after(btn); else bmContainer.appendChild(btn);
+            // Wire the button + patch renderAssignments once the DOM is ready
+            const wire = () => {
+                const btn = document.getElementById('menu-toggle-halloween');
+                const wrapper = document.getElementById('sliding-menu-wrapper');
+                if (btn) {
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        wrapper?.classList.remove('active');
+                        window.toggleHalloween();
+                    });
+                }
+
+                // Re-roll icons whenever assignments re-render
+                const origRender = window.renderAssignments;
+                if (typeof origRender === 'function') {
+                    window.renderAssignments = function (list) {
+                        origRender(list);
+                        if (document.documentElement.classList.contains('halloween')) {
+                            applyHalloweenIcons();
+                        }
+                    };
+                }
+
+                // Icons for whatever assignments are already on screen
+                if (document.documentElement.classList.contains('halloween')) {
+                    applyHalloweenIcons();
+                }
+
                 if (window.lucide) lucide.createIcons();
             };
-            const originalRenderBookmarks = window.renderBookmarks;
-            if (typeof originalRenderBookmarks === 'function') {
-                window.renderBookmarks = (list) => { originalRenderBookmarks(list); injectRemoveBtn(); };
+
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', wire);
+            } else {
+                wire();
             }
-            // Leave Remove mode when switching back to the desktop layout
-            mq.addEventListener && mq.addEventListener('change', () => { if (!mq.matches && bmContainer) bmContainer.classList.remove('bm-edit'); });
         })();
     </script>
-
 </html>
