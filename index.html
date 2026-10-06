@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <link rel="icon" type="image/x-icon" href="images/redchrome.ico">
     <title>New Tab</title>
     <script>
@@ -3194,7 +3194,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 06/10/2026 - 12:24</div>
+    <div id="version-timestamp">Last Update 07/10/2026 - 00:01</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
@@ -6065,5 +6065,204 @@
         })();
     </script>
 
+<style>
+    /* ===================== Mobile / touch layer ===================== */
+    /* Only the page-level container. .scroll-container is also reused on inner lists. */
+    body > .scroll-container { height: 100vh; height: 100dvh; }
+
+    /* Clip the slide animation inside the calendar cards */
+    #pm-calendar-panel { overflow: hidden; }
+    #calendar-modal > div { overflow: hidden; }
+    #pm-cal-grid, #calendar-grid { will-change: transform; }
+
+    /* F1 results table can scroll sideways on narrow screens */
+    #f1-modal-content .overflow-y-auto { overflow-x: auto; }
+
+    @media (max-width: 1023px) {
+        body > .scroll-container {
+            padding: 12px 12px calc(84px + env(safe-area-inset-bottom));
+        }
+        body > .scroll-container > .grid {
+            padding-top: .5rem !important;
+            padding-bottom: 0 !important;
+            gap: 1rem !important;
+        }
+
+        /* Put the search / greeting / bookmarks column first on phones */
+        body > .scroll-container > .grid > .lg\:col-span-3 {
+            order: -1;
+            padding: 0 !important;
+        }
+        body > .scroll-container > .grid > .lg\:col-span-3 > * + * { margin-top: 1.25rem !important; }
+
+        /* Side panels: less padding */
+        body > .scroll-container > .grid > .lg\:col-span-2 {
+            padding: 1rem !important;
+            border-radius: 1.25rem !important;
+        }
+
+        #pm-greeting .pm-greeting-line { font-size: 2rem; }
+        #bookmark-container { gap: .75rem !important; padding: .75rem !important; justify-items: center; }
+
+        #version-timestamp, #user-id-display { display: none !important; }
+
+        #radial-menu-wrapper {
+            left: 1rem;
+            bottom: calc(1rem + env(safe-area-inset-bottom));
+        }
+
+        #bottom-bg-bar { padding-bottom: calc(1rem + env(safe-area-inset-bottom)) !important; }
+        #bottom-background-list { padding-left: 1rem !important; padding-right: 1rem !important; }
+
+        /* School calendar modal */
+        #calendar-modal { padding: .5rem !important; }
+        #calendar-modal > div > div:first-child { padding: .75rem 1rem !important; }
+        #calendar-month-year { font-size: 1.15rem !important; }
+        #calendar-modal .grid-cols-7 > div.p-3 { padding: .5rem 0 !important; font-size: .7rem !important; }
+        #calendar-grid > div { min-height: 64px !important; padding: 4px !important; }
+        #calendar-grid .text-xs { font-size: 10px !important; }
+        #calendar-grid .p-1\.5 { padding: 2px 3px !important; }
+
+        /* Notes app: stack the sidebar above the editor */
+        #notes-app-modal { padding: .5rem !important; }
+        #notes-app-modal > div { flex-direction: column; height: 92dvh !important; }
+        #notes-app-modal .w-72 {
+            width: 100% !important;
+            height: auto !important;
+            max-height: 38%;
+            border-right: 0 !important;
+            border-bottom: 1px solid rgb(55 65 81);
+        }
+        #notes-app-modal .w-72 > div:first-child { padding-right: 4rem !important; } /* clear the X button */
+        #current-note-content { padding: 1rem !important; }
+
+        #weekly-timetable-modal > div { padding: 1rem !important; }
+        #weekly-timetable-content > div { min-width: 240px !important; width: 240px !important; }
+    }
+
+    /* Touch devices have no hover, so show the hover-only buttons */
+    @media (hover: none), (pointer: coarse) {
+        .delete-btn,
+        .finished-action-btn,
+        [id^="note-actions-"],
+        #bottom-background-list .opacity-0,
+        #maps-destination-list .opacity-0 { opacity: 1 !important; }
+
+        /* touch-action:none on bookmarks was blocking page scroll on phones */
+        .bookmark-item-wrap { touch-action: manipulation !important; }
+        .bookmark-icon:hover, .mcast-link-item:hover { transform: none; }
+
+        /* Stop iOS from zooming in when an input is focused */
+        input, textarea, select { font-size: 16px !important; }
+
+        /* Vertical scroll stays native; horizontal gestures go to the swipe handler */
+        #pm-cal-grid, #calendar-grid { touch-action: pan-y; }
+    }
+</style>
+
+<script>
+    // ===== Swipe left/right to change month =====
+    (function () {
+        const isTouch = window.matchMedia('(pointer: coarse)').matches;
+
+        // Don't pop the keyboard open on page load on phones
+        if (isTouch) {
+            const blurSearch = () => document.getElementById('search-input')?.blur();
+            blurSearch();
+            window.addEventListener('load', blurSearch);
+        }
+
+        function attachMonthSwipe(surface, prevBtn, nextBtn) {
+            if (!surface || !prevBtn || !nextBtn) return;
+
+            let x0 = 0, y0 = 0, axis = null;
+            let tracking = false, animating = false, justSwiped = false;
+
+            const setT = (transform, opacity, transition) => {
+                surface.style.transition = transition || 'none';
+                surface.style.transform = transform;
+                surface.style.opacity = opacity;
+            };
+            const snapBack = () => setT('translateX(0)', '1', 'transform .2s ease-out, opacity .2s ease-out');
+
+            surface.addEventListener('touchstart', (e) => {
+                if (animating || e.touches.length !== 1) { tracking = false; return; }
+                x0 = e.touches[0].clientX;
+                y0 = e.touches[0].clientY;
+                axis = null;
+                tracking = true;
+            }, { passive: true });
+
+            surface.addEventListener('touchmove', (e) => {
+                if (!tracking) return;
+                const dx = e.touches[0].clientX - x0;
+                const dy = e.touches[0].clientY - y0;
+                // Decide once whether this gesture is a horizontal swipe or a vertical scroll
+                if (!axis && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) {
+                    axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+                }
+                if (axis === 'x') {
+                    // Grid follows the finger slightly
+                    setT(`translateX(${dx * 0.5}px)`, String(1 - Math.min(Math.abs(dx) / 500, 0.35)));
+                }
+            }, { passive: true });
+
+            surface.addEventListener('touchend', (e) => {
+                if (!tracking) return;
+                tracking = false;
+                if (axis !== 'x') return;
+
+                const dx = (e.changedTouches[0]?.clientX ?? x0) - x0;
+                const threshold = Math.max(40, (surface.offsetWidth || 300) * 0.15);
+                if (Math.abs(dx) < threshold) { snapBack(); return; }
+
+                // Swallow the click that some browsers fire after the gesture,
+                // so a swipe doesn't also select a day
+                justSwiped = true;
+                setTimeout(() => { justSwiped = false; }, 350);
+
+                const forward = dx < 0; // swipe left = next month
+                animating = true;
+                setT(`translateX(${forward ? -35 : 35}%)`, '0', 'transform .16s ease-in, opacity .16s ease-in');
+
+                setTimeout(() => {
+                    // Reuse the existing arrow logic so month state stays in one place
+                    (forward ? nextBtn : prevBtn).click();
+                    setT(`translateX(${forward ? 35 : -35}%)`, '0');
+                    void surface.offsetWidth; // force reflow before sliding in
+                    setT('translateX(0)', '1', 'transform .22s ease-out, opacity .22s ease-out');
+                    setTimeout(() => { animating = false; }, 230);
+                }, 160);
+            });
+
+            surface.addEventListener('touchcancel', () => {
+                if (tracking) { tracking = false; snapBack(); }
+            });
+
+            // Capture phase, so it runs before the day-cell and inline onclick handlers
+            surface.addEventListener('click', (e) => {
+                if (justSwiped) { e.stopPropagation(); e.preventDefault(); }
+            }, true);
+        }
+
+        const wire = () => {
+            // Personal-mode mini calendar (also works in Feast mode, since it's the same grid)
+            attachMonthSwipe(
+                document.getElementById('pm-cal-grid'),
+                document.getElementById('pm-cal-prev'),
+                document.getElementById('pm-cal-next')
+            );
+            // School assignments calendar modal
+            attachMonthSwipe(
+                document.getElementById('calendar-grid'),
+                document.getElementById('prev-month-btn'),
+                document.getElementById('next-month-btn')
+            );
+        };
+
+        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wire);
+        else wire();
+    })();
+</script>
 </body>
 </html>
