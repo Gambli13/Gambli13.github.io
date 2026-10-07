@@ -3198,7 +3198,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 07/10/2026 - 10:07</div>
+    <div id="version-timestamp">Last Update 07/10/2026 - 10:16</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
@@ -6271,24 +6271,29 @@
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
-    // ===== Google Calendar sync (dashboard -> Google -> Samsung Calendar) =====
-    // Never syncs the hardcoded feast list or the hardcoded public holidays.
+    // ===== Two-way Google Calendar sync =====
+    // Push: personal events + assignments -> Google (Dashboard calendar)
+    // Pull: events created/edited in Google or Samsung -> dashboard (saved to Firestore)
+    // Never touches the hardcoded feast list or hardcoded public holidays.
     (function () {
         // ---------- CONFIG ----------
         const CLIENT_ID = '1035017852208-jndtq3dkjh8ditflio4i27cjibjb4joa.apps.googleusercontent.com';
         const CAL_ID = '41eaf036233ab15921f65d88ba8bf8b73a5255b2aed31a506fe6076e09e8bdbe@group.calendar.google.com';
+        const PULL_CALENDARS = [CAL_ID, 'primary']; // calendars to read phone/Google events from
         const TZ = 'Europe/Malta';
-        const SYNC_ASSIGNMENTS = true;      // assignment deadlines + unfinished subtasks
-        const SYNC_PERSONAL_FEASTS = true;  // your OWN events ticked "Feast" (not the hardcoded list)
+        const SYNC_ASSIGNMENTS = true;
+        const SYNC_PERSONAL_FEASTS = true;
+        const PULL_EVERY_MS = 2 * 60 * 1000;
+        const PULL_DAYS_BACK = 30; // first import only
 
         const CONNECTED_KEY = 'gcalConnected';
         const TOKEN_KEY = 'gcalToken';
-        const SYNCED_KEY = 'gcalSyncedMap_v1'; // { googleEventId: hash of last body pushed }
+        const SYNCED_KEY = 'gcalSyncedMap_v2';     // { "calId|eventId": hash of last body sent }
+        const OLD_SYNCED_KEY = 'gcalSyncedMap_v1';
+        const PULL_STATE_KEY = 'gcalPullState_v1'; // { calId: ISO time of last successful pull }
 
         // ---------- Auth ----------
-        let tokenClient = null;
-        let pending = null;
-
+        let tokenClient = null, pending = null;
         const isConnected = () => localStorage.getItem(CONNECTED_KEY) === '1';
         const loadToken = () => {
             try {
@@ -6298,7 +6303,6 @@
         };
         const hasToken = () => Boolean(loadToken());
 
-        // Must be called from a click (user gesture), otherwise the popup gets blocked
         const requestToken = () => new Promise((resolve, reject) => {
             if (!window.google?.accounts?.oauth2) return reject(new Error('Google sign-in not loaded yet'));
             if (!tokenClient) {
@@ -6324,11 +6328,11 @@
         });
 
         // ---------- API ----------
-        const api = async (method, path, body) => {
+        const api = async (method, calId, path, body) => {
             const token = loadToken();
             if (!token) throw new Error('NO_TOKEN');
             const r = await fetch(
-                `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(CAL_ID)}/events${path}`,
+                `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events${path}`,
                 {
                     method,
                     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -6339,20 +6343,14 @@
             return r;
         };
 
-        const upsert = async (body) => {
-            let r = await api('PUT', '/' + body.id, { ...body, status: 'confirmed' }); // update / revive
-            if (r.status === 404) r = await api('POST', '', body);                      // create
-            if (!r.ok) console.warn('Google sync failed for', body.summary, r.status, await r.text());
-            return r.ok;
-        };
-
-        // ---------- Date helpers ----------
+        // ---------- Helpers ----------
         const pad = (n) => String(n).padStart(2, '0');
         const isoDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-        const localDT = (d) => `${isoDate(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}:00`;
-        const parseLocal = (iso, hhmm) => {
+        const hhmm = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        const localDT = (d) => `${isoDate(d)}T${hhmm(d)}:00`;
+        const parseLocal = (iso, t) => {
             const [y, m, d] = iso.split('-').map(Number);
-            const [hh, mm] = (hhmm || '00:00').split(':').map(Number);
+            const [hh, mm] = (t || '00:00').split(':').map(Number);
             return new Date(y, m - 1, d, hh || 0, mm || 0);
         };
         const addDaysIso = (iso, n) => {
@@ -6360,28 +6358,37 @@
             return isoDate(new Date(y, m - 1, d + n));
         };
 
-        // Google event IDs only allow 0-9 and a-v, so hex-encode our keys
+        // Our own Google IDs: "db" + hex of "pe:<id>" / "as:<id>"
         const gId = (key) => 'db' + Array.from(new TextEncoder().encode(key))
             .map(b => b.toString(16).padStart(2, '0')).join('');
-
-        // Dashboard colours -> nearest Google Calendar colour
-        const COLOR_MAP = {
-            '#f472b6': '4',  // pink   -> Flamingo
-            '#60a5fa': '9',  // blue   -> Blueberry
-            '#34d399': '2',  // green  -> Sage
-            '#fbbf24': '5',  // amber  -> Banana
-            '#f87171': '11', // red    -> Tomato
-            '#a78bfa': '3',  // purple -> Grape
-            '#22d3ee': '7',  // cyan   -> Peacock
-            '#fb923c': '6'   // orange -> Tangerine
+        const isOurs = (id) => {
+            if (!/^db([0-9a-f]{2})+$/.test(id || '')) return false;
+            try {
+                const bytes = id.slice(2).match(/../g).map(h => parseInt(h, 16));
+                const s = new TextDecoder().decode(new Uint8Array(bytes));
+                return s.startsWith('pe:') || s.startsWith('as:');
+            } catch (e) { return false; }
+        };
+        const shortHash = (s) => {
+            let h = 5381;
+            for (const c of s) h = ((h * 33) ^ c.charCodeAt(0)) >>> 0;
+            return h.toString(36);
         };
 
-        // ---------- Dashboard -> Google event bodies ----------
+        const COLOR_MAP = {
+            '#f472b6': '4', '#60a5fa': '9', '#34d399': '2', '#fbbf24': '5',
+            '#f87171': '11', '#a78bfa': '3', '#22d3ee': '7', '#fb923c': '6'
+        };
+        const COLOR_BACK = Object.fromEntries(Object.entries(COLOR_MAP).map(([hex, id]) => [id, hex]));
+
+        // ---------- Dashboard -> Google ----------
         const personalToGoogle = (ev) => {
+            const imported = Boolean(ev.gcal && ev.gcal.eventId);
+            const calId = imported ? ev.gcal.calendarId : CAL_ID;
             const endDate = ev.endDate && ev.endDate >= ev.date ? ev.endDate : ev.date;
             const allDay = !ev.time && !ev.endTime;
             const body = {
-                id: gId('pe:' + ev.id),
+                id: imported ? ev.gcal.eventId : gId('pe:' + ev.id),
                 summary: ev.title || '(untitled)',
                 description: ev.notes || '',
                 colorId: COLOR_MAP[(ev.color || '').toLowerCase()]
@@ -6389,9 +6396,8 @@
 
             if (allDay) {
                 body.start = { date: ev.date };
-                body.end = { date: addDaysIso(endDate, 1) }; // Google's all-day end is exclusive
+                body.end = { date: addDaysIso(endDate, 1) };
             } else {
-                // Same rules as the dashboard: no end time on a later day = until 23:59
                 const start = parseLocal(ev.date, ev.time || '00:00');
                 const endTime = ev.endTime || (endDate === ev.date ? (ev.time || '00:00') : '23:59');
                 let end = parseLocal(endDate, endTime);
@@ -6400,41 +6406,36 @@
                 body.end = { dateTime: localDT(end), timeZone: TZ };
             }
 
-            if (ev.repeat && ev.repeat !== 'none') {
+            // Imported events keep Google's own repeat rule (PATCH leaves it untouched)
+            if (!imported && ev.repeat && ev.repeat !== 'none') {
                 const every = Math.max(1, Number(ev.repeatEvery) || 1);
                 let rule = `RRULE:FREQ=${ev.repeat === 'weekly' ? 'WEEKLY' : 'DAILY'};INTERVAL=${every}`;
                 if (ev.repeatEndMode === 'until' && ev.repeatUntil) {
-                    if (allDay) {
-                        rule += `;UNTIL=${ev.repeatUntil.replace(/-/g, '')}`;
-                    } else {
-                        const u = parseLocal(ev.repeatUntil, '23:59').toISOString()
-                            .replace(/[-:]/g, '').replace(/\.\d{3}/, '');
-                        rule += `;UNTIL=${u}`;
-                    }
+                    rule += allDay
+                        ? `;UNTIL=${ev.repeatUntil.replace(/-/g, '')}`
+                        : `;UNTIL=${parseLocal(ev.repeatUntil, '23:59').toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')}`;
                 } else {
-                    // Dashboard "for N days/weeks" = occurrences inside that window
                     rule += `;COUNT=${Math.ceil((Number(ev.repeatDuration) || 1) / every)}`;
                 }
                 body.recurrence = [rule];
             }
-            return body;
+            return { calId, body, imported };
         };
 
-        const assignmentBodies = (a) => {
+        const assignmentEntries = (a) => {
             const out = [];
             const add = (key, title, when, colorId, desc) => {
                 const d = when instanceof Date ? when : new Date(when);
                 if (!when || isNaN(d)) return;
-                const b = { id: gId(key), summary: title, description: desc || '', colorId };
+                const body = { id: gId(key), summary: title, description: desc || '', colorId };
                 if (d.getHours() === 23 && d.getMinutes() === 59) {
-                    // Deadline with no time set -> all-day
-                    b.start = { date: isoDate(d) };
-                    b.end = { date: addDaysIso(isoDate(d), 1) };
+                    body.start = { date: isoDate(d) };
+                    body.end = { date: addDaysIso(isoDate(d), 1) };
                 } else {
-                    b.start = { dateTime: localDT(d), timeZone: TZ };
-                    b.end = { dateTime: localDT(new Date(d.getTime() + 30 * 60000)), timeZone: TZ };
+                    body.start = { dateTime: localDT(d), timeZone: TZ };
+                    body.end = { dateTime: localDT(new Date(d.getTime() + 30 * 60000)), timeZone: TZ };
                 }
-                out.push(b);
+                out.push({ calId: CAL_ID, body, imported: false });
             };
             add('as:' + a.id, `📚 ${a.title || 'Assignment'}`, a.deadline, '11', a.notes);
             (a.subtasks || []).forEach((s, i) => {
@@ -6443,7 +6444,61 @@
             return out;
         };
 
-        // ---------- State fed by the existing Firestore listeners ----------
+        // ---------- Google -> Dashboard ----------
+        const parseRule = (g, ev) => {
+            const rule = (g.recurrence || []).find(r => r.startsWith('RRULE:'));
+            if (!rule) return;
+            const p = Object.fromEntries(rule.slice(6).split(';').map(x => x.split('=')));
+            if ((p.FREQ !== 'DAILY' && p.FREQ !== 'WEEKLY') || (p.BYDAY && p.BYDAY.includes(','))) {
+                ev.notes = (ev.notes ? ev.notes + '\n' : '') + '↻ Repeats in Google Calendar (pattern not shown here)';
+                return;
+            }
+            const every = Math.max(1, parseInt(p.INTERVAL || '1', 10));
+            ev.repeat = p.FREQ === 'WEEKLY' ? 'weekly' : 'daily';
+            ev.repeatEvery = every;
+            if (p.COUNT) {
+                ev.repeatEndMode = 'duration';
+                ev.repeatDuration = parseInt(p.COUNT, 10) * every;
+            } else if (p.UNTIL) {
+                ev.repeatEndMode = 'until';
+                ev.repeatUntil = `${p.UNTIL.slice(0, 4)}-${p.UNTIL.slice(4, 6)}-${p.UNTIL.slice(6, 8)}`;
+            } else {
+                ev.repeatEndMode = 'until';              // "forever" -> show 2 years ahead
+                ev.repeatUntil = addDaysIso(ev.date, 730);
+            }
+        };
+
+        const fromGoogle = (g, calId, localId) => {
+            const ev = {
+                id: localId,
+                title: g.summary || '(untitled)',
+                notes: g.description || '',
+                color: COLOR_BACK[g.colorId] || '',
+                gcal: { calendarId: calId, eventId: g.id },
+                repeat: 'none', repeatEvery: 1, repeatEndMode: 'duration', repeatDuration: 1, repeatUntil: ''
+            };
+            if (g.start.date) {
+                ev.date = g.start.date;
+                ev.endDate = addDaysIso(g.end?.date || g.start.date, -1);
+                if (ev.endDate < ev.date) ev.endDate = ev.date;
+                ev.time = '';
+                ev.endTime = '';
+            } else {
+                const s = new Date(g.start.dateTime);
+                const e = new Date(g.end?.dateTime || g.start.dateTime);
+                ev.date = isoDate(s); ev.time = hhmm(s);
+                ev.endDate = isoDate(e); ev.endTime = hhmm(e);
+            }
+            parseRule(g, ev);
+            return ev;
+        };
+
+        const fieldsOf = (e) => JSON.stringify([
+            e.title, e.notes, e.color, e.date, e.time, e.endDate, e.endTime,
+            e.repeat, e.repeatEvery, e.repeatEndMode, e.repeatDuration, e.repeatUntil
+        ]);
+
+        // ---------- State ----------
         let personalLoaded = false, assignmentsLoaded = false;
         let latestAssignments = [];
 
@@ -6454,89 +6509,190 @@
             } catch (e) { return []; }
         };
 
+        const loadSynced = () => {
+            try {
+                let m = JSON.parse(localStorage.getItem(SYNCED_KEY) || 'null');
+                if (!m) { // migrate from the one-way version
+                    const old = JSON.parse(localStorage.getItem(OLD_SYNCED_KEY) || '{}') || {};
+                    m = {};
+                    Object.keys(old).forEach(id => { m[`${CAL_ID}|${id}`] = old[id]; });
+                }
+                return m;
+            } catch (e) { return {}; }
+        };
+        const saveSynced = (m) => localStorage.setItem(SYNCED_KEY, JSON.stringify(m));
+        const loadPullState = () => {
+            try { return JSON.parse(localStorage.getItem(PULL_STATE_KEY) || '{}') || {}; }
+            catch (e) { return {}; }
+        };
+
         const buildDesired = () => {
             const out = {};
             readPersonal().forEach(ev => {
                 if (!ev || !ev.id || !ev.date) return;
-                if (ev.feast && !SYNC_PERSONAL_FEASTS) return;
-                const b = personalToGoogle(ev);
-                out[b.id] = b;
+                if (ev.feast && !SYNC_PERSONAL_FEASTS && !ev.gcal) return;
+                const entry = personalToGoogle(ev);
+                out[`${entry.calId}|${entry.body.id}`] = entry;
             });
             if (SYNC_ASSIGNMENTS) {
-                latestAssignments.forEach(a => assignmentBodies(a).forEach(b => { out[b.id] = b; }));
+                latestAssignments.forEach(a => assignmentEntries(a).forEach(entry => {
+                    out[`${entry.calId}|${entry.body.id}`] = entry;
+                }));
             }
             return out;
         };
-
-        const loadSynced = () => {
-            try { return JSON.parse(localStorage.getItem(SYNCED_KEY) || '{}') || {}; }
-            catch (e) { return {}; }
-        };
-        const saveSynced = (m) => localStorage.setItem(SYNCED_KEY, JSON.stringify(m));
 
         // ---------- Status button ----------
         const setStatus = (state) => {
             const label = document.getElementById('gcal-sync-label');
             const btn = document.getElementById('gcal-sync-btn');
             if (!label) return;
-            const text = {
-                'off': 'Connect',
-                'ok': 'Synced',
-                'syncing': 'Syncing…',
-                'needs-auth': 'Tap to sync',
-                'error': 'Sync error'
+            label.textContent = {
+                'off': 'Connect', 'ok': 'Synced', 'syncing': 'Syncing…',
+                'needs-auth': 'Tap to sync', 'error': 'Sync error'
             }[state] || 'Sync';
-            label.textContent = text;
             if (btn) btn.classList.toggle('primary', state === 'needs-auth' || state === 'error');
         };
 
-        // ---------- Reconcile: push changes, delete removed ----------
-        let syncing = false, runAgain = false, timer = null;
+        // ---------- Push (reconcile) ----------
+        let busy = false, pushAgain = false, pullAgain = false, timer = null;
         const scheduleSync = () => { clearTimeout(timer); timer = setTimeout(runSync, 800); };
+
+        const upsert = async ({ calId, body, imported }, alreadySynced) => {
+            let r;
+            if (imported) {
+                r = await api('PATCH', calId, '/' + encodeURIComponent(body.id), body);
+                if (r.status === 404 || r.status === 410) return true; // deleted in Google; next pull removes it
+            } else if (alreadySynced) {
+                r = await api('PUT', calId, '/' + body.id, { ...body, status: 'confirmed' });
+                if (r.status === 404) r = await api('POST', calId, '', body);
+            } else {
+                r = await api('POST', calId, '', body);
+                if (r.status === 409) r = await api('PUT', calId, '/' + body.id, { ...body, status: 'confirmed' });
+            }
+            if (!r.ok) console.warn('Google sync failed for', body.summary, r.status, await r.text());
+            return r.ok;
+        };
 
         const runSync = async () => {
             if (!isConnected()) { setStatus('off'); return; }
-            // Never reconcile before real data has loaded, or everything would look "deleted"
             if (!personalLoaded || (SYNC_ASSIGNMENTS && !assignmentsLoaded)) return;
             if (!hasToken()) { setStatus('needs-auth'); return; }
-            if (syncing) { runAgain = true; return; }
+            if (busy) { pushAgain = true; return; }
 
-            syncing = true;
+            busy = true;
             setStatus('syncing');
             let failed = 0;
             try {
                 const desired = buildDesired();
                 const synced = loadSynced();
 
-                for (const [id, body] of Object.entries(desired)) {
-                    const hash = JSON.stringify(body);
-                    if (synced[id] === hash) continue;
-                    if (await upsert(body)) { synced[id] = hash; saveSynced(synced); }
+                for (const [key, entry] of Object.entries(desired)) {
+                    const hash = JSON.stringify(entry.body);
+                    if (synced[key] === hash) continue;
+                    if (await upsert(entry, key in synced)) { synced[key] = hash; saveSynced(synced); }
                     else failed++;
                 }
-                for (const id of Object.keys(synced)) {
-                    if (desired[id]) continue;
-                    const r = await api('DELETE', '/' + id);
-                    if (r.ok || r.status === 404 || r.status === 410) { delete synced[id]; saveSynced(synced); }
+                for (const key of Object.keys(synced)) {
+                    if (desired[key]) continue;
+                    const i = key.indexOf('|');
+                    const r = await api('DELETE', key.slice(0, i), '/' + encodeURIComponent(key.slice(i + 1)));
+                    if (r.ok || r.status === 404 || r.status === 410) { delete synced[key]; saveSynced(synced); }
                     else failed++;
                 }
                 setStatus(failed ? 'error' : 'ok');
             } catch (e) {
-                console.warn('Google sync stopped:', e);
+                console.warn('Google push stopped:', e);
                 setStatus(e.message === 'NO_TOKEN' ? 'needs-auth' : 'error');
             } finally {
-                syncing = false;
-                if (runAgain) { runAgain = false; scheduleSync(); }
+                busy = false;
+                if (pullAgain) { pullAgain = false; runPull(); }
+                else if (pushAgain) { pushAgain = false; scheduleSync(); }
             }
         };
 
-        // ---------- Hook the existing data flow ----------
-        // Firestore snapshots call these, so any change (from any device) triggers a sync.
+        // ---------- Pull ----------
+        const applyGoogleEvent = async (g, calId, byId, synced) => {
+            if (isOurs(g.id) || g.recurringEventId) return; // skip our own pushes + single-instance exceptions
+            const localId = `gc_${shortHash(calId)}_${g.id}`;
+            const key = `${calId}|${g.id}`;
+            const existing = byId.get(localId);
+
+            if (g.status === 'cancelled') {
+                if (existing) {
+                    delete synced[key];
+                    saveSynced(synced);
+                    byId.delete(localId);
+                    await window.pmCloud.deleteEvent(localId);
+                }
+                return;
+            }
+            if (!g.start) return;
+
+            const ev = fromGoogle(g, calId, localId);
+            if (existing && fieldsOf(existing) === fieldsOf(ev)) return;
+            const merged = existing ? { ...existing, ...ev } : { feast: false, ...ev };
+
+            // Mark as already in sync so the push step doesn't send it straight back
+            synced[key] = JSON.stringify(personalToGoogle(merged).body);
+            saveSynced(synced);
+            byId.set(localId, merged);
+            await window.pmCloud.saveEvent(merged);
+        };
+
+        const runPull = async () => {
+            if (!isConnected() || !hasToken() || !personalLoaded) return;
+            if (!window.pmCloud || !window.pmCloud.ready()) return;
+            if (busy) { pullAgain = true; return; }
+
+            busy = true;
+            try {
+                const state = loadPullState();
+                const synced = loadSynced();
+                const byId = new Map(readPersonal().map(e => [e.id, e]));
+
+                for (const calId of PULL_CALENDARS) {
+                    const startedAt = new Date(Date.now() - 60000).toISOString(); // small overlap margin
+                    const params = new URLSearchParams({ showDeleted: 'true', singleEvents: 'false', maxResults: '250' });
+                    if (state[calId]) params.set('updatedMin', state[calId]);
+                    else params.set('timeMin', new Date(Date.now() - PULL_DAYS_BACK * 86400000).toISOString());
+
+                    let pageToken = null, ok = true;
+                    do {
+                        if (pageToken) params.set('pageToken', pageToken);
+                        const r = await api('GET', calId, '?' + params.toString());
+                        if (!r.ok) {
+                            console.warn('Google pull failed for', calId, r.status, await r.text());
+                            ok = false;
+                            break;
+                        }
+                        const data = await r.json();
+                        for (const g of data.items || []) await applyGoogleEvent(g, calId, byId, synced);
+                        pageToken = data.nextPageToken;
+                    } while (pageToken);
+
+                    if (ok) {
+                        state[calId] = startedAt;
+                        localStorage.setItem(PULL_STATE_KEY, JSON.stringify(state));
+                    }
+                }
+            } catch (e) {
+                console.warn('Google pull stopped:', e);
+                if (e.message === 'NO_TOKEN') setStatus('needs-auth');
+            } finally {
+                busy = false;
+                if (pushAgain) { pushAgain = false; scheduleSync(); }
+            }
+        };
+
+        // ---------- Hook the existing Firestore listeners ----------
         const origApply = window.pmApplyCloudEvents;
         window.pmApplyCloudEvents = function () {
             if (typeof origApply === 'function') origApply.apply(this, arguments);
+            const first = !personalLoaded;
             personalLoaded = true;
             scheduleSync();
+            if (first) runPull();
         };
 
         const origRender = window.renderAssignments;
@@ -6547,7 +6703,7 @@
             scheduleSync();
         };
 
-        // Sync button: first tap connects + pushes everything; later taps force a full resync
+        // ---------- UI + timers ----------
         window.addEventListener('load', () => {
             setStatus(isConnected() ? (hasToken() ? 'ok' : 'needs-auth') : 'off');
 
@@ -6555,24 +6711,28 @@
                 try {
                     if (!hasToken()) await requestToken();
                     const synced = loadSynced();
-                    Object.keys(synced).forEach(k => { synced[k] = ''; }); // re-push all, still track deletions
+                    Object.keys(synced).forEach(k => { synced[k] = ''; }); // force re-push, keep delete tracking
                     saveSynced(synced);
+                    await runPull();
                     runSync();
                 } catch (e) {
                     console.warn(e);
                     setStatus('error');
-                    alert('Could not connect to Google Calendar. Check the Client ID and authorised origin.');
+                    alert('Could not connect to Google Calendar.');
                 }
             });
 
-            // Tokens last 1 hour. If one has expired, quietly renew it when you press Save,
-            // Delete or tick an assignment (a click counts as a gesture, so the popup isn't blocked).
+            // Renew an expired token on a real tap (a popup needs a user gesture)
             document.addEventListener('click', (e) => {
                 if (!isConnected() || hasToken() || pending) return;
                 if (e.target.closest('#pm-event-save-btn, #pm-event-delete-btn, #add-assignment-btn, #save-assignment-btn, #delete-from-detail-btn, .delete-btn')) {
-                    requestToken().then(scheduleSync).catch(() => setStatus('needs-auth'));
+                    requestToken().then(() => { runPull(); scheduleSync(); }).catch(() => setStatus('needs-auth'));
                 }
             }, true);
+
+            const maybePull = () => { if (document.visibilityState === 'visible') runPull(); };
+            setInterval(maybePull, PULL_EVERY_MS);
+            document.addEventListener('visibilitychange', maybePull);
         });
     })();
 </script>
