@@ -2645,6 +2645,10 @@
                         <span data-lucide="plus" class="w-3.5 h-3.5"></span>
                         Event
                     </button>
+                    <button id="gcal-sync-btn" class="pm-cal-tool-btn" title="Connect / resync with Google Calendar">
+                        <span data-lucide="refresh-cw" class="w-3.5 h-3.5"></span>
+                        <span id="gcal-sync-label">Connect</span>
+                    </button>
                 </div>
 
                 <div id="pm-cal-weekdays" class="grid grid-cols-7 gap-1 mb-1">
@@ -3194,7 +3198,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 07/10/2026 - 00:01</div>
+    <div id="version-timestamp">Last Update 07/10/2026 - 09:57</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
@@ -6262,6 +6266,314 @@
 
         if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wire);
         else wire();
+    })();
+</script>
+
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>
+    // ===== Google Calendar sync (dashboard -> Google -> Samsung Calendar) =====
+    // Never syncs the hardcoded feast list or the hardcoded public holidays.
+    (function () {
+        // ---------- CONFIG ----------
+        const CLIENT_ID = 'YOUR_CLIENT_ID.apps.googleusercontent.com';
+        const CAL_ID = 'YOUR_DASHBOARD_CALENDAR_ID@group.calendar.google.com';
+        const TZ = 'Europe/Malta';
+        const SYNC_ASSIGNMENTS = true;      // assignment deadlines + unfinished subtasks
+        const SYNC_PERSONAL_FEASTS = true;  // your OWN events ticked "Feast" (not the hardcoded list)
+
+        const CONNECTED_KEY = 'gcalConnected';
+        const TOKEN_KEY = 'gcalToken';
+        const SYNCED_KEY = 'gcalSyncedMap_v1'; // { googleEventId: hash of last body pushed }
+
+        // ---------- Auth ----------
+        let tokenClient = null;
+        let pending = null;
+
+        const isConnected = () => localStorage.getItem(CONNECTED_KEY) === '1';
+        const loadToken = () => {
+            try {
+                const t = JSON.parse(localStorage.getItem(TOKEN_KEY) || 'null');
+                return t && t.exp > Date.now() ? t.value : null;
+            } catch (e) { return null; }
+        };
+        const hasToken = () => Boolean(loadToken());
+
+        // Must be called from a click (user gesture), otherwise the popup gets blocked
+        const requestToken = () => new Promise((resolve, reject) => {
+            if (!window.google?.accounts?.oauth2) return reject(new Error('Google sign-in not loaded yet'));
+            if (!tokenClient) {
+                tokenClient = google.accounts.oauth2.initTokenClient({
+                    client_id: CLIENT_ID,
+                    scope: 'https://www.googleapis.com/auth/calendar.events',
+                    callback: (resp) => {
+                        if (!pending) return;
+                        if (resp.error) { pending.reject(resp); pending = null; return; }
+                        localStorage.setItem(TOKEN_KEY, JSON.stringify({
+                            value: resp.access_token,
+                            exp: Date.now() + (resp.expires_in - 60) * 1000
+                        }));
+                        localStorage.setItem(CONNECTED_KEY, '1');
+                        pending.resolve(resp.access_token);
+                        pending = null;
+                    },
+                    error_callback: (err) => { if (pending) { pending.reject(err); pending = null; } }
+                });
+            }
+            pending = { resolve, reject };
+            tokenClient.requestAccessToken({ prompt: isConnected() ? '' : 'consent' });
+        });
+
+        // ---------- API ----------
+        const api = async (method, path, body) => {
+            const token = loadToken();
+            if (!token) throw new Error('NO_TOKEN');
+            const r = await fetch(
+                `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(CAL_ID)}/events${path}`,
+                {
+                    method,
+                    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                    body: body ? JSON.stringify(body) : undefined
+                }
+            );
+            if (r.status === 401) { localStorage.removeItem(TOKEN_KEY); throw new Error('NO_TOKEN'); }
+            return r;
+        };
+
+        const upsert = async (body) => {
+            let r = await api('PUT', '/' + body.id, { ...body, status: 'confirmed' }); // update / revive
+            if (r.status === 404) r = await api('POST', '', body);                      // create
+            if (!r.ok) console.warn('Google sync failed for', body.summary, r.status, await r.text());
+            return r.ok;
+        };
+
+        // ---------- Date helpers ----------
+        const pad = (n) => String(n).padStart(2, '0');
+        const isoDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+        const localDT = (d) => `${isoDate(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}:00`;
+        const parseLocal = (iso, hhmm) => {
+            const [y, m, d] = iso.split('-').map(Number);
+            const [hh, mm] = (hhmm || '00:00').split(':').map(Number);
+            return new Date(y, m - 1, d, hh || 0, mm || 0);
+        };
+        const addDaysIso = (iso, n) => {
+            const [y, m, d] = iso.split('-').map(Number);
+            return isoDate(new Date(y, m - 1, d + n));
+        };
+
+        // Google event IDs only allow 0-9 and a-v, so hex-encode our keys
+        const gId = (key) => 'db' + Array.from(new TextEncoder().encode(key))
+            .map(b => b.toString(16).padStart(2, '0')).join('');
+
+        // Dashboard colours -> nearest Google Calendar colour
+        const COLOR_MAP = {
+            '#f472b6': '4',  // pink   -> Flamingo
+            '#60a5fa': '9',  // blue   -> Blueberry
+            '#34d399': '2',  // green  -> Sage
+            '#fbbf24': '5',  // amber  -> Banana
+            '#f87171': '11', // red    -> Tomato
+            '#a78bfa': '3',  // purple -> Grape
+            '#22d3ee': '7',  // cyan   -> Peacock
+            '#fb923c': '6'   // orange -> Tangerine
+        };
+
+        // ---------- Dashboard -> Google event bodies ----------
+        const personalToGoogle = (ev) => {
+            const endDate = ev.endDate && ev.endDate >= ev.date ? ev.endDate : ev.date;
+            const allDay = !ev.time && !ev.endTime;
+            const body = {
+                id: gId('pe:' + ev.id),
+                summary: ev.title || '(untitled)',
+                description: ev.notes || '',
+                colorId: COLOR_MAP[(ev.color || '').toLowerCase()]
+            };
+
+            if (allDay) {
+                body.start = { date: ev.date };
+                body.end = { date: addDaysIso(endDate, 1) }; // Google's all-day end is exclusive
+            } else {
+                // Same rules as the dashboard: no end time on a later day = until 23:59
+                const start = parseLocal(ev.date, ev.time || '00:00');
+                const endTime = ev.endTime || (endDate === ev.date ? (ev.time || '00:00') : '23:59');
+                let end = parseLocal(endDate, endTime);
+                if (end <= start) end = new Date(start.getTime() + 30 * 60000);
+                body.start = { dateTime: localDT(start), timeZone: TZ };
+                body.end = { dateTime: localDT(end), timeZone: TZ };
+            }
+
+            if (ev.repeat && ev.repeat !== 'none') {
+                const every = Math.max(1, Number(ev.repeatEvery) || 1);
+                let rule = `RRULE:FREQ=${ev.repeat === 'weekly' ? 'WEEKLY' : 'DAILY'};INTERVAL=${every}`;
+                if (ev.repeatEndMode === 'until' && ev.repeatUntil) {
+                    if (allDay) {
+                        rule += `;UNTIL=${ev.repeatUntil.replace(/-/g, '')}`;
+                    } else {
+                        const u = parseLocal(ev.repeatUntil, '23:59').toISOString()
+                            .replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+                        rule += `;UNTIL=${u}`;
+                    }
+                } else {
+                    // Dashboard "for N days/weeks" = occurrences inside that window
+                    rule += `;COUNT=${Math.ceil((Number(ev.repeatDuration) || 1) / every)}`;
+                }
+                body.recurrence = [rule];
+            }
+            return body;
+        };
+
+        const assignmentBodies = (a) => {
+            const out = [];
+            const add = (key, title, when, colorId, desc) => {
+                const d = when instanceof Date ? when : new Date(when);
+                if (!when || isNaN(d)) return;
+                const b = { id: gId(key), summary: title, description: desc || '', colorId };
+                if (d.getHours() === 23 && d.getMinutes() === 59) {
+                    // Deadline with no time set -> all-day
+                    b.start = { date: isoDate(d) };
+                    b.end = { date: addDaysIso(isoDate(d), 1) };
+                } else {
+                    b.start = { dateTime: localDT(d), timeZone: TZ };
+                    b.end = { dateTime: localDT(new Date(d.getTime() + 30 * 60000)), timeZone: TZ };
+                }
+                out.push(b);
+            };
+            add('as:' + a.id, `📚 ${a.title || 'Assignment'}`, a.deadline, '11', a.notes);
+            (a.subtasks || []).forEach((s, i) => {
+                if (!s.done) add(`as:${a.id}:${i}`, `↳ ${s.text || 'Subtask'} · ${a.title || ''}`, s.deadline, '3');
+            });
+            return out;
+        };
+
+        // ---------- State fed by the existing Firestore listeners ----------
+        let personalLoaded = false, assignmentsLoaded = false;
+        let latestAssignments = [];
+
+        const readPersonal = () => {
+            try {
+                const arr = JSON.parse(localStorage.getItem('personalEvents') || '[]');
+                return Array.isArray(arr) ? arr : [];
+            } catch (e) { return []; }
+        };
+
+        const buildDesired = () => {
+            const out = {};
+            readPersonal().forEach(ev => {
+                if (!ev || !ev.id || !ev.date) return;
+                if (ev.feast && !SYNC_PERSONAL_FEASTS) return;
+                const b = personalToGoogle(ev);
+                out[b.id] = b;
+            });
+            if (SYNC_ASSIGNMENTS) {
+                latestAssignments.forEach(a => assignmentBodies(a).forEach(b => { out[b.id] = b; }));
+            }
+            return out;
+        };
+
+        const loadSynced = () => {
+            try { return JSON.parse(localStorage.getItem(SYNCED_KEY) || '{}') || {}; }
+            catch (e) { return {}; }
+        };
+        const saveSynced = (m) => localStorage.setItem(SYNCED_KEY, JSON.stringify(m));
+
+        // ---------- Status button ----------
+        const setStatus = (state) => {
+            const label = document.getElementById('gcal-sync-label');
+            const btn = document.getElementById('gcal-sync-btn');
+            if (!label) return;
+            const text = {
+                'off': 'Connect',
+                'ok': 'Synced',
+                'syncing': 'Syncing…',
+                'needs-auth': 'Tap to sync',
+                'error': 'Sync error'
+            }[state] || 'Sync';
+            label.textContent = text;
+            if (btn) btn.classList.toggle('primary', state === 'needs-auth' || state === 'error');
+        };
+
+        // ---------- Reconcile: push changes, delete removed ----------
+        let syncing = false, runAgain = false, timer = null;
+        const scheduleSync = () => { clearTimeout(timer); timer = setTimeout(runSync, 800); };
+
+        const runSync = async () => {
+            if (!isConnected()) { setStatus('off'); return; }
+            // Never reconcile before real data has loaded, or everything would look "deleted"
+            if (!personalLoaded || (SYNC_ASSIGNMENTS && !assignmentsLoaded)) return;
+            if (!hasToken()) { setStatus('needs-auth'); return; }
+            if (syncing) { runAgain = true; return; }
+
+            syncing = true;
+            setStatus('syncing');
+            let failed = 0;
+            try {
+                const desired = buildDesired();
+                const synced = loadSynced();
+
+                for (const [id, body] of Object.entries(desired)) {
+                    const hash = JSON.stringify(body);
+                    if (synced[id] === hash) continue;
+                    if (await upsert(body)) { synced[id] = hash; saveSynced(synced); }
+                    else failed++;
+                }
+                for (const id of Object.keys(synced)) {
+                    if (desired[id]) continue;
+                    const r = await api('DELETE', '/' + id);
+                    if (r.ok || r.status === 404 || r.status === 410) { delete synced[id]; saveSynced(synced); }
+                    else failed++;
+                }
+                setStatus(failed ? 'error' : 'ok');
+            } catch (e) {
+                console.warn('Google sync stopped:', e);
+                setStatus(e.message === 'NO_TOKEN' ? 'needs-auth' : 'error');
+            } finally {
+                syncing = false;
+                if (runAgain) { runAgain = false; scheduleSync(); }
+            }
+        };
+
+        // ---------- Hook the existing data flow ----------
+        // Firestore snapshots call these, so any change (from any device) triggers a sync.
+        const origApply = window.pmApplyCloudEvents;
+        window.pmApplyCloudEvents = function () {
+            if (typeof origApply === 'function') origApply.apply(this, arguments);
+            personalLoaded = true;
+            scheduleSync();
+        };
+
+        const origRender = window.renderAssignments;
+        window.renderAssignments = function (list) {
+            if (typeof origRender === 'function') origRender.apply(this, arguments);
+            latestAssignments = Array.isArray(list) ? list : [];
+            assignmentsLoaded = true;
+            scheduleSync();
+        };
+
+        // Sync button: first tap connects + pushes everything; later taps force a full resync
+        window.addEventListener('load', () => {
+            setStatus(isConnected() ? (hasToken() ? 'ok' : 'needs-auth') : 'off');
+
+            document.getElementById('gcal-sync-btn')?.addEventListener('click', async () => {
+                try {
+                    if (!hasToken()) await requestToken();
+                    const synced = loadSynced();
+                    Object.keys(synced).forEach(k => { synced[k] = ''; }); // re-push all, still track deletions
+                    saveSynced(synced);
+                    runSync();
+                } catch (e) {
+                    console.warn(e);
+                    setStatus('error');
+                    alert('Could not connect to Google Calendar. Check the Client ID and authorised origin.');
+                }
+            });
+
+            // Tokens last 1 hour. If one has expired, quietly renew it when you press Save,
+            // Delete or tick an assignment (a click counts as a gesture, so the popup isn't blocked).
+            document.addEventListener('click', (e) => {
+                if (!isConnected() || hasToken() || pending) return;
+                if (e.target.closest('#pm-event-save-btn, #pm-event-delete-btn, #add-assignment-btn, #save-assignment-btn, #delete-from-detail-btn, .delete-btn')) {
+                    requestToken().then(scheduleSync).catch(() => setStatus('needs-auth'));
+                }
+            }, true);
+        });
     })();
 </script>
 </body>
