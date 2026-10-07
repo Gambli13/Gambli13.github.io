@@ -3210,7 +3210,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 07/10/2026 - 10:28</div>
+    <div id="version-timestamp">Last Update 07/10/2026 - 11:36</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
@@ -6330,7 +6330,7 @@
         const TOKEN_KEY = 'gcalToken';
         const SYNCED_KEY = 'gcalSyncedMap_v2';     // { "calId|eventId": hash of last body sent }
         const OLD_SYNCED_KEY = 'gcalSyncedMap_v1';
-        const PULL_STATE_KEY = 'gcalPullState_v1'; // { calId: ISO time of last successful pull }
+        const PULL_STATE_KEY = 'gcalPullState_v2'; // bumped: forces one full re-pull to remove birthdays etc.
 
         // ---------- Auth ----------
         let tokenClient = null, pending = null;
@@ -6603,6 +6603,14 @@
             if (imported) {
                 r = await api('PATCH', calId, '/' + encodeURIComponent(body.id), body);
                 if (r.status === 404 || r.status === 410) return true; // deleted in Google; next pull removes it
+                if (r.status === 400) {
+                    const text = await r.text();
+                    // Birthdays and other special event types can't be edited. Mark them as done
+                    // so they stop blocking the sync; the next pull removes them from the dashboard.
+                    if (text.includes('eventTypeRestriction')) return true;
+                    console.warn('Google sync failed for', body.summary, r.status, text);
+                    return false;
+                }
             } else if (alreadySynced) {
                 r = await api('PUT', calId, '/' + body.id, { ...body, status: 'confirmed' });
                 if (r.status === 404) r = await api('POST', calId, '', body);
@@ -6658,7 +6666,11 @@
             const key = `${calId}|${g.id}`;
             const existing = byId.get(localId);
 
-            if (g.status === 'cancelled') {
+           // Only normal events. Birthdays, out-of-office, working location, focus time and
+            // Gmail-generated events can't be edited normally, so skip them and remove any
+            // that were imported before.
+            const isNormal = !g.eventType || g.eventType === 'default';
+            if (g.status === 'cancelled' || !isNormal) {
                 if (existing) {
                     delete synced[key];
                     saveSynced(synced);
