@@ -3210,7 +3210,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 07/10/2026 - 11:36</div>
+    <div id="version-timestamp">Last Update 07/10/2026 - 11:44</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
@@ -6528,6 +6528,11 @@
                 const e = new Date(g.end?.dateTime || g.start.dateTime);
                 ev.date = isoDate(s); ev.time = hhmm(s);
                 ev.endDate = isoDate(e); ev.endTime = hhmm(e);
+                // An event ending exactly at midnight belongs to the previous day
+                if (ev.endTime === '00:00' && ev.endDate > ev.date) {
+                    ev.endDate = addDaysIso(ev.endDate, -1);
+                    ev.endTime = '23:59';
+                }
             }
             parseRule(g, ev);
             return ev;
