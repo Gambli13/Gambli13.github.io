@@ -371,6 +371,18 @@
             border-radius: 999px;
             background: #f87171;
         }
+        /* Dots under the main line when a day has 3+ events */
+        .pm-cal-event-dots {
+            display: flex;
+            justify-content: center;
+            gap: 2px;
+        }
+        .pm-cal-mini-dot {
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
         /* Feast-only list mode. */
         .pm-feasts-list {
             display: flex;
@@ -3198,7 +3210,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 07/10/2026 - 10:16</div>
+    <div id="version-timestamp">Last Update 07/10/2026 - 10:28</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
@@ -5316,15 +5328,43 @@
                     cell.appendChild(dayNumber);
 
                     if (dayEvents.length > 0) {
-                        const lines = document.createElement('span');
-                        lines.className = 'pm-cal-event-lines';
-                        dayEvents.slice(0, 2).forEach(ev => {
+                        // Longest event first (multi-day / all-day beat short timed ones).
+                        // Ties keep their existing time order, since sort() is stable.
+                        const durationOf = (ev) => {
+                            const start = ev.date instanceof Date ? ev.date.getTime() : 0;
+                            const end = ev.endDate instanceof Date ? ev.endDate.getTime() : start;
+                            return Math.max(0, end - start);
+                        };
+                        const byLength = [...dayEvents].sort((a, b) => durationOf(b) - durationOf(a));
+
+                        const markers = document.createElement('span');
+                        markers.className = 'pm-cal-event-lines';
+
+                        const addLine = (ev) => {
                             const line = document.createElement('span');
                             line.className = 'pm-cal-event-line';
                             line.style.backgroundColor = ev.color || '#f87171';
-                            lines.appendChild(line);
-                        });
-                        cell.appendChild(lines);
+                            markers.appendChild(line);
+                        };
+
+                        if (byLength.length <= 2) {
+                            // 1–2 events: lines, longest on top
+                            byLength.forEach(addLine);
+                        } else {
+                            // 3+ events: longest as the line, then up to 3 dots for the rest
+                            addLine(byLength[0]);
+                            const dots = document.createElement('span');
+                            dots.className = 'pm-cal-event-dots';
+                            byLength.slice(1, 4).forEach(ev => {
+                                const dot = document.createElement('span');
+                                dot.className = 'pm-cal-mini-dot';
+                                dot.style.backgroundColor = ev.color || '#f87171';
+                                dots.appendChild(dot);
+                            });
+                            markers.appendChild(dots);
+                        }
+
+                        cell.appendChild(markers);
                     }
 
                     cell.addEventListener('click', () => {
