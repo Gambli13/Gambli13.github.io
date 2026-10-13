@@ -10,6 +10,9 @@
     <meta name="apple-mobile-web-app-title" content="Daniela">
     <link rel="apple-touch-icon" href="images/pinkchrome.png">
     <link rel="icon" type="image/x-icon" href="images/pinkchrome.ico">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@700&family=DM+Serif+Display&family=Dancing+Script:wght@700&family=Fredoka:wght@600&family=Montserrat:wght@700&family=Pacifico&family=Space+Grotesk:wght@700&display=swap" rel="stylesheet">
     <title>New Tab</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@0.577.0/dist/umd/lucide.min.js"></script>
@@ -2479,9 +2482,16 @@
 
             <div class="lg:col-span-3 flex flex-col items-center justify-center p-6 space-y-8">
                 
-                <div id="next-lesson-widget" class="w-full max-w-2xl p-4 bg-white/70 rounded-xl backdrop-blur-md shadow-lg border border-gray-100">
+                <div id="greeting-swap" class="w-full max-w-2xl">
+                <div id="greeting-widget" role="button" tabindex="0" title="Tap to see your next lesson" class="w-full cursor-pointer select-none">
+                    <p class="greeting-line"><span id="greeting-text">Good Morning</span></p>
+                    <p class="greeting-hint">Tap for your next lesson</p>
+                </div>
+
+                <div id="next-lesson-widget" role="button" tabindex="0" title="Tap to see the greeting" class="is-off w-full p-4 bg-white/70 rounded-xl backdrop-blur-md shadow-lg border border-gray-100 cursor-pointer">
                     <p class="text-dark-tertiary text-center">Loading timetable...</p>
                 </div>
+            </div>
                 <form id="search-form" class="w-full max-w-2xl relative">
                     <input type="text" id="search-input" placeholder="Search Google or type a URL..."
                             class="w-full p-4 pl-12 bg-white/90 text-dark-primary border-2 border-transparent focus:border-pink-400 rounded-full shadow-lg outline-none transition-all duration-300"
@@ -2868,7 +2878,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp" class="text-dark-secondary">Last Update 03/10/2026 - 00:01</div>
+    <div id="version-timestamp" class="text-dark-secondary">Last Update 13/10/2026 - 11:13</div>
     </body>
 
     <style>
@@ -3176,6 +3186,67 @@
             color: #ffb366 !important;
         }
 
+        /* ===== Greeting (tap to swap with the lesson widget) ===== */
+        #greeting-widget { text-align: center; -webkit-tap-highlight-color: transparent; outline: none; }
+        .greeting-line { margin: 0; font-size: 3.4rem; line-height: 1.2; }
+        /* Bigger greeting on tablets (compact layout, but wider than a phone) */
+        @media (min-width: 640px) {
+            html.compact .greeting-line { font-size: 3.6rem; }
+            html.compact .greeting-hint { font-size: 0.8rem; margin-top: 0.8rem; }
+        }
+        @media (min-width: 900px) {
+            html.compact .greeting-line { font-size: 4.2rem; }
+        }
+
+        #greeting-text {
+            --greet-fill: #db2777;
+            --greet-outline: #ffffff;
+            display: inline-block;
+            padding: 0 0.15em;
+            color: var(--greet-fill);
+            /* thick outline + soft drop shadow so it pops on any background */
+            text-shadow:
+                -3px -3px 0 var(--greet-outline),  3px -3px 0 var(--greet-outline),
+                -3px  3px 0 var(--greet-outline),  3px  3px 0 var(--greet-outline),
+                0   -3px 0 var(--greet-outline),  0    3px 0 var(--greet-outline),
+                -3px  0   0 var(--greet-outline),  3px  0   0 var(--greet-outline),
+                0    6px 14px rgba(0, 0, 0, 0.28);
+            transition: color 0.5s ease, text-shadow 0.5s ease, transform 0.25s ease;
+        }
+        #greeting-widget:hover #greeting-text { transform: scale(1.03); }
+        #greeting-widget:active #greeting-text { transform: scale(0.97); }
+
+        .greeting-hint {
+            display: inline-block;
+            margin-top: 0.6rem;
+            padding: 0.2rem 0.75rem;
+            font-size: 0.7rem;
+            font-weight: 600;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: #8a6a6a;
+            background: rgba(255, 255, 255, 0.7);
+            border-radius: 999px;
+            backdrop-filter: blur(4px);
+        }
+
+        #greeting-widget:focus-visible,
+        #next-lesson-widget:focus-visible { outline: 3px solid #f9a8d4; outline-offset: 4px; border-radius: 1rem; }
+
+        .greet-swap-in { animation: greetSwapIn 0.35s ease; }
+        @keyframes greetSwapIn {
+            from { opacity: 0; transform: translateY(-8px) scale(0.98); }
+            to   { opacity: 1; transform: none; }
+        }
+
+        /* Halloween versions */
+        html.halloween .greeting-hint {
+            background: rgba(45, 20, 70, 0.85);
+            color: #bef264;
+            border: 1px solid #a855f7;
+        }
+        html.halloween #greeting-widget:focus-visible,
+        html.halloween #next-lesson-widget:focus-visible { outline-color: #a3e635; }
         /* ============================================================
            Modals (Task Details, Add Lesson, Confirm Remove, Expanded Notes, etc.)
            ============================================================ */
@@ -3201,6 +3272,14 @@
         html.halloween #notes-app-modal .bg-white,
         html.halloween #calendar-modal .bg-gray-50\/50 {
             background-color: rgba(60, 30, 90, 0.6) !important;
+        }
+        /* Both widgets share one spot, so swapping never changes the layout height */
+        #greeting-swap { display: grid; }
+        #greeting-swap > * { grid-area: 1 / 1; align-self: center; }
+        #greeting-swap > .is-off {
+            visibility: hidden;
+            opacity: 0;
+            pointer-events: none;
         }
 
         /* Modal section borders */
@@ -3791,4 +3870,119 @@
             }
         })();
     </script>
+    <script>
+        (function () {
+            const greetingEl  = document.getElementById('greeting-widget');
+            const greetingText = document.getElementById('greeting-text');
+            const lessonEl    = document.getElementById('next-lesson-widget');
+            if (!greetingEl || !greetingText || !lessonEl) return;
+
+            const FONTS = [
+                { family: "'Inter', sans-serif",              weight: 800 },
+                { family: "'Space Grotesk', sans-serif",      weight: 700 },
+                { family: "'Montserrat', sans-serif",         weight: 700 },
+                { family: "'DM Serif Display', serif",        weight: 400 },
+                { family: "'Caveat', cursive",                weight: 700 },
+                { family: "'Dancing Script', cursive",        weight: 700 },
+                { family: "'Pacifico', cursive",              weight: 400 },
+                { family: "'Fredoka', sans-serif",            weight: 600 }
+            ];
+
+            // fill = text colour, outline = border around the letters
+            const PALETTES = {
+                normal: [
+                    { fill: '#db2777', outline: '#ffffff' }, // pink
+                    { fill: '#be185d', outline: '#fff0f6' }, // deep pink
+                    { fill: '#e11d48', outline: '#ffffff' }, // rose
+                    { fill: '#c026d3', outline: '#ffffff' }, // fuchsia
+                    { fill: '#9333ea', outline: '#ffffff' }, // purple
+                    { fill: '#f472b6', outline: '#4a2c2c' }, // light pink, dark outline
+                    { fill: '#fbcfe8', outline: '#be185d' }, // pastel pink, pink outline
+                    { fill: '#ffffff', outline: '#ec4899' }  // white, pink outline
+                ],
+                halloween: [
+                    { fill: '#a3e635', outline: '#3b0764' }, // lime / deep purple
+                    { fill: '#4ade80', outline: '#2e1065' }, // green / violet
+                    { fill: '#bef264', outline: '#581c87' }, // pale lime / purple
+                    { fill: '#86efac', outline: '#4c1d95' }, // mint / purple
+                    { fill: '#c084fc', outline: '#14532d' }, // purple / dark green
+                    { fill: '#a855f7', outline: '#052e16' }, // violet / near-black green
+                    { fill: '#d8b4fe', outline: '#166534' }  // lilac / green
+                ]
+            };
+
+            const isHalloween = () => document.documentElement.classList.contains('halloween');
+            const randomDifferent = (len, prev) => {
+                if (len <= 1) return 0;
+                let n;
+                do { n = Math.floor(Math.random() * len); } while (n === prev);
+                return n;
+            };
+
+            let lastWord = null, fontIdx = -1, colorIdx = -1;
+
+            const applyColor = () => {
+                const palette = isHalloween() ? PALETTES.halloween : PALETTES.normal;
+                colorIdx = randomDifferent(palette.length, colorIdx < palette.length ? colorIdx : -1);
+                greetingText.style.setProperty('--greet-fill', palette[colorIdx].fill);
+                greetingText.style.setProperty('--greet-outline', palette[colorIdx].outline);
+            };
+
+            const restyle = () => {
+                fontIdx = randomDifferent(FONTS.length, fontIdx);
+                greetingText.style.fontFamily = FONTS[fontIdx].family;
+                greetingText.style.fontWeight = FONTS[fontIdx].weight;
+                applyColor();
+            };
+
+            const updateGreeting = () => {
+                const h = (typeof window.tzNow === 'function' ? window.tzNow() : new Date()).getHours();
+                let word;
+                if (h >= 5 && h < 12) word = 'Morning';
+                else if (h >= 12 && h < 17) word = 'Afternoon';
+                else if (h >= 17 && h < 21) word = 'Evening';
+                else word = 'Night';
+
+                greetingText.textContent = `Good ${word}`;
+                if (word !== lastWord) { lastWord = word; restyle(); }
+            };
+
+            // ----- Tap / click to swap -----
+            let showingGreeting = true;
+            const show = (greeting, fromKeyboard = false) => {
+                showingGreeting = greeting;
+                const on  = greeting ? greetingEl : lessonEl;
+                const off = greeting ? lessonEl : greetingEl;
+                off.classList.add('is-off');
+                on.classList.remove('is-off', 'greet-swap-in');
+                void on.offsetWidth; // restart the animation
+                on.classList.add('greet-swap-in');
+                if (fromKeyboard) on.focus({ preventScroll: true });
+            };
+
+            [greetingEl, lessonEl].forEach(el => {
+                el.addEventListener('click', (e) => {
+                    if (e.target.closest('a, button, input')) return;
+                    show(!showingGreeting);
+                });
+                el.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        show(!showingGreeting, true);
+                    }
+                });
+            });
+
+            // Re-colour when Halloween is toggled (ignore other class changes like the compact drawers)
+            let wasHalloween = isHalloween();
+            new MutationObserver(() => {
+                const now = isHalloween();
+                if (now !== wasHalloween) { wasHalloween = now; applyColor(); }
+            }).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+
+            updateGreeting();
+            setInterval(updateGreeting, 60 * 1000);
+        })();
+        </script>
+    
 </html>
