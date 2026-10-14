@@ -2863,8 +2863,7 @@
                             <div class="relative w-14 h-14">
                                 <svg viewBox="0 0 48 48" class="w-14 h-14 transform -rotate-90">
                                     <circle cx="24" cy="24" r="18" stroke="currentColor" stroke-width="3.5" fill="transparent" class="text-white/10" />
-                                    <circle id="pm2-next-event-circle" cx="24" cy="24" r="18" stroke="currentColor" stroke-width="3.5" fill="transparent" stroke-dasharray="100.53" stroke-dashoffset="100.53" class="text-pink-400 transition-all duration-1000 ease-out" />
-                                </svg>
+                                    <circle id="pm2-next-event-circle" pathLength="100.53" cx="24" cy="24" r="18" stroke="currentColor" stroke-width="3.5" fill="transparent" stroke-dasharray="100.53" stroke-dashoffset="100.53" class="text-pink-400 transition-all duration-1000 ease-out" />                                </svg>
                                 <div class="absolute inset-0 flex items-center justify-center">
                                     <span id="pm2-next-event-text" class="text-sm font-bold text-white">--</span>
                                 </div>
@@ -3210,7 +3209,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 07/10/2026 - 11:44</div>
+    <div id="version-timestamp">Last Update 14/10/2026 - 09:36</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
@@ -5528,8 +5527,11 @@
                 let next = null;
                 let nextTarget = null;
 
-                const considerNext = (date, target) => {
-                    if (!date || isNaN(date.getTime()) || date.getTime() <= now.getTime()) return;
+                const considerNext = (date, target, allowEarlierToday = false) => {
+                    if (!date || isNaN(date.getTime())) return;
+                    const upcoming = date.getTime() > now.getTime();
+                    const stillToday = allowEarlierToday && isSameDay(date, now);
+                    if (!upcoming && !stillToday) return;
                     if (!next || date < next) {
                         next = date;
                         nextTarget = { ...target, date };
@@ -5554,6 +5556,15 @@
 
                 personalEvents.forEach(ev => {
                     if (ev.feast) return; // Feasts remain visible on the calendar but do not drive this counter.
+
+                    // All-day events (no start/end time) count as "today" for the whole day,
+                    // including days in the middle of a multi-day all-day event.
+                    const isAllDay = !ev.time && !ev.endTime;
+                    if (isAllDay && personalEventOccurrenceForDay(ev, now)) {
+                        considerNext(dateOnly(now), { kind: 'personal', ref: ev, title: ev.title || 'Event' }, true);
+                        return;
+                    }
+
                     const d = nextPersonalOccurrence(ev, now);
                     considerNext(d, { kind: 'personal', ref: ev, title: ev.title || 'Event' });
                 });
@@ -5566,15 +5577,24 @@
                     if (!txt || !circle) return;
                     if (!next) {
                         txt.textContent = '--';
+                        txt.classList.remove('text-[10px]', 'tracking-wide');
+                        txt.classList.add('text-sm');
                         circle.style.strokeDashoffset = 100.53;
                         return;
                     }
-                    const diffMs = next.getTime() - now.getTime();
-                    const daysLeft = Math.ceil(diffMs / 86400000);
-                    const hoursLeft = Math.ceil(diffMs / 3600000);
-                    txt.textContent = daysLeft >= 1 ? `${daysLeft}d` : `${hoursLeft}h`;
+
+                    // Count calendar days, not 24-hour blocks, so an event later today is "today"
+                    const dayDiff = calendarDayDiff(dateOnly(now), dateOnly(next));
+                    const isToday = dayDiff <= 0;
+
+                    txt.textContent = isToday ? 'TODAY' : `${dayDiff}d`;
+                    // "TODAY" needs a smaller font to fit inside the ring
+                    txt.classList.toggle('text-[10px]', isToday);
+                    txt.classList.toggle('tracking-wide', isToday);
+                    txt.classList.toggle('text-sm', !isToday);
+
                     const windowDays = 14;
-                    const pct = Math.max(0, Math.min(1, (windowDays - daysLeft) / windowDays));
+                    const pct = isToday ? 1 : Math.max(0, Math.min(1, (windowDays - dayDiff) / windowDays));
                     circle.style.strokeDashoffset = 100.53 - pct * 100.53;
                 };
                 setPair('pm-next-event-text', 'pm-next-event-circle');
