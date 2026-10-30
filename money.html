@@ -984,14 +984,19 @@ function listenLedgers() {
             const rb = b.id === personalId ? 0 : b.ownerUid === S.user.uid ? 1 : 2;
             return ra - rb || String(a.createdAt || '').localeCompare(String(b.createdAt || ''));
         });
-        if (!S.ledgers.some(l => l.id === personalId) && !snap.metadata.fromCache && !creatingPersonal) {
+                if (!S.ledgers.some(l => l.id === personalId) && !snap.metadata.fromCache && !creatingPersonal) {
             creatingPersonal = true;
             createLedger({ id: personalId, name: 'Personal', emoji: '👤', type: 'personal' })
+                .then(() => { if (!S.ledgerId) switchLedger(personalId, { silent: true }); })
                 .catch(handleErr).finally(() => { creatingPersonal = false; });
         }
+        // A book that only exists locally (still being created) can't be read from the server yet,
+        // so never open one until the server has confirmed it.
+        const pending = new Set(snap.docs.filter(d => d.metadata.hasPendingWrites).map(d => d.id));
+        const usable = (lid) => !!lid && S.ledgers.some(l => l.id === lid) && (lid === S.ledgerId || !pending.has(lid));
         let want = S.ledgerId || localStorage.getItem(lsKey('ledger'));
-        if (!S.ledgers.some(l => l.id === want)) {
-            want = S.ledgers.some(l => l.id === personalId) ? personalId : (S.ledgers[0]?.id || null);
+        if (!usable(want)) {
+            want = usable(personalId) ? personalId : (S.ledgers.find(l => usable(l.id))?.id || null);
         }
         if (want !== S.ledgerId) switchLedger(want, { silent: true });
         ensureMyPerson();
@@ -1007,14 +1012,21 @@ function switchLedger(id, { silent = false } = {}) {
     if (id) localStorage.setItem(lsKey('ledger'), id);
     if (!id) { scheduleRender(); return; }
     const map = { accounts: 'accounts', transactions: 'txs', categories: 'cats', bills: 'bills', incomes: 'incomes' };
-    Object.entries(map).forEach(([name, key]) => {
-        unsubs.data.push(onSnapshot(col(name, id), (snap) => {
-            if (S.ledgerId !== id) return;
-            S[key] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-            S.loaded[name] = true;
-            scheduleRender();
-        }, handleErr));
+    const sub = (name, key, tries = 0) => onSnapshot(col(name, id), (snap) => {
+        if (S.ledgerId !== id) return;
+        S[key] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        S.loaded[name] = true;
+        scheduleRender();
+    }, (err) => {
+        if (S.ledgerId !== id) return;
+        // Right after a book is created the server can briefly refuse reads; retry a few times.
+        if (err?.code === 'permission-denied' && tries < 3) {
+            setTimeout(() => { if (S.ledgerId === id) unsubs.data.push(sub(name, key, tries + 1)); }, 1500 * (tries + 1));
+            return;
+        }
+        handleErr(err);
     });
+    Object.entries(map).forEach(([name, key]) => unsubs.data.push(sub(name, key)));
     if (S.view === 'split' && ledger()?.type !== 'split') S.view = 'dashboard';
     if (!silent) { const L = ledger(); if (L) toast(`Switched to ${L.emoji || ''} ${L.name}`.trim()); }
     scheduleRender();
@@ -2234,8 +2246,10 @@ function exportJSON() {
 // =====================================================================
 // Toasts
 // =====================================================================
-function toast(msg, { action = null, error = false, ms = 3800 } = {}) {
+function toast(msg, { action = null, error = false, ms = 3800 } = {}) {    
+    if ([...$('#toasts').children].some(x => x.dataset.msg === msg)) return;
     const t = document.createElement('div');
+    t.dataset.msg = msg;
     t.className = 'toast' + (error ? ' error' : '');
     t.innerHTML = `<span>${esc(msg)}</span>${action ? `<button>${esc(action.label)}</button>` : ''}`;
     if (action) t.querySelector('button').addEventListener('click', () => { action.fn(); t.remove(); });
