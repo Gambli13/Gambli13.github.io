@@ -3117,6 +3117,14 @@
                 <div class="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-red-600"></div>
             </div>
         </button>
+
+        <a href="money.html" id="menu-open-money" class="radial-item radial-item-6 relative group rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition-colors flex items-center justify-center">
+            <span data-lucide="wallet" class="w-6 h-6 text-emerald-400 drop-shadow-md"></span>
+            <div class="absolute left-full ml-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-emerald-600 text-white text-xs font-bold rounded-lg shadow-xl opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity z-50">
+                Money
+                <div class="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-emerald-600"></div>
+            </div>
+        </a>
     </div>
 
     <div id="notes-app-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition-opacity duration-300 z-[70]">
@@ -3209,7 +3217,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 14/10/2026 - 09:36</div>
+    <div id="version-timestamp">Last Update 30/10/2026 - 18:48</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
@@ -6175,6 +6183,8 @@
             bottom: calc(1rem + env(safe-area-inset-bottom));
         }
 
+        #radial-menu-wrapper.active .radial-item-5 { transition-delay: 0.25s; }
+        #radial-menu-wrapper.active .radial-item-6 { transition-delay: 0.30s; }
         #bottom-bg-bar { padding-bottom: calc(1rem + env(safe-area-inset-bottom)) !important; }
         #bottom-background-list { padding-left: 1rem !important; padding-right: 1rem !important; }
 
