@@ -100,6 +100,32 @@
         --radius: 20px;
         color-scheme: dark;
     }
+        /* ---------- Notes & coins breakdown ---------- */
+    .acc-card.clickable { cursor: pointer; transition: transform .15s, border-color .15s; }
+    .acc-card.clickable:hover { transform: translateY(-2px); border-color: rgba(var(--accent-rgb), .35); }
+    .clickable-row { cursor: pointer; }
+    .denom-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+    .denom-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 700; padding: 3px 8px; border-radius: 999px; background: var(--hover-2); color: var(--text-2); font-variant-numeric: tabular-nums; }
+    .denom-chip i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
+    .denom-chip i.note { width: 14px; height: 9px; border-radius: 2px; }
+    .denoms { display: flex; flex-direction: column; gap: 4px; }
+    .denom-row { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 6px 4px; border-radius: 12px; }
+    .denom-row:hover { background: var(--hover); }
+    .denom-row .amt { min-width: 84px; }
+    .denom-face { display: grid; place-items: center; margin: 0 auto; font: 700 12.5px 'Space Grotesk', sans-serif; color: #2a1a00; }
+    .denom-face.coin { width: 44px; height: 44px; border-radius: 50%; box-shadow: inset 0 0 0 2px rgba(255,255,255,.35), inset 0 -3px 6px rgba(0,0,0,.25), 0 2px 6px rgba(0,0,0,.3); }
+    .denom-face.note { width: 60px; height: 34px; border-radius: 6px; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.45); box-shadow: inset 0 0 0 1px rgba(255,255,255,.25), 0 2px 6px rgba(0,0,0,.3); }
+    .f-copper { background: radial-gradient(circle at 35% 30%, #f0a070, #b4612f 70%); }
+    .f-gold { background: radial-gradient(circle at 35% 30%, #f6dc8a, #c69a3a 70%); }
+    .f-bi2 { background: radial-gradient(circle, #e4e7ea 0 52%, #d9b45a 55% 100%); }
+    .f-bi1 { background: radial-gradient(circle, #e2b85a 0 52%, #d6dadd 55% 100%); }
+    .f-n5 { background: linear-gradient(135deg, #a3abb0, #7d878d); }
+    .f-n10 { background: linear-gradient(135deg, #e07a72, #b9504a); }
+    .f-n20 { background: linear-gradient(135deg, #6f9be0, #4170b5); }
+    .f-n50 { background: linear-gradient(135deg, #f0a65a, #cc7a2c); }
+    .stepper { display: flex; align-items: center; gap: 6px; }
+    .stepper .input { width: 64px; height: 34px; text-align: center; padding: 0 6px; }
+
     [data-theme="light"] {
         --surface-rgb: 255,255,255;
         --text: #0f172a; --text-2: rgba(15,23,42,.72); --text-3: rgba(15,23,42,.5);
@@ -1363,7 +1389,7 @@ function viewDashboard() {
         const pos = accs.reduce((s, a) => s + Math.max(0, inTotal(a) ? bal[a.id] : 0), 0) || 1;
         out += `<div class="card glass c4"><div class="card-h"><div class="card-t">${icon('wallet')}Accounts</div><button class="btn sm ghost" data-action="nav" data-view="accounts">All ${icon('chevron-right')}</button></div>
             <div class="list">${sortAccounts(accs).map(a => `
-                <div class="item" style="grid-template-columns:40px minmax(0,1fr) auto">${accIcon(a)}
+                <div class="item ${hasDenoms(a) ? 'clickable-row' : ''}" ${hasDenoms(a) ? `data-action="open-denoms" data-id="${esc(a.id)}"` : ''} style="grid-template-columns:40px minmax(0,1fr) auto">${accIcon(a)}
                     <div style="min-width:0"><div class="t">${esc(a.name)}</div>
                     <div class="bar"><i style="width:${inTotal(a) ? Math.max(2, Math.min(100, bal[a.id] / pos * 100)) : 0}%;background:${esc(a.color || 'var(--accent)')}"></i></div></div>
                     <div class="amt">${money(bal[a.id])}</div></div>`).join('')}</div></div>`;
@@ -1516,12 +1542,13 @@ function viewAccounts() {
     </div><div class="grid">`;
     act.forEach(a => {
         const share = total > 0 && inTotal(a) ? Math.max(0, Math.round(bal[a.id] / total * 100)) : null;
-        html += `<div class="card glass acc-card c4">
+                html += `<div class="card glass acc-card c4 ${hasDenoms(a) ? 'clickable' : ''}" ${hasDenoms(a) ? `data-action="open-denoms" data-id="${esc(a.id)}" title="See ${a.type === 'cash' ? 'notes' : 'coins'}"` : ''}>
             <span class="stripe" style="background:${esc(a.color || '#94a3b8')}"></span>
             <div class="top">${accIcon(a, 44)}<div style="min-width:0;flex:1"><div class="nm">${esc(a.name)}</div><div class="ty">${esc(accType(a).label)}${a.includeInTotal === false ? ' · not in total' : ''}</div></div>
                 <button class="btn sm icon ghost" data-action="edit-account" data-id="${esc(a.id)}" title="Edit">${icon('pencil')}</button></div>
             <div class="bal ${bal[a.id] < 0 ? 'neg' : ''}">${money(bal[a.id])}</div>
             ${share != null ? `<div class="bar"><i style="width:${Math.min(100, share)}%;background:${esc(a.color || 'var(--accent)')}"></i></div><div class="help" style="margin-top:4px">${S.hidden ? '' : share + '% of total'}</div>` : ''}
+            ${denomChips(a, bal[a.id])}
             <div class="acts">
                 <button class="btn sm" data-action="add-tx" data-type="expense" data-account="${esc(a.id)}">${icon('minus')}Spend</button>
                 <button class="btn sm" data-action="add-tx" data-type="income" data-account="${esc(a.id)}">${icon('plus')}Add</button>
@@ -1993,6 +2020,100 @@ function openSetBalanceModal(a) {
     });
 }
 
+// ---------- Notes & coins breakdown ----------
+const DENOMS = {
+    coins: [200, 100, 50, 20, 10, 5, 2, 1],
+    cash: [5000, 2000, 1000, 500]
+};
+const hasDenoms = (a) => !!a && !!DENOMS[a.type];
+const denomLabel = (c) => c >= 100 ? `${curSymbol()}${c / 100}` : `${c}c`;
+const denomFace = (c) => ({ 200: 'f-bi2', 100: 'f-bi1', 50: 'f-gold', 20: 'f-gold', 10: 'f-gold', 5: 'f-copper', 2: 'f-copper', 1: 'f-copper', 5000: 'f-n50', 2000: 'f-n20', 1000: 'f-n10', 500: 'f-n5' })[c] || 'f-gold';
+const denomTotal = (a, counts = a?.denoms) => (DENOMS[a?.type] || []).reduce((s, v) => s + v * (Number(counts?.[v]) || 0), 0);
+function denomChips(a, bal) {
+    if (!hasDenoms(a)) return '';
+    const isCash = a.type === 'cash';
+    const d = a.denoms;
+    if (!d) return `<div class="denom-chips"><span class="help">Tap to count your ${isCash ? 'notes' : 'coins'}</span></div>`;
+    const list = DENOMS[a.type].filter(v => Number(d[v]) > 0);
+    let html = `<div class="denom-chips">${list.length
+        ? list.map(v => `<span class="denom-chip"><i class="${isCash ? 'note' : ''} ${denomFace(v)}"></i>${S.hidden ? esc(maskText()) : Number(d[v])} × ${esc(denomLabel(v))}</span>`).join('')
+        : `<span class="help">No ${isCash ? 'notes' : 'coins'} counted</span>`}</div>`;
+    const diff = denomTotal(a) - bal;
+    if (diff) html += `<div class="help warn" style="margin-top:6px">Count is ${money(diff, { sign: true })} off the balance — tap to recount</div>`;
+    return html;
+}
+function openDenomModal(a) {
+    const list = DENOMS[a.type]; const isCash = a.type === 'cash';
+    const word = isCash ? 'notes' : 'coins';
+    const counts = {}; list.forEach(v => { counts[v] = Number(a.denoms?.[v]) || 0; });
+    const bal = balances()[a.id] || 0;
+    const last = a.countedAt ? ` Last counted ${esc(fmtDate(isoOf(new Date(a.countedAt))).toLowerCase())}.` : '';
+    openModal({
+        title: `${a.name} · ${word}`,
+        body: `<div class="help">How many of each ${isCash ? 'note' : 'coin'} you have.${last}</div>
+            <div class="denoms">${list.map(v => `
+                <div class="denom-row">
+                    <div class="denom-face ${isCash ? 'note' : 'coin'} ${denomFace(v)}">${esc(denomLabel(v))}</div>
+                    <div class="stepper">
+                        <button type="button" class="btn sm icon" data-step="-1" data-v="${v}" aria-label="One less">${icon('minus')}</button>
+                        <input class="input num" inputmode="numeric" autocomplete="off" data-count="${v}" value="${counts[v]}" aria-label="${esc(denomLabel(v))} count">
+                        <button type="button" class="btn sm icon" data-step="1" data-v="${v}" aria-label="One more">${icon('plus')}</button>
+                    </div>
+                    <div class="amt" data-sub="${v}"></div>
+                </div>`).join('')}</div>
+            <div class="preview"><div class="pv-lines" style="margin:0">
+                <div class="pv-line"><span class="k">Counted · <span id="dn-pieces"></span></span><span class="v" id="dn-total"></span></div>
+                <div class="pv-line"><span class="k">Balance in app</span><span class="v">${money(bal)}</span></div>
+                <div class="pv-line" id="dn-diff-row"><span class="k">Difference</span><span class="v" id="dn-diff"></span></div>
+            </div></div>
+            <div class="set-row" id="dn-sync-row" style="padding:4px 0"><div><div class="tl">Update balance to match</div><div class="ds">Logs the difference as a “${isCash ? 'Cash' : 'Coin'} count” correction</div></div><label class="switch"><input type="checkbox" id="dn-sync" checked><span></span></label></div>`,
+        footer: `<button class="btn ghost" id="dn-clear">${icon('rotate-ccw')}Reset</button><div class="spacer"></div><button class="btn" data-close>Cancel</button><button class="btn primary" id="dn-save">Save count</button>`,
+        onMount: (m) => {
+            const sync = () => {
+                let pieces = 0;
+                list.forEach(v => { pieces += counts[v]; $(`[data-sub="${v}"]`, m).innerHTML = counts[v] ? money(counts[v] * v) : '<span class="muted">—</span>'; });
+                const total = denomTotal(a, counts), diff = total - bal;
+                $('#dn-pieces', m).textContent = `${pieces} ${pieces === 1 ? word.slice(0, -1) : word}`;
+                $('#dn-total', m).innerHTML = money(total);
+                $('#dn-diff', m).innerHTML = `<span class="${diff > 0 ? 'pos' : 'neg'}">${money(diff, { sign: true })}</span>`;
+                $('#dn-diff-row', m).classList.toggle('hidden', !diff);
+                $('#dn-sync-row', m).classList.toggle('hidden', !diff);
+            };
+            m.addEventListener('click', (e) => {
+                const b = e.target.closest('[data-step]'); if (!b) return;
+                const v = b.dataset.v;
+                counts[v] = Math.max(0, counts[v] + Number(b.dataset.step));
+                $(`[data-count="${v}"]`, m).value = counts[v];
+                sync();
+            });
+            m.addEventListener('input', (e) => {
+                const i = e.target.closest('[data-count]'); if (!i) return;
+                const n = parseInt(i.value.replace(/\D/g, ''), 10);
+                counts[i.dataset.count] = isNaN(n) ? 0 : Math.min(n, 99999);
+                sync();
+            });
+            $$('[data-count]', m).forEach(i => {
+                i.addEventListener('focus', () => i.select());
+                i.addEventListener('blur', () => { i.value = counts[i.dataset.count]; });
+                i.addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#dn-save', m).click(); });
+            });
+            $('#dn-clear', m).addEventListener('click', () => { list.forEach(v => { counts[v] = 0; $(`[data-count="${v}"]`, m).value = 0; }); sync(); });
+            $('#dn-save', m).addEventListener('click', () => {
+                const denoms = {}; list.forEach(v => { denoms[v] = counts[v]; });
+                const diff = denomTotal(a, counts) - bal;
+                const syncBal = !!diff && $('#dn-sync', m).checked;
+                fire(setDoc(doc(col('accounts'), a.id), { denoms, countedAt: nowISO() }, { merge: true }));
+                if (syncBal) {
+                    fire(addDoc(col('transactions'), { type: 'adjust', amount: diff, accountId: a.id, date: todayISO(), note: isCash ? 'Cash count' : 'Coin count', createdAt: nowISO(), createdBy: S.email }));
+                }
+                closeModal();
+                toast(syncBal ? `${a.name} counted · balance updated` : `${a.name} counted`);
+            });
+            sync();
+        }
+    });
+}
+
 // ---------- Bills & income ----------
 function openPlanModal(kind, existing = null) {
     const isBill = kind === 'bill';
@@ -2274,6 +2395,7 @@ const actions = {
     'edit-tx': (el) => { const t = S.txs.find(x => x.id === el.dataset.id); if (t) openTxModal(t); },
     'add-account': () => openAccountModal(),
     'edit-account': (el) => { const a = accById(el.dataset.id); if (a) openAccountModal(a); },
+    'open-denoms': (el) => { const a = accById(el.dataset.id); if (a && hasDenoms(a)) openDenomModal(a); },
     'set-balance': (el) => { const a = accById(el.dataset.id); if (a) openSetBalanceModal(a); },
     'filter-account': (el) => { S.txFilter = { q: '', account: el.dataset.id, category: '', type: '', month: '' }; S.view = 'transactions'; localStorage.setItem('money_view', S.view); render(); },
     'clear-filters': () => { S.txFilter = { q: '', account: '', category: '', type: '', month: '' }; renderView(); },
