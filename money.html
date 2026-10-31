@@ -100,6 +100,27 @@
         --radius: 20px;
         color-scheme: dark;
     }
+
+    .denom-chip.neg { background: rgba(248,113,113,.16); color: var(--neg); }
+    .dn-host { display: flex; flex-direction: column; gap: 10px; }
+    .dn-tray { border-radius: 16px; background: var(--input); border: 1px solid var(--line); padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+    .dn-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+    .dn-sum { font-weight: 700; font-variant-numeric: tabular-nums; }
+    .dn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(54px, 1fr)); gap: 8px 6px; }
+    .dn-grid.notes { grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); }
+    .dn-tile { position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 2px 5px; border-radius: 12px; transition: background .15s; }
+    .dn-tile.on { background: var(--accent-soft); }
+    .dn-add { position: relative; border: 0; background: transparent; padding: 0; cursor: pointer; border-radius: 50%; transition: transform .1s; }
+    .dn-add:active { transform: scale(.9); }
+    .denom-face.sm.coin { width: 38px; height: 38px; font-size: 11px; }
+    .denom-face.sm.note { width: 54px; height: 30px; font-size: 11.5px; }
+    .dn-badge { position: absolute; top: -7px; right: -9px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 999px; background: var(--accent); color: var(--on-accent); font-size: 11px; font-weight: 800; display: grid; place-items: center; box-shadow: 0 2px 6px rgba(0,0,0,.3); }
+    .dn-sub { position: absolute; top: 2px; left: 2px; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--line); background: rgba(var(--surface-rgb), .95); color: var(--text); font-weight: 800; font-size: 14px; line-height: 1; display: grid; place-items: center; cursor: pointer; padding: 0; z-index: 1; }
+    .dn-have { font-size: 10.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+    .dn-have.short { color: var(--warn); font-weight: 700; }
+    .dn-line { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; align-items: center; }
+    .dn-line .denom-chip { font-size: 11px; padding: 2px 7px; }
+    .dn-sep { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--text-3); margin: 0 2px 0 4px; }
         /* ---------- Notes & coins breakdown ---------- */
     .acc-card.clickable { cursor: pointer; transition: transform .15s, border-color .15s; }
     .acc-card.clickable:hover { transform: translateY(-2px); border-color: rgba(var(--accent-rgb), .35); }
@@ -1327,7 +1348,7 @@ function txAmount(t, scopeAccount = '') {
 function txRow(t, run = null, scope = '') {
     return `<div class="tx ${run != null ? 'has-run' : ''}" data-action="edit-tx" data-id="${esc(t.id)}">
         ${txVisual(t)}
-        <div style="min-width:0"><div class="t">${esc(txTitle(t))}</div><div class="m">${esc(txMeta(t))}</div></div>
+        <div style="min-width:0"><div class="t">${esc(txTitle(t))}</div><div class="m">${esc(txMeta(t))}</div>${denomLine(t)}</div>
         ${txAmount(t, scope)}
         ${run != null ? `<div class="run"><b>Total</b>${money(run)}</div>` : ''}
     </div>`;
@@ -1803,6 +1824,7 @@ function openTxModal(existing = null, preset = {}) {
             <div class="field"><span class="lbl" id="f-acc-lbl">From</span><select class="input" id="f-acc">${accOptions(validFrom)}</select></div>
             <div class="field" id="f-to-wrap"><span class="lbl">To</span><select class="input" id="f-to">${accOptions(toId)}</select></div>
         </div>
+        <div id="f-denoms" class="dn-host hidden"></div>
         <div class="field" id="f-cat-wrap"><span class="lbl">Category</span><div class="chips" id="f-cats"></div></div>
         <div class="row wrap-sm">
             <div class="field" style="flex:0 0 160px"><span class="lbl">Date</span><input type="date" class="input" id="f-date" value="${esc(existing?.date || preset.date || todayISO())}"></div>
@@ -1821,6 +1843,7 @@ function openTxModal(existing = null, preset = {}) {
         onMount: (m) => {
             const el = (id) => $('#' + id, m);
             let pvChart = null;
+            const picker = createDenomPicker(el('f-denoms'), existing, { type: () => st.type, from: () => el('f-acc').value, to: () => el('f-to').value, amount: el('f-amount'), onChange: () => refresh() });
             const syncType = () => {
                 $$('.seg.types button', m).forEach(b => b.classList.toggle('on', b.dataset.val === st.type));
                 el('f-acc-lbl').textContent = st.type === 'income' ? 'Into account' : st.type === 'transfer' ? 'From' : 'Paid from';
@@ -1833,6 +1856,7 @@ function openTxModal(existing = null, preset = {}) {
                 el('f-cats').innerHTML = list.map(c => `<button type="button" class="chip ${c.id === st.cat ? 'on' : ''}" data-cid="${esc(c.id)}"><span>${esc(c.emoji || '')}</span>${esc(c.name)}</button>`).join('')
                     || `<div class="help">No ${kind} categories yet — add some under Categories.</div>`;
                 icons();
+                picker.render();
                 refresh();
             };
             const draft = () => {
@@ -1890,7 +1914,7 @@ function openTxModal(existing = null, preset = {}) {
             $$('.seg.types button', m).forEach(b => b.addEventListener('click', () => { if (b.disabled) return; st.type = b.dataset.val; syncType(); }));
             el('f-cats').addEventListener('click', (e) => { const c = e.target.closest('[data-cid]'); if (!c) return; st.cat = c.dataset.cid; $$('[data-cid]', m).forEach(x => x.classList.toggle('on', x === c)); refresh(); });
             ['f-amount', 'f-date', 'f-note'].forEach(id => el(id).addEventListener('input', refresh));
-            ['f-acc', 'f-to'].forEach(id => el(id).addEventListener('change', refresh));
+            ['f-acc', 'f-to'].forEach(id => el(id).addEventListener('change', () => { picker.render(); refresh(); }));
             if (el('f-split')) {
                 el('f-split').addEventListener('change', () => { st.doSplit = el('f-split').checked; el('f-split-body').classList.toggle('hidden', !st.doSplit); });
                 el('f-paidby').addEventListener('change', () => { st.paidBy = el('f-paidby').value; });
@@ -1908,13 +1932,15 @@ function openTxModal(existing = null, preset = {}) {
                 if (!(d.amount > 0)) { withErr(m, 'Enter an amount bigger than zero.'); el('f-amount').focus(); return; }
                 if (!d.accountId) { withErr(m, 'Pick an account.'); return; }
                 if (d.type === 'transfer' && (!d.toAccountId || d.toAccountId === d.accountId)) { withErr(m, 'Pick two different accounts to move money between.'); return; }
-                const data = { ...d, note: el('f-note').value.trim(), updatedAt: nowISO() };
+                const dErr = picker.validate(d.amount);
+                if (dErr) { withErr(m, dErr); return; }
+                const data = { ...d, ...picker.payload(), note: el('f-note').value.trim(), updatedAt: nowISO() };
                 if (split && d.type === 'expense' && st.doSplit) {
                     if (!st.among.length) { withErr(m, 'Pick at least one person to split with.'); return; }
                     data.split = { paidBy: st.paidBy, among: st.among };
                 } else data.split = null;
                 localStorage.setItem(lsKey('lastAcc'), d.accountId);
-                if (existing) fire(setDoc(doc(col('transactions'), existing.id), data, { merge: true }));
+                if (existing) fire(updateDoc(doc(col('transactions'), existing.id), data));
                 else fire(addDoc(col('transactions'), { ...data, createdAt: nowISO(), createdBy: S.email }));
                 closeModal();
                 toast(existing ? 'Saved' : `${d.type === 'transfer' ? 'Transfer' : d.type === 'income' ? 'Income' : 'Expense'} added`);
@@ -2021,6 +2047,8 @@ function openSetBalanceModal(a) {
 }
 
 // ---------- Notes & coins breakdown ----------
+// Counts per account = the last count (account.denoms) + every transaction's notes/coins
+// (tx.denoms for its account, tx.toDenoms for the "to" side of a transfer). Signed: + in, − out.
 const DENOMS = {
     coins: [200, 100, 50, 20, 10, 5, 2, 1],
     cash: [5000, 2000, 1000, 500]
@@ -2028,29 +2056,83 @@ const DENOMS = {
 const hasDenoms = (a) => !!a && !!DENOMS[a.type];
 const denomLabel = (c) => c >= 100 ? `${curSymbol()}${c / 100}` : `${c}c`;
 const denomFace = (c) => ({ 200: 'f-bi2', 100: 'f-bi1', 50: 'f-gold', 20: 'f-gold', 10: 'f-gold', 5: 'f-copper', 2: 'f-copper', 1: 'f-copper', 5000: 'f-n50', 2000: 'f-n20', 1000: 'f-n10', 500: 'f-n5' })[c] || 'f-gold';
-const denomTotal = (a, counts = a?.denoms) => (DENOMS[a?.type] || []).reduce((s, v) => s + v * (Number(counts?.[v]) || 0), 0);
+const denomTotal = (a, counts) => (DENOMS[a?.type] || []).reduce((s, v) => s + v * (Number(counts?.[v]) || 0), 0);
+let dcMemo = { txs: null, accs: null, val: null };
+function allDenomCounts() {
+    if (dcMemo.txs === S.txs && dcMemo.accs === S.accounts) return dcMemo.val;
+    const out = {};
+    S.accounts.forEach(a => {
+        if (!hasDenoms(a)) return;
+        const counts = {};
+        DENOMS[a.type].forEach(v => { counts[v] = Number(a.denoms?.[v]) || 0; });
+        out[a.id] = { counts, known: !!a.denoms };
+    });
+    const apply = (id, map) => {
+        const o = out[id]; if (!o || !map) return;
+        Object.entries(map).forEach(([k, n]) => { if (k in o.counts) { o.counts[k] += Number(n) || 0; o.known = true; } });
+    };
+    S.txs.forEach(t => { apply(t.accountId, t.denoms); apply(t.toAccountId, t.toDenoms); });
+    dcMemo = { txs: S.txs, accs: S.accounts, val: out };
+    return out;
+}
+// Counts for one account, optionally ignoring one transaction (used while editing it).
+function denomCountsFor(accId, ignoreTx = null) {
+    const dc = allDenomCounts()[accId]; if (!dc) return null;
+    const counts = { ...dc.counts };
+    if (ignoreTx) {
+        [[ignoreTx.accountId, ignoreTx.denoms], [ignoreTx.toAccountId, ignoreTx.toDenoms]].forEach(([id, map]) => {
+            if (id === accId && map) Object.entries(map).forEach(([k, n]) => { if (k in counts) counts[k] -= Number(n) || 0; });
+        });
+    }
+    return { counts, known: dc.known };
+}
+const denomChip = (a, v, n, cls = '') => `<span class="denom-chip ${cls}"><i class="${a.type === 'cash' ? 'note' : ''} ${denomFace(v)}"></i>${S.hidden ? esc(maskText()) : n} × ${esc(denomLabel(v))}</span>`;
 function denomChips(a, bal) {
     if (!hasDenoms(a)) return '';
-    const isCash = a.type === 'cash';
-    const d = a.denoms;
-    if (!d) return `<div class="denom-chips"><span class="help">Tap to count your ${isCash ? 'notes' : 'coins'}</span></div>`;
-    const list = DENOMS[a.type].filter(v => Number(d[v]) > 0);
+    const word = a.type === 'cash' ? 'notes' : 'coins';
+    const dc = allDenomCounts()[a.id];
+    if (!dc || !dc.known) return `<div class="denom-chips"><span class="help">Tap to count your ${word}</span></div>`;
+    const list = DENOMS[a.type].filter(v => dc.counts[v]);
     let html = `<div class="denom-chips">${list.length
-        ? list.map(v => `<span class="denom-chip"><i class="${isCash ? 'note' : ''} ${denomFace(v)}"></i>${S.hidden ? esc(maskText()) : Number(d[v])} × ${esc(denomLabel(v))}</span>`).join('')
-        : `<span class="help">No ${isCash ? 'notes' : 'coins'} counted</span>`}</div>`;
-    const diff = denomTotal(a) - bal;
+        ? list.map(v => denomChip(a, v, dc.counts[v], dc.counts[v] < 0 ? 'neg' : '')).join('')
+        : `<span class="help">No ${word} left</span>`}</div>`;
+    const diff = denomTotal(a, dc.counts) - bal;
     if (diff) html += `<div class="help warn" style="margin-top:6px">Count is ${money(diff, { sign: true })} off the balance — tap to recount</div>`;
     return html;
+}
+// The little row of notes/coins shown under a transaction in lists.
+function denomLine(t) {
+    const group = (accId, map, wantSign) => {
+        const a = accById(accId); const main = [], other = [];
+        if (hasDenoms(a) && map) DENOMS[a.type].forEach(v => {
+            const n = Number(map[v]) || 0; if (!n) return;
+            (Math.sign(n) === wantSign ? main : other).push(denomChip(a, v, Math.abs(n)));
+        });
+        return { a, main, other };
+    };
+    let html = '';
+    if (t.type === 'expense' || t.type === 'income') {
+        const g = group(t.accountId, t.denoms, t.type === 'income' ? 1 : -1);
+        html = g.main.join('') + (g.other.length ? `<span class="dn-sep">change</span>${g.other.join('')}` : '');
+    } else if (t.type === 'transfer') {
+        const f = group(t.accountId, t.denoms, -1), to = group(t.toAccountId, t.toDenoms, 1);
+        const norm = (map, sign) => JSON.stringify(Object.entries(map || {}).map(([k, n]) => [k, sign * n]).sort());
+        const mirrored = f.a?.type === to.a?.type && norm(t.denoms, -1) === norm(t.toDenoms, 1);
+        html = f.main.join('');
+        if (to.main.length && !(mirrored && f.main.length)) html += `${f.main.length ? '<span class="dn-sep">→</span>' : ''}${to.main.join('')}`;
+    }
+    return html ? `<div class="dn-line">${html}</div>` : '';
 }
 function openDenomModal(a) {
     const list = DENOMS[a.type]; const isCash = a.type === 'cash';
     const word = isCash ? 'notes' : 'coins';
-    const counts = {}; list.forEach(v => { counts[v] = Number(a.denoms?.[v]) || 0; });
+    const derived = allDenomCounts()[a.id]?.counts || {};
+    const counts = {}; list.forEach(v => { counts[v] = Math.max(0, Number(derived[v]) || 0); });
     const bal = balances()[a.id] || 0;
     const last = a.countedAt ? ` Last counted ${esc(fmtDate(isoOf(new Date(a.countedAt))).toLowerCase())}.` : '';
     openModal({
         title: `${a.name} · ${word}`,
-        body: `<div class="help">How many of each ${isCash ? 'note' : 'coin'} you have.${last}</div>
+        body: `<div class="help">How many of each ${isCash ? 'note' : 'coin'} you have. This updates by itself when you pick ${word} on a transaction — recount here if it drifts.${last}</div>
             <div class="denoms">${list.map(v => `
                 <div class="denom-row">
                     <div class="denom-face ${isCash ? 'note' : 'coin'} ${denomFace(v)}">${esc(denomLabel(v))}</div>
@@ -2099,10 +2181,11 @@ function openDenomModal(a) {
             });
             $('#dn-clear', m).addEventListener('click', () => { list.forEach(v => { counts[v] = 0; $(`[data-count="${v}"]`, m).value = 0; }); sync(); });
             $('#dn-save', m).addEventListener('click', () => {
-                const denoms = {}; list.forEach(v => { denoms[v] = counts[v]; });
+                // Shift the baseline so that baseline + transactions = what you just counted.
+                const base = {}; list.forEach(v => { base[v] = (Number(a.denoms?.[v]) || 0) + counts[v] - (Number(derived[v]) || 0); });
                 const diff = denomTotal(a, counts) - bal;
                 const syncBal = !!diff && $('#dn-sync', m).checked;
-                fire(setDoc(doc(col('accounts'), a.id), { denoms, countedAt: nowISO() }, { merge: true }));
+                fire(setDoc(doc(col('accounts'), a.id), { denoms: base, countedAt: nowISO() }, { merge: true }));
                 if (syncBal) {
                     fire(addDoc(col('transactions'), { type: 'adjust', amount: diff, accountId: a.id, date: todayISO(), note: isCash ? 'Cash count' : 'Coin count', createdAt: nowISO(), createdBy: S.email }));
                 }
@@ -2113,7 +2196,116 @@ function openDenomModal(a) {
         }
     });
 }
-
+// Notes/coins picker inside the transaction form.
+// ctx: { type(), from(), to(), amount: <input>, onChange() }
+function createDenomPicker(host, existing, ctx) {
+    const blank = () => ({ type: null, pieces: {}, change: {}, showChange: false });
+    const st = { from: blank(), to: blank(), manual: !!existing && !(existing.denoms || existing.toDenoms), touchedTo: !!existing?.toDenoms };
+    if (existing) {
+        const load = (side, accId, map, sign) => {
+            const a = accById(accId); if (!hasDenoms(a)) return;
+            side.type = a.type;
+            Object.entries(map || {}).forEach(([k, n]) => {
+                n = Number(n) || 0;
+                if (n * sign > 0) side.pieces[k] = Math.abs(n);
+                else if (n) { side.change[k] = Math.abs(n); side.showChange = true; }
+            });
+        };
+        load(st.from, existing.accountId, existing.denoms, existing.type === 'income' ? 1 : -1);
+        if (existing.type === 'transfer') load(st.to, existing.toAccountId, existing.toDenoms, 1);
+    }
+    const sum = (map) => Object.entries(map).reduce((s, [k, n]) => s + Number(k) * n, 0);
+    const changeOf = (d) => d.allowChange ? st[d.key].change : {};
+    const any = (d) => Object.values(st[d.key].pieces).some(n => n > 0) || Object.values(changeOf(d)).some(n => n > 0);
+    const net = (d) => sum(st[d.key].pieces) - sum(changeOf(d));
+    const sides = () => {
+        const type = ctx.type();
+        const fromA = accById(ctx.from()); const toA = type === 'transfer' ? accById(ctx.to()) : null;
+        const out = [];
+        if (hasDenoms(fromA)) out.push({ key: 'from', a: fromA, sign: type === 'income' ? 1 : -1, allowChange: type === 'expense', title: type === 'income' ? 'What did you put in?' : type === 'transfer' ? `Taken out of ${fromA.name}` : 'Paid with' });
+        if (hasDenoms(toA) && toA.id !== fromA?.id) out.push({ key: 'to', a: toA, sign: 1, allowChange: false, title: `Put into ${toA.name}` });
+        return out;
+    };
+    const syncType = (side, a) => {
+        if (!a) return;
+        if (side.type && side.type !== a.type) { side.pieces = {}; side.change = {}; side.showChange = false; }
+        side.type = a.type;
+    };
+    const tiles = (d, kind, showHave) => {
+        const side = st[d.key]; const isCash = d.a.type === 'cash';
+        const have = showHave ? denomCountsFor(d.a.id, existing) : null;
+        return `<div class="dn-grid ${isCash ? 'notes' : ''}">${DENOMS[d.a.type].map(v => {
+            const n = side[kind][v] || 0; const lab = esc(denomLabel(v));
+            const h = have && have.known ? have.counts[v] : null;
+            return `<div class="dn-tile ${n ? 'on' : ''}">
+                ${n ? `<button type="button" class="dn-sub" data-side="${d.key}" data-kind="${kind}" data-v="${v}" aria-label="One less ${lab}">−</button>` : ''}
+                <button type="button" class="dn-add" data-side="${d.key}" data-kind="${kind}" data-v="${v}" aria-label="Add a ${lab}">
+                    <span class="denom-face sm ${isCash ? 'note' : 'coin'} ${denomFace(v)}">${lab}</span>${n ? `<span class="dn-badge">${n}</span>` : ''}
+                </button>
+                ${h != null && !S.hidden ? `<span class="dn-have ${n > h ? 'short' : ''}">have ${Math.max(0, h)}</span>` : ''}
+            </div>`;
+        }).join('')}</div>`;
+    };
+    const render = () => {
+        const list = sides();
+        syncType(st.from, list.find(d => d.key === 'from')?.a);
+        syncType(st.to, list.find(d => d.key === 'to')?.a);
+        host.innerHTML = list.map(d => {
+            const side = st[d.key]; const word = d.a.type === 'cash' ? 'notes' : 'coins';
+            const ch = sum(changeOf(d));
+            return `<div class="dn-tray">
+                <div class="dn-head"><span class="lbl">${esc(d.title)}</span><span class="dn-sum">${any(d) ? money(net(d)) : '<span class="muted" style="font-weight:500;font-size:12px">optional</span>'}</span></div>
+                ${tiles(d, 'pieces', d.sign < 0)}
+                ${d.allowChange ? (side.showChange
+                    ? `<div class="dn-head"><span class="lbl">Change back</span>${ch ? `<span class="dn-sum pos">${money(ch, { sign: true })}</span>` : ''}</div>${tiles(d, 'change', false)}`
+                    : `<button type="button" class="btn sm ghost" data-dn-change style="align-self:flex-start">${icon('plus')}Got change back</button>`) : ''}
+                ${!any(d) ? `<div class="help">Tap the ${word} you ${d.sign > 0 ? 'added' : 'used'} so your ${word} count stays right.</div>` : ''}
+            </div>`;
+        }).join('');
+        host.classList.toggle('hidden', !list.length);
+        icons();
+    };
+    const autoAmount = () => {
+        if (st.manual) return;
+        const first = sides().find(d => any(d));
+        const v = first ? net(first) : 0;
+        ctx.amount.value = v > 0 ? (v / 100).toFixed(2) : '';
+    };
+    host.addEventListener('click', (e) => {
+        if (e.target.closest('[data-dn-change]')) { st.from.showChange = true; render(); return; }
+        const b = e.target.closest('.dn-add, .dn-sub'); if (!b) return;
+        const key = b.dataset.side, kind = b.dataset.kind, v = b.dataset.v;
+        const side = st[key];
+        side[kind][v] = Math.max(0, (side[kind][v] || 0) + (b.classList.contains('dn-add') ? 1 : -1));
+        if (!side[kind][v]) delete side[kind][v];
+        const list = sides();
+        if (key === 'to') st.touchedTo = true;
+        else if (ctx.type() === 'transfer' && !st.touchedTo && list.some(d => d.key === 'to') && st.to.type === st.from.type) st.to.pieces = { ...st.from.pieces };
+        autoAmount(); render(); ctx.onChange();
+    });
+    ctx.amount.addEventListener('input', () => { st.manual = ctx.amount.value.trim() !== ''; });
+    const validate = (amount) => {
+        for (const d of sides()) {
+            if (!any(d)) continue;
+            const v = net(d);
+            if (v !== amount) return `The ${d.a.type === 'cash' ? 'notes' : 'coins'} for ${d.a.name} add up to ${moneyPlain(v, { force: true })}, but the amount is ${moneyPlain(amount, { force: true })}.`;
+        }
+        return null;
+    };
+    const payload = () => {
+        const out = { denoms: null, toDenoms: null };
+        sides().forEach(d => {
+            if (!any(d)) return;
+            const map = {};
+            Object.entries(st[d.key].pieces).forEach(([k, n]) => { if (n) map[k] = (map[k] || 0) + d.sign * n; });
+            Object.entries(changeOf(d)).forEach(([k, n]) => { if (n) map[k] = (map[k] || 0) - d.sign * n; });
+            Object.keys(map).forEach(k => { if (!map[k]) delete map[k]; });
+            out[d.key === 'from' ? 'denoms' : 'toDenoms'] = Object.keys(map).length ? map : null;
+        });
+        return out;
+    };
+    return { render, validate, payload };
+}
 // ---------- Bills & income ----------
 function openPlanModal(kind, existing = null) {
     const isBill = kind === 'bill';
