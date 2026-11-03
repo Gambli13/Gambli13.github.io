@@ -10,6 +10,10 @@
             window.location.href = 'work.html';
         }
     </script>
+    <script>
+        // Apply the Christmas theme before the first paint so it doesn't flash
+        try { if (localStorage.getItem('christmasTheme') === '1') document.documentElement.classList.add('christmas'); } catch (e) {}
+    </script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@0.577.0/dist/umd/lucide.min.js"></script>
     <script>
@@ -685,6 +689,13 @@
         saveEvent: (ev) => setDoc(doc(db, getCollectionPath('personal_events'), ev.id), JSON.parse(JSON.stringify(ev))),
         deleteEvent: (id) => deleteDoc(doc(db, getCollectionPath('personal_events'), id)),
         saveOverride: (id, data) => setDoc(doc(db, getCollectionPath('hardcoded_overrides'), id), JSON.parse(JSON.stringify(data)))
+    };
+
+    // Bridge for the Christmas theme (classic script) so the toggle syncs across devices
+    window.firestoreHelpers = {
+        ready: () => Boolean(db && userId),
+        get db() { return db; },
+        doc, setDoc, onSnapshot, getCollectionPath
     };
 
     const initFirebase = async () => {
@@ -2600,6 +2611,146 @@
 
         document.addEventListener('DOMContentLoaded', initF1Logic);
     </script>
+    <style>
+        /* ====== CHRISTMAS THEME ====== */
+        /* Toggled by the tree button in the quick menu; html.christmas switches everything on. */
+
+        /* Desktop stagger for the later menu items (the JS below re-staggers by visible order) */
+        #radial-menu-wrapper.active .radial-item-6 { transition-delay: 0.30s; }
+        #radial-menu-wrapper.active .radial-item-7 { transition-delay: 0.35s; }
+
+        /* Layers that only exist while the theme is on */
+        #xmas-glow, #xmas-snow, #xmas-lights, #xmas-countdown-wrap { display: none; }
+        html.christmas #xmas-glow, html.christmas #xmas-snow, html.christmas #xmas-lights { display: block; }
+        html.christmas #xmas-countdown-wrap { display: flex; justify-content: center; width: 100%; }
+        #xmas-countdown { display: inline-flex; }
+
+        /* On desktop the page is centred vertically, so the pill floats above the middle
+           column without taking up any height; nothing else moves when the theme turns on.
+           (height 0 + -2rem cancels the space-y-8 gap the next item would get.) */
+        @media (min-width: 1024px) {
+            #xmas-countdown-wrap { position: relative; height: 0; margin-bottom: -2rem; }
+            /* In Personal mode the greeting already has that gap (the hidden school widget sits before it) */
+            body.personal-mode #xmas-countdown-wrap { margin-bottom: 0; }
+            #xmas-countdown { position: absolute; bottom: .9rem; left: 50%; transform: translateX(-50%); }
+        }
+
+        /* Warm red / green glow over the background photo */
+        #xmas-glow {
+            position: fixed; inset: 0; z-index: -1; pointer-events: none;
+            background:
+                radial-gradient(900px 600px at 0% 100%, rgba(220, 38, 38, 0.22), transparent 65%),
+                radial-gradient(900px 600px at 100% 100%, rgba(22, 163, 74, 0.20), transparent 65%),
+                radial-gradient(700px 360px at 50% 0%, rgba(253, 224, 71, 0.10), transparent 70%);
+        }
+        /* Falling snow sits behind the glass panels, so it blurs through them */
+        #xmas-snow { position: fixed; inset: 0; z-index: -1; pointer-events: none; width: 100%; height: 100%; }
+
+        /* String of fairy lights along the top (behind the panels, so it never covers anything) */
+        #xmas-lights {
+            position: fixed; top: 0; left: 0; right: 0; height: 52px;
+            z-index: -1; pointer-events: none; overflow: visible;
+        }
+        #xmas-lights svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+        .xmas-bulb {
+            position: absolute; width: 11px; height: 17px; margin-left: -5.5px;
+            transform-origin: 50% 0; pointer-events: none;
+        }
+        .xmas-bulb::before { /* socket */
+            content: ''; position: absolute; left: 2.5px; top: 0; width: 6px; height: 5px;
+            border-radius: 1.5px; background: #1f3b2a; box-shadow: inset 0 -1px 0 rgba(0,0,0,.35);
+        }
+        .xmas-bulb::after { /* glass */
+            content: ''; position: absolute; left: 0; top: 4px; width: 11px; height: 13px;
+            border-radius: 50% 50% 50% 50% / 42% 42% 58% 58%;
+            background: radial-gradient(circle at 35% 30%, rgba(255,255,255,.85), var(--bulb) 38%, var(--bulb-deep) 100%);
+            box-shadow: 0 0 10px 2px var(--bulb-glow), 0 0 22px 6px var(--bulb-glow);
+            animation: xmas-twinkle var(--tw-dur, 2.4s) ease-in-out infinite;
+            animation-delay: var(--tw-delay, 0s);
+        }
+        .xmas-bulb.red    { --bulb: #ff4d4d; --bulb-deep: #b91c1c; --bulb-glow: rgba(255, 77, 77, .55); }
+        .xmas-bulb.green  { --bulb: #4ade80; --bulb-deep: #15803d; --bulb-glow: rgba(74, 222, 128, .5); }
+        .xmas-bulb.gold   { --bulb: #fde047; --bulb-deep: #ca8a04; --bulb-glow: rgba(253, 224, 71, .55); }
+        .xmas-bulb.blue   { --bulb: #7dd3fc; --bulb-deep: #0369a1; --bulb-glow: rgba(125, 211, 252, .5); }
+        .xmas-bulb.pink   { --bulb: #f9a8d4; --bulb-deep: #be185d; --bulb-glow: rgba(249, 168, 212, .5); }
+        @keyframes xmas-twinkle {
+            0%, 100% { opacity: 1; filter: brightness(1.1); }
+            45% { opacity: .35; filter: brightness(.6); box-shadow: 0 0 3px 0 var(--bulb-glow); }
+            55% { opacity: .35; filter: brightness(.6); box-shadow: 0 0 3px 0 var(--bulb-glow); }
+        }
+
+        /* Snow lying on top of the glass panels (background-image only, so the panel colour stays) */
+        html.christmas body > .scroll-container > .grid > div[class*="bg-white/10"],
+        html.christmas #bookmark-container,
+        html.christmas #next-lesson-widget {
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 24' preserveAspectRatio='none'%3E%3Cpath d='M0 0H400V9C388 12 380 8 368 11S346 17 332 12 310 6 296 10 272 18 256 13 236 7 220 11 196 19 180 14 160 8 146 12 122 17 108 12 90 7 74 11 52 18 38 13 18 8 0 12Z' fill='%23dbe7f5' fill-opacity='.22'/%3E%3Cpath d='M0 0H400V6C390 8 378 5 366 8S344 13 330 9 308 4 294 7 270 14 254 10 234 4 218 8 194 15 178 11 158 5 144 9 120 13 106 9 88 4 72 8 50 14 36 10 16 5 0 9Z' fill='%23ffffff' fill-opacity='.9'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: top center;
+            background-size: 100% 18px;
+        }
+        html.christmas body > .scroll-container > .grid > div[class*="bg-white/10"] {
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), inset 0 0 0 1px rgba(255, 236, 200, 0.12);
+        }
+
+        /* Christmas countdown pill at the top of the centre column */
+        #xmas-countdown {
+            align-items: center; gap: .5rem;
+            padding: .45rem 1rem .45rem .8rem; border-radius: 999px;
+            font-size: .8rem; font-weight: 700; letter-spacing: .02em; color: #fff;
+            background: linear-gradient(rgba(15, 23, 42, .55), rgba(15, 23, 42, .55)) padding-box,
+                        linear-gradient(90deg, #ef4444, #fde047, #22c55e) border-box;
+            border: 1.5px solid transparent;
+            -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, .35);
+            white-space: nowrap;
+        }
+        #xmas-countdown .xmas-cd-num { color: #fde68a; font-variant-numeric: tabular-nums; }
+
+        /* Santa hat on the quick-menu button */
+        html.christmas #toggle-quick-menu-btn::before {
+            content: ''; position: absolute; top: -15px; left: -9px; width: 32px; height: 26px;
+            transform: rotate(-22deg); pointer-events: none; z-index: 2;
+            background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 52'%3E%3Cpath d='M8 40C10 22 22 6 40 6c9 0 15 6 17 14l-5 3c-3-6-7-9-12-8-8 2-12 13-14 25Z' fill='%23dc2626'/%3E%3Cpath d='M40 6c9 0 15 6 17 14l-5 3c-3-6-7-9-12-8' fill='%23991b1b' fill-opacity='.45'/%3E%3Crect x='3' y='37' width='38' height='11' rx='5.5' fill='%23f8fafc'/%3E%3Ccircle cx='55' cy='24' r='6' fill='%23f8fafc'/%3E%3C/svg%3E") center / contain no-repeat;
+            filter: drop-shadow(0 2px 3px rgba(0, 0, 0, .45));
+        }
+
+        /* The tree button itself */
+        #menu-toggle-christmas svg { color: #4ade80; }
+        html.christmas #menu-toggle-christmas {
+            background-image: linear-gradient(135deg, rgba(185, 28, 28, .9), rgba(21, 128, 61, .9));
+            border-color: rgba(253, 224, 71, .75) !important;
+            box-shadow: 0 0 16px rgba(253, 224, 71, .4);
+        }
+        html.christmas #menu-toggle-christmas svg { color: #fff; }
+
+        /* A festive sticker on each assignment card */
+        html.christmas .assignment-item { position: relative; }
+        html.christmas .assignment-item[data-xmas-icon]::after {
+            content: attr(data-xmas-icon);
+            position: absolute; right: 10px; bottom: 6px;
+            font-size: 18px; line-height: 1; pointer-events: none;
+            filter: drop-shadow(0 2px 3px rgba(0, 0, 0, .4));
+        }
+
+        /* Small touches */
+        html.christmas .bookmark-icon:hover {
+            border-color: rgba(253, 224, 71, .85) !important;
+            box-shadow: 0 0 18px rgba(253, 224, 71, .3);
+        }
+        html.christmas #search-input:focus { border-color: #ef4444 !important; box-shadow: 0 0 0 4px rgba(239, 68, 68, .2), 0 10px 30px rgba(0, 0, 0, .3); }
+        html.christmas .pm-greeting-text {
+            background: linear-gradient(90deg, #fca5a5, #fde68a 50%, #86efac);
+            -webkit-background-clip: text; background-clip: text; color: transparent !important;
+        }
+
+        @media (max-width: 1023px) {
+            #xmas-countdown { margin-top: 1.75rem; }
+            #radial-menu-wrapper.active .radial-item-7 { transition-delay: 0.35s; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .xmas-bulb::after { animation: none; }
+        }
+    </style>
 </head>
 <body class="bg-gray-900">
 
@@ -3125,6 +3276,14 @@
                 <div class="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-emerald-600"></div>
             </div>
         </a>
+
+        <button id="menu-toggle-christmas" class="radial-item radial-item-7 relative group rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition-colors flex items-center justify-center">
+            <span data-lucide="tree-pine" class="w-6 h-6 drop-shadow-md"></span>
+            <div class="absolute left-full ml-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-red-600 text-white text-xs font-bold rounded-lg shadow-xl opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity z-50">
+                <span id="menu-toggle-christmas-label">Christmas</span>
+                <div class="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-red-600"></div>
+            </div>
+        </button>
     </div>
 
     <div id="notes-app-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition-opacity duration-300 z-[70]">
@@ -3217,7 +3376,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 30/10/2026 - 18:48</div>
+    <div id="version-timestamp">Last Update 03/11/2026 - 11:15</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
@@ -6822,6 +6981,267 @@
             document.addEventListener('visibilitychange', maybePull);
         });
     })();
+</script>
+<script>
+/* ====== CHRISTMAS THEME + menu stagger ====== */
+(function () {
+    const KEY = 'christmasTheme';
+    const root = document.documentElement;
+    const isOn = () => root.classList.contains('christmas');
+    const ICONS = ['🎄', '🎁', '⛄', '❄️', '🦌', '🔔', '🍪', '⭐', '🧦', '🎅', '🍬', '🕯️'];
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    // ---------- Quick menu: stagger items by their visible order ----------
+    // Items reveal bottom-to-top in the order you see them, skipping hidden
+    // (school-only / personal-only) ones, so nothing pops in out of turn.
+    const staggerMenu = () => {
+        const wrap = document.getElementById('radial-menu-wrapper');
+        if (!wrap) return;
+        const apply = () => {
+            const open = wrap.classList.contains('active');
+            let i = 0;
+            wrap.querySelectorAll('.radial-item').forEach(el => {
+                const visible = getComputedStyle(el).display !== 'none';
+                el.style.transitionDelay = open && visible ? `${(++i) * 0.05}s` : '';
+            });
+        };
+        new MutationObserver(apply).observe(wrap, { attributes: true, attributeFilter: ['class'] });
+        apply();
+    };
+
+    // ---------- Layers ----------
+    let glow, canvas, lights, countdown, countdownWrap;
+    const ensureLayers = () => {
+        if (!glow) {
+            glow = document.createElement('div'); glow.id = 'xmas-glow'; glow.setAttribute('aria-hidden', 'true');
+            canvas = document.createElement('canvas'); canvas.id = 'xmas-snow'; canvas.setAttribute('aria-hidden', 'true');
+            lights = document.createElement('div'); lights.id = 'xmas-lights'; lights.setAttribute('aria-hidden', 'true');
+            const bg = document.getElementById('background-container');
+            if (bg) bg.after(glow, canvas); else document.body.prepend(glow, canvas);
+            document.body.appendChild(lights);
+        }
+        if (!countdown) {
+            countdownWrap = document.createElement('div');
+            countdownWrap.id = 'xmas-countdown-wrap';
+            countdown = document.createElement('div');
+            countdown.id = 'xmas-countdown';
+            countdownWrap.appendChild(countdown);
+        }
+    };
+    // The pill is only in the page while the theme is on: even hidden, it would
+    // change the spacing of the middle column (space-y-8) and nudge the layout.
+    const placeCountdown = (on) => {
+        if (!countdownWrap) return;
+        const centre = document.querySelector('body > .scroll-container > .grid > .lg\\:col-span-3');
+        if (on && centre && countdownWrap.parentNode !== centre) centre.prepend(countdownWrap);
+        if (!on && countdownWrap.parentNode) countdownWrap.remove();
+    };
+
+    // ---------- Fairy lights ----------
+    const COLORS = ['red', 'gold', 'green', 'blue', 'pink'];
+    const buildLights = () => {
+        if (!lights) return;
+        const w = window.innerWidth;
+        const span = w < 640 ? 110 : 150;          // distance between hooks
+        const sag = w < 640 ? 14 : 18;             // how far the wire droops
+        const top = 4;
+        const n = Math.max(2, Math.round(w / span));
+        const seg = w / n;
+        let d = `M 0 ${top}`;
+        for (let i = 0; i < n; i++) {
+            const x0 = i * seg, x1 = (i + 1) * seg;
+            d += ` Q ${x0 + seg / 2} ${top + sag * 2} ${x1} ${top}`;
+        }
+        let html = `<svg viewBox="0 0 ${w} 52" preserveAspectRatio="none"><path d="${d}" fill="none" stroke="#1a2e22" stroke-width="2" stroke-linecap="round"/><path d="${d}" fill="none" stroke="rgba(255,255,255,.12)" stroke-width="0.6" transform="translate(0,-0.8)"/></svg>`;
+        const perSeg = w < 640 ? 2 : 3;
+        let k = 0;
+        for (let i = 0; i < n; i++) {
+            const x0 = i * seg, cx = x0 + seg / 2, x1 = x0 + seg;
+            for (let j = 1; j <= perSeg; j++) {
+                const t = j / (perSeg + 1);
+                // point + tangent on the quadratic curve
+                const x = (1 - t) * (1 - t) * x0 + 2 * (1 - t) * t * cx + t * t * x1;
+                const y = (1 - t) * (1 - t) * top + 2 * (1 - t) * t * (top + sag * 2) + t * t * top;
+                const dy = 2 * (1 - t) * (sag * 2) + 2 * t * (-sag * 2);
+                const dx = 2 * (1 - t) * (cx - x0) + 2 * t * (x1 - cx);
+                const angle = Math.atan2(dy, dx) * 180 / Math.PI * 0.6;
+                const color = COLORS[k % COLORS.length];
+                const delay = ((k * 0.37) % 2.4).toFixed(2);
+                const dur = (2 + (k % 5) * 0.35).toFixed(2);
+                html += `<span class="xmas-bulb ${color}" style="left:${x.toFixed(1)}px;top:${(y - 1).toFixed(1)}px;transform:rotate(${angle.toFixed(1)}deg);--tw-delay:${delay}s;--tw-dur:${dur}s"></span>`;
+                k++;
+            }
+        }
+        lights.innerHTML = html;
+    };
+
+    // ---------- Snow ----------
+    let flakes = [], raf = null, last = 0, ctx = null, cw = 0, ch = 0;
+    const sizeCanvas = () => {
+        if (!canvas) return;
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        cw = window.innerWidth; ch = window.innerHeight;
+        canvas.width = Math.round(cw * dpr); canvas.height = Math.round(ch * dpr);
+        ctx = canvas.getContext('2d');
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        const target = Math.min(220, Math.round((cw * ch) / 8500));
+        while (flakes.length < target) flakes.push(newFlake(true));
+        flakes.length = target;
+    };
+    const newFlake = (anywhere) => {
+        const r = Math.random() * 2.1 + 0.7;
+        return {
+            x: Math.random() * (cw || window.innerWidth),
+            y: anywhere ? Math.random() * (ch || window.innerHeight) : -10,
+            r,
+            vy: 18 + r * 16 + Math.random() * 14,   // px per second, bigger = faster
+            sway: Math.random() * 18 + 6,
+            phase: Math.random() * Math.PI * 2,
+            freq: Math.random() * 0.8 + 0.4,
+            a: Math.random() * 0.45 + 0.5
+        };
+    };
+    const drawFlakes = () => {
+        ctx.clearRect(0, 0, cw, ch);
+        for (const f of flakes) {
+            const x = f.x + Math.sin(f.phase) * f.sway;
+            ctx.beginPath();
+            ctx.arc(x, f.y, f.r, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(255,255,255,${f.a})`;
+            ctx.fill();
+        }
+    };
+    const tick = (now) => {
+        const dt = Math.min(0.05, (now - (last || now)) / 1000); last = now;
+        for (let i = 0; i < flakes.length; i++) {
+            const f = flakes[i];
+            f.y += f.vy * dt;
+            f.phase += f.freq * dt;
+            if (f.y - f.r > ch) flakes[i] = newFlake(false);
+        }
+        drawFlakes();
+        raf = requestAnimationFrame(tick);
+    };
+    const startSnow = () => {
+        sizeCanvas();
+        if (reduceMotion) { drawFlakes(); return; }
+        if (!raf) { last = 0; raf = requestAnimationFrame(tick); }
+    };
+    const stopSnow = () => {
+        if (raf) cancelAnimationFrame(raf);
+        raf = null;
+        if (ctx) ctx.clearRect(0, 0, cw, ch);
+    };
+
+    // ---------- Countdown ----------
+    const updateCountdown = () => {
+        if (!countdown) return;
+        const now = new Date();
+        const y = now.getFullYear(), m = now.getMonth(), d = now.getDate();
+        let html;
+        if (m === 11 && d === 24) html = '🎅 <span>Christmas Eve!</span>';
+        else if (m === 11 && d === 25) html = '🎁 <span>Merry Christmas!</span>';
+        else if (m === 11 && d >= 26 && d <= 30) html = '✨ <span>Happy holidays!</span>';
+        else if ((m === 11 && d === 31) || (m === 0 && d === 1)) html = '🎆 <span>Happy New Year!</span>';
+        else {
+            const xmasYear = (m === 11 && d > 25) ? y + 1 : y;
+            const today = Date.UTC(y, m, d), xmas = Date.UTC(xmasYear, 11, 25);
+            const days = Math.round((xmas - today) / 86400000);
+            html = `🎄 <span><span class="xmas-cd-num">${days}</span> ${days === 1 ? 'day' : 'days'} until Christmas</span>`;
+        }
+        countdown.innerHTML = html;
+    };
+
+    // ---------- Assignment stickers (stable per assignment) ----------
+    const hash = (s) => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return Math.abs(h); };
+    const decorateAssignments = () => {
+        document.querySelectorAll('.assignment-item').forEach(el => {
+            if (isOn()) el.dataset.xmasIcon = ICONS[hash(el.id || el.textContent) % ICONS.length];
+            else delete el.dataset.xmasIcon;
+        });
+    };
+
+    // ---------- Menu button label ----------
+    const updateButton = () => {
+        const label = document.getElementById('menu-toggle-christmas-label');
+        if (label) label.textContent = isOn() ? 'Turn off Christmas' : 'Christmas';
+    };
+
+    // ---------- On / off ----------
+    let cdTimer = null;
+    const applyLocally = (on) => {
+        root.classList.toggle('christmas', on);
+        try { localStorage.setItem(KEY, on ? '1' : '0'); } catch (e) {}
+        if (!document.body) return;
+        ensureLayers();
+        placeCountdown(on);
+        if (on) {
+            buildLights(); startSnow(); updateCountdown();
+            if (!cdTimer) cdTimer = setInterval(updateCountdown, 60 * 1000);
+        } else {
+            stopSnow();
+            if (cdTimer) { clearInterval(cdTimer); cdTimer = null; }
+        }
+        decorateAssignments();
+        updateButton();
+    };
+
+    // ---------- Sync across devices (same Firestore doc pattern as Halloween) ----------
+    let applyingRemote = false;
+    const settingsDoc = (h) => h.doc(h.db, h.getCollectionPath('settings'), 'christmas');
+    const pushRemote = async (on) => {
+        const h = window.firestoreHelpers;
+        if (!h || !h.ready()) return;
+        try { await h.setDoc(settingsDoc(h), { on: !!on, updatedAt: new Date().toISOString() }); }
+        catch (e) { console.warn('Christmas sync (write) failed:', e); }
+    };
+    const subscribeRemote = () => {
+        const h = window.firestoreHelpers;
+        if (!h || !h.ready()) { setTimeout(subscribeRemote, 500); return; }
+        try {
+            h.onSnapshot(settingsDoc(h), (snap) => {
+                if (!snap.exists()) return;
+                const on = snap.data().on === true;
+                if (isOn() === on) return;
+                applyingRemote = true;
+                applyLocally(on);
+                applyingRemote = false;
+            });
+        } catch (e) { console.warn('Christmas sync (listen) failed:', e); }
+    };
+
+    window.toggleChristmas = () => {
+        const next = !isOn();
+        applyLocally(next);
+        if (!applyingRemote) pushRemote(next);
+    };
+
+    // ---------- Wire up ----------
+    const wire = () => {
+        staggerMenu();
+        const btn = document.getElementById('menu-toggle-christmas');
+        if (btn) btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (typeof window.closeRadialMenu === 'function') window.closeRadialMenu();
+            window.toggleChristmas();
+        });
+        const list = document.getElementById('assignment-list');
+        if (list) new MutationObserver(() => { if (isOn()) decorateAssignments(); }).observe(list, { childList: true });
+
+        let resizeT = null;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeT);
+            resizeT = setTimeout(() => { if (isOn()) { buildLights(); sizeCanvas(); if (reduceMotion) drawFlakes(); } }, 150);
+        });
+
+        applyLocally(isOn());
+        if (window.lucide) lucide.createIcons();
+        subscribeRemote();
+    };
+
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wire);
+    else wire();
+})();
 </script>
 </body>
 </html>

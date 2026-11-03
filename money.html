@@ -39,7 +39,8 @@
             widgets: { kpis: true, projection: true, profit: true, history: true, categories: true, accounts: true, upcoming: true, recent: true },
             preview: 'projection',       // 'off' | 'projection' | 'profit'
             horizon: 60,
-            includeAvgSpend: true
+            includeAvgSpend: true,
+            snow: 'auto'                 // 'auto' (follows the dashboard's Christmas theme) | 'on' | 'off'
         };
         const mergeSettings = (s) => {
             s = s || {};
@@ -169,6 +170,9 @@
     #bg { position: fixed; inset: -60px; z-index: -2; filter: blur(var(--bg-blur)); transition: filter .3s; }
     #bg-dim { position: fixed; inset: 0; z-index: -1; background: rgba(0,0,0,var(--bg-dim)); pointer-events: none; }
     [data-theme="light"] #bg-dim { background: rgba(255,255,255,var(--bg-dim)); }
+    /* Falling snow: sits behind the glass panels, so it blurs through them */
+    #snow { position: fixed; inset: 0; z-index: -1; width: 100%; height: 100%; pointer-events: none; display: none; }
+    #snow.on { display: block; }
 
     .glass {
         background: rgba(var(--surface-rgb), var(--glass));
@@ -491,6 +495,7 @@
 <body>
 <div id="bg"></div>
 <div id="bg-dim"></div>
+<canvas id="snow" aria-hidden="true"></canvas>
 <script>
     // Paint the saved background/colours before anything else renders (no flash).
     MONEY_THEME.applySettings(MONEY_THEME.cached, MONEY_THEME.cachedBg);
@@ -1120,7 +1125,80 @@ function cacheSettings() { try { localStorage.setItem('money_settings', JSON.str
 function applyTheme() {
     THEME.applySettings(S.settings, S.bgData);
     Object.keys(fmtCache).forEach(k => delete fmtCache[k]);
+    updateSnow();
 }
+
+// =====================================================================
+// Snow — on when Settings → Snow is "On", or "Auto" while the dashboard's
+// Christmas theme is switched on (same site, so it shares that setting).
+// =====================================================================
+const snow = { canvas: null, ctx: null, flakes: [], raf: null, last: 0, w: 0, h: 0 };
+const snowReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+function christmasOnDashboard() { try { return localStorage.getItem('christmasTheme') === '1'; } catch (e) { return false; } }
+function snowWanted() {
+    const mode = S.settings.snow || 'auto';
+    return mode === 'on' || (mode === 'auto' && christmasOnDashboard());
+}
+function newFlake(anywhere) {
+    const r = Math.random() * 2.1 + 0.7;
+    return {
+        x: Math.random() * (snow.w || innerWidth), y: anywhere ? Math.random() * (snow.h || innerHeight) : -10, r,
+        vy: 18 + r * 16 + Math.random() * 14, sway: Math.random() * 18 + 6,
+        phase: Math.random() * Math.PI * 2, freq: Math.random() * 0.8 + 0.4, a: Math.random() * 0.45 + 0.5
+    };
+}
+function sizeSnow() {
+    const c = snow.canvas, dpr = Math.min(devicePixelRatio || 1, 2);
+    snow.w = innerWidth; snow.h = innerHeight;
+    c.width = Math.round(snow.w * dpr); c.height = Math.round(snow.h * dpr);
+    snow.ctx = c.getContext('2d'); snow.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const target = Math.min(220, Math.round(snow.w * snow.h / 8500));
+    while (snow.flakes.length < target) snow.flakes.push(newFlake(true));
+    snow.flakes.length = target;
+}
+function drawSnow() {
+    const { ctx, w, h } = snow;
+    // White on dark panels; soft slate on the light theme so it stays visible
+    const rgb = document.documentElement.dataset.theme === 'light' ? '100,116,139' : '255,255,255';
+    ctx.clearRect(0, 0, w, h);
+    for (const f of snow.flakes) {
+        ctx.beginPath();
+        ctx.arc(f.x + Math.sin(f.phase) * f.sway, f.y, f.r, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(${rgb},${f.a})`;
+        ctx.fill();
+    }
+}
+function snowTick(now) {
+    const dt = Math.min(0.05, (now - (snow.last || now)) / 1000); snow.last = now;
+    snow.flakes.forEach((f, i) => {
+        f.y += f.vy * dt; f.phase += f.freq * dt;
+        if (f.y - f.r > snow.h) snow.flakes[i] = newFlake(false);
+    });
+    drawSnow();
+    snow.raf = requestAnimationFrame(snowTick);
+}
+function updateSnow() {
+    snow.canvas = snow.canvas || document.getElementById('snow');
+    if (!snow.canvas) return;
+    const on = snowWanted();
+    snow.canvas.classList.toggle('on', on);
+    if (on) {
+        if (!snow.ctx) sizeSnow();
+        if (snowReduced) drawSnow();
+        else if (!snow.raf) { snow.last = 0; snow.raf = requestAnimationFrame(snowTick); }
+    } else {
+        if (snow.raf) cancelAnimationFrame(snow.raf);
+        snow.raf = null;
+        if (snow.ctx) snow.ctx.clearRect(0, 0, snow.w, snow.h);
+    }
+}
+let snowResizeT = null;
+window.addEventListener('resize', () => {
+    clearTimeout(snowResizeT);
+    snowResizeT = setTimeout(() => { if (snow.ctx) { sizeSnow(); if (snowWanted()) drawSnow(); } }, 150);
+});
+// Turning Christmas on/off on the dashboard in another tab updates this one straight away
+window.addEventListener('storage', (e) => { if (e.key === 'christmasTheme') updateSnow(); });
 function updateSettings(patch, { rerender = true } = {}) {
     const next = { ...S.settings, ...patch };
     if (patch.widgets) next.widgets = { ...S.settings.widgets, ...patch.widgets };
@@ -1700,6 +1778,7 @@ function viewSettings() {
                 ${(S.bgData || s.bgImageUrl) ? `<button class="btn danger" data-action="remove-bg" style="flex:0">${icon('trash-2')}</button>` : ''}
             </div><div class="help">Uploads are compressed and synced to your Google account, so every device gets the same background.</div>` : ''}
         </div>
+        <div class="set-row stack"><div><div class="tl">Snow</div><div class="ds">Auto snows while the Christmas theme is on in your dashboard</div></div>${seg('snow', [['auto', 'Auto'], ['on', 'On'], ['off', 'Off']], s.snow || 'auto')}</div>
         ${[['bgBlur', 'Background blur', 0, 40, 1, 'px'], ['bgDim', 'Background dim', 0, 85, 1, '%'], ['glass', 'Panel opacity', 15, 98, 1, '%']].map(([k, l, mn, mx, st, u]) => {
             const v = k === 'glass' ? Math.round(s.glass * 100) : s[k];
             return `<div class="set-row"><div style="flex:1"><div class="tl">${l}</div><input type="range" min="${mn}" max="${mx}" step="${st}" value="${v}" data-set="${k}" data-unit="${u}" ${k === 'glass' ? 'data-scale="100"' : ''}></div><div class="val-tag" data-val-for="${k}">${v}${u}</div></div>`;
@@ -2712,6 +2791,7 @@ document.addEventListener('keydown', (e) => {
 // Keep "Today"-based numbers fresh if the tab stays open past midnight.
 let lastDay = todayISO();
 setInterval(() => { if (todayISO() !== lastDay) { lastDay = todayISO(); scheduleRender(); } }, 60000);
+updateSnow();
 </script>
 </body>
 </html>
