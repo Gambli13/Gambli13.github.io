@@ -1038,8 +1038,8 @@
             }
         },
         patchNote: async (id, fields) => {
-            if (!db || !userId) return;
-            try { await setDoc(doc(db, getCollectionPath('notes'), id), fields, { merge: true }); } catch (e) { console.error(e); }
+            if (!db || !userId) return false;
+            try { await setDoc(doc(db, getCollectionPath('notes'), id), fields, { merge: true }); return true; } catch (e) { console.error(e); return false; }
         },
         addNoteFolder: async (name, color) => {
             if (!db || !userId) return null;
@@ -1902,8 +1902,8 @@
             if (confirm('Delete this note?')) {
                 if (currentNoteId === id) {
                     currentNoteId = null;
-                    document.getElementById('current-note-content').value = '';
-                    document.getElementById('current-note-content').disabled = true;
+                    window.noteEditor.cancelAutosave();
+                    window.noteEditor.clear();
                     document.getElementById('note-empty-state').classList.remove('hidden');
                 }
                 await window.db.deleteNote(id);
@@ -1911,37 +1911,761 @@
         };
 
         window.openNote = async (id) => {
-            await window.saveCurrentNote();
+            if (await window.saveCurrentNote() === false) return;
             currentNoteId = id;
             const note = findNote(id);
-            const textarea = document.getElementById('current-note-content');
             const emptyState = document.getElementById('note-empty-state');
             if (note) {
-                textarea.value = note.content;
-                textarea.disabled = false;
+                window.noteEditor.load(note.content || '', note.images || []);
+                window.noteEditor.setEnabled(true);
                 emptyState.classList.add('hidden');
-                textarea.focus();
+                window.noteEditor.focus();
             }
             window.renderNotesSidebar();
         };
 
-        window.saveCurrentNote = async () => {
-            if (!currentNoteId) return;
-            const textarea = document.getElementById('current-note-content');
-            const content = textarea.value;
+        // Firestore caps a document at 1 MiB, so leave a little headroom
+        const NOTE_MAX_BYTES = 1000000;
+
+        // Returns false when the note could not be saved (caller should not close/switch)
+        window.saveCurrentNote = async (opts = {}) => {
+            const ed = window.noteEditor;
+            if (!currentNoteId || !ed || !ed.isDirty()) return true;
             const note = findNote(currentNoteId);
-            if (note && note.content !== content) {
-                await window.db.updateNote(currentNoteId, note.title, content);
+            if (!note) return true;
+            const id = currentNoteId;
+            const rev = ed.rev();
+            const { content, images, bytes } = ed.getValue();
+            if (bytes > NOTE_MAX_BYTES) {
+                ed.setSaveStatus('error', `Too large to save (${Math.round(bytes / 1024)} KB of ~${Math.round(NOTE_MAX_BYTES / 1024)} KB) – remove an image`);
+                if (!opts.silent) alert('This note is too large to save (a note can hold about 1 MB, images included).\n\nRemove or shrink an image, then try again.');
+                return false;
             }
+            const fields = { content, images, updatedAt: new Date().toISOString() };
+            Object.assign(note, fields);
+            ed.markSaved(rev);
+            Promise.resolve()
+                .then(() => window.db.patchNote(id, fields))
+                .then(ok => { if (ok === false && currentNoteId === id) ed.markFailed(); })
+                .catch(err => { console.error(err); if (currentNoteId === id) ed.markFailed(); });
+            return true;
         };
 
         window.createNewNote = async (folderId = null) => {
-            await window.saveCurrentNote();
+            if (await window.saveCurrentNote() === false) return;
             const id = await window.db.addNote('New Note', '', folderId ? { folderId } : {});
             if (folderId) { openNoteFolders.add(folderId); saveOpenFolders(); }
             if (id) await window.openNote(id);
         };
 
+
+        // --- Note editor (code-editor style: VS Code shortcuts + pasted images) ---
+        // Content is kept as plain text. Each image is stored in the text as one private-use
+        // character that maps to its <img>, so line operations (indent, move line, etc.)
+        // carry images along like any other character.
+        window.noteEditor = (() => {
+            const INDENT = '    ';
+            const TAB = INDENT.length;
+            const KEY_FIRST = 0xE000, KEY_LAST = 0xF8FF;
+            const OBJ = '￼';               // image placeholder used when saving
+            const MAX_IMG_SIDE = 1400;          // px, longest side after compression
+            const TARGET_IMG_CHARS = 250000;    // ~250 KB of base64 per image
+            const PAIRS = { '(': ')', '[': ']', '{': '}' };
+            const CLOSERS = new Set([')', ']', '}']);
+            const FONT_KEY = 'notesMonoFont';
+
+            let el = null, wrap = null, statusPos = null, statusSave = null;
+            let imgMap = new Map();
+            let nextKey = KEY_FIRST;
+            let undoStack = [], redoStack = [], lastRecord = { t: 0, kind: '' };
+            let enabled = false, composing = false;
+            let rev = 0, savedRev = 0, saveTimer = null;
+
+            // ---------- text model ----------
+            const isImgKey = (ch) => ch && ch.length === 1 && imgMap.has(ch);
+            const newKey = () => {
+                while (nextKey < KEY_LAST && imgMap.has(String.fromCharCode(nextKey))) nextKey++;
+                return String.fromCharCode(nextKey++);
+            };
+            const makeImg = (src, key) => {
+                const img = document.createElement('img');
+                img.src = src;
+                img.className = 'note-img';
+                img.draggable = false;
+                img.alt = '';
+                img.dataset.k = key;
+                imgMap.set(key, img);
+                return img;
+            };
+            const isSentinel = (n) => n && n.nodeName === 'BR' && n.dataset && n.dataset.sentinel === '1';
+            const BLOCK_RE = /^(DIV|P|LI|UL|OL|H[1-6]|PRE|BLOCKQUOTE|SECTION|ARTICLE|TABLE|TR)$/;
+
+            // Reads text out of any DOM (also handles stray markup the browser may insert)
+            const textOf = (root, assignKeys) => {
+                let out = '';
+                const walk = (node) => {
+                    for (const n of node.childNodes) {
+                        if (n.nodeType === 3) out += n.data;
+                        else if (n.nodeName === 'IMG') {
+                            if (!assignKeys) { out += n.dataset.k || OBJ; continue; }
+                            let k = n.dataset.k;
+                            if (!k || (imgMap.has(k) && imgMap.get(k) !== n)) { k = newKey(); n.dataset.k = k; }
+                            imgMap.set(k, n);
+                            out += k;
+                        } else if (n.nodeName === 'BR') { if (!isSentinel(n)) out += '\n'; }
+                        else if (n.nodeType === 1) {
+                            const block = BLOCK_RE.test(n.nodeName);
+                            if (block && out.length && !out.endsWith('\n')) out += '\n';
+                            walk(n);
+                        }
+                    }
+                };
+                walk(root);
+                return out.replace(/ /g, ' ');
+            };
+            const readText = () => textOf(el, true);
+
+            const nodeLen = (n) => n.nodeType === 3 ? n.data.length : (n.nodeName === 'IMG' ? 1 : (n.nodeName === 'BR' && !isSentinel(n) ? 1 : 0));
+            const isFlat = () => {
+                const kids = el.childNodes;
+                for (let i = 0; i < kids.length; i++) {
+                    const n = kids[i];
+                    if (n.nodeType === 3) continue;
+                    if (n.nodeName === 'IMG' && n.dataset.k && imgMap.get(n.dataset.k) === n) continue;
+                    if (isSentinel(n) && i === kids.length - 1) continue;
+                    return false;
+                }
+                return true;
+            };
+
+            const render = (text) => {
+                const frag = document.createDocumentFragment();
+                const used = new Set();
+                let buf = '';
+                const flush = () => { if (buf) { frag.appendChild(document.createTextNode(buf)); buf = ''; } };
+                for (const ch of text) {
+                    if (isImgKey(ch)) {
+                        flush();
+                        let img = imgMap.get(ch);
+                        if (used.has(ch)) img = makeImg(img.getAttribute('src'), newKey()); // duplicated line → copy image
+                        used.add(ch);
+                        frag.appendChild(img);
+                    } else buf += ch;
+                }
+                flush();
+                if (text.endsWith('\n')) { const br = document.createElement('br'); br.dataset.sentinel = '1'; frag.appendChild(br); }
+                const top = el.scrollTop;
+                el.replaceChildren(frag);
+                el.scrollTop = top;
+                updatePlaceholder(text);
+            };
+
+            // ---------- selection <-> offsets ----------
+            const posOf = (node, offset) => {
+                if (node !== el && !el.contains(node)) return null;
+                if (isFlat()) {
+                    let pos = 0;
+                    if (node === el) { for (let i = 0; i < offset; i++) pos += nodeLen(el.childNodes[i]); return pos; }
+                    if (node.parentNode === el) {
+                        for (let n = el.firstChild; n && n !== node; n = n.nextSibling) pos += nodeLen(n);
+                        return pos + (node.nodeType === 3 ? offset : 0);
+                    }
+                }
+                const r = document.createRange();
+                r.setStart(el, 0);
+                r.setEnd(node, offset);
+                return textOf(r.cloneContents(), false).length;
+            };
+            const domAt = (pos) => {
+                const kids = el.childNodes;
+                for (let i = 0; i < kids.length; i++) {
+                    const n = kids[i], L = nodeLen(n);
+                    if (n.nodeType === 3) { if (pos <= L) return [n, pos]; pos -= L; }
+                    else if (isSentinel(n)) return [el, i];
+                    else { if (pos === 0) return [el, i]; pos -= L; }
+                }
+                return [el, kids.length];
+            };
+            const getSel = () => {
+                const sel = window.getSelection();
+                let a = null, f = null;
+                if (sel && sel.rangeCount && el.contains(sel.anchorNode) && el.contains(sel.focusNode)) {
+                    a = posOf(sel.anchorNode, sel.anchorOffset);
+                    f = posOf(sel.focusNode, sel.focusOffset);
+                }
+                if (a === null || f === null) { const len = readText().length; a = f = len; }
+                return { a, f, start: Math.min(a, f), end: Math.max(a, f) };
+            };
+            const setSel = (a, f = a) => {
+                const sel = window.getSelection();
+                const [an, ao] = domAt(a), [fn, fo] = domAt(f);
+                try { sel.setBaseAndExtent(an, ao, fn, fo); } catch (e) { /* ignore */ }
+            };
+            const revealCaret = () => {
+                const sel = window.getSelection();
+                if (!sel.rangeCount) return;
+                const r = document.createRange();
+                try { r.setStart(sel.focusNode, sel.focusOffset); } catch (e) { return; }
+                r.collapse(true);
+                let rect = r.getClientRects()[0];
+                if (!rect && r.startContainer.nodeType === 1) {
+                    const n = r.startContainer.childNodes[r.startOffset] || r.startContainer.childNodes[r.startOffset - 1];
+                    if (n && n.getBoundingClientRect) rect = n.getBoundingClientRect();
+                }
+                if (!rect) return;
+                const box = el.getBoundingClientRect();
+                if (rect.bottom > box.bottom - 24) el.scrollTop += rect.bottom - box.bottom + 48;
+                else if (rect.top < box.top + 8) el.scrollTop -= box.top - rect.top + 48;
+            };
+
+            // Repairs the DOM after native typing (browsers sometimes add <br>/<div>)
+            const fixUp = () => {
+                if (el.childNodes.length === 1 && el.firstChild.nodeName === 'BR' && !isSentinel(el.firstChild)) el.replaceChildren();
+                if (!isFlat()) {
+                    const s = getSel();
+                    render(readText());
+                    setSel(s.a, s.f);
+                    return;
+                }
+                const text = readText();
+                const want = text.endsWith('\n'), has = isSentinel(el.lastChild);
+                if (want !== has) {
+                    const s = getSel();
+                    if (want) { const br = document.createElement('br'); br.dataset.sentinel = '1'; el.appendChild(br); }
+                    else el.lastChild.remove();
+                    setSel(s.a, s.f);
+                }
+                updatePlaceholder(text);
+            };
+
+            // ---------- undo / redo ----------
+            const snap = () => { const s = getSel(); return { text: readText(), a: s.a, f: s.f }; };
+            const pushUndo = (kind, snapshot) => {
+                const now = Date.now();
+                const merge = (kind === 'type' || kind === 'delete') && lastRecord.kind === kind && now - lastRecord.t < 800;
+                lastRecord = { t: now, kind };
+                if (merge) return;
+                undoStack.push(typeof snapshot === 'function' ? snapshot() : snapshot);
+                if (undoStack.length > 300) undoStack.shift();
+                redoStack = [];
+            };
+            const restore = (s) => { render(s.text); setSel(s.a, s.f); revealCaret(); changed(); };
+            const undo = () => {
+                if (!undoStack.length) return;
+                fixUp();
+                redoStack.push(snap());
+                lastRecord = { t: 0, kind: 'undo' };
+                restore(undoStack.pop());
+            };
+            const redo = () => {
+                if (!redoStack.length) return;
+                fixUp();
+                undoStack.push(snap());
+                lastRecord = { t: 0, kind: 'redo' };
+                restore(redoStack.pop());
+            };
+
+            // Runs fn(text, sel) → { text, a, f } and applies it as one undoable step
+            const edit = (fn, kind = 'op') => {
+                if (!enabled) return false;
+                fixUp();
+                const s = getSel();
+                const t = readText();
+                const r = fn(t, s);
+                if (!r) return false;
+                pushUndo(kind, { text: t, a: s.a, f: s.f });
+                render(r.text);
+                setSel(r.a, r.f ?? r.a);
+                revealCaret();
+                changed();
+                return true;
+            };
+
+            // ---------- line helpers ----------
+            const lineStart = (t, i) => i <= 0 ? 0 : t.lastIndexOf('\n', i - 1) + 1;
+            const lineEnd = (t, i) => { const j = t.indexOf('\n', i); return j < 0 ? t.length : j; };
+            const leadOf = (t, ls) => t.slice(ls, lineEnd(t, ls)).match(/^[ \t]*/)[0];
+            const lineRange = (t, s) => {
+                const ls = lineStart(t, s.start);
+                let endPos = s.end;
+                if (s.end > s.start && s.end === lineStart(t, s.end)) endPos = s.end - 1;
+                return [ls, lineEnd(t, Math.max(endPos, ls))];
+            };
+            const isImgSel = (t, s) => s.end - s.start === 1 && isImgKey(t[s.start]);
+            const applyEdits = (t, edits) => {
+                let out = '', last = 0;
+                for (const e of edits) { out += t.slice(last, e.at) + e.ins; last = e.at + e.del; }
+                return out + t.slice(last);
+            };
+            const mapPos = (p, edits, moveAtEdge) => {
+                let shift = 0;
+                for (const e of edits) {
+                    if (p < e.at) break;
+                    if (p === e.at && e.del === 0 && !moveAtEdge) break;
+                    if (p >= e.at + e.del) shift += e.ins.length - e.del;
+                    else { shift += (e.at - p) + e.ins.length; }
+                }
+                return p + shift;
+            };
+            const shiftLines = (t, s, dir) => {
+                const [ls, le] = lineRange(t, s);
+                const multi = t.slice(ls, le).includes('\n');
+                const edits = [];
+                let p = ls;
+                while (true) {
+                    const e = lineEnd(t, p);
+                    const line = t.slice(p, e);
+                    if (dir > 0) {
+                        if (!(multi && line.length === 0)) edits.push({ at: p, del: 0, ins: INDENT });
+                    } else {
+                        let del = 0;
+                        if (line[0] === '\t') del = 1;
+                        else {
+                            const m = line.match(/^ */)[0].length;
+                            if (m) del = m - Math.floor((m - 1) / TAB) * TAB;
+                        }
+                        if (del) edits.push({ at: p, del, ins: '' });
+                    }
+                    if (e >= le) break;
+                    p = e + 1;
+                }
+                if (!edits.length) return null;
+                const collapsed = s.a === s.f;
+                return {
+                    text: applyEdits(t, edits),
+                    a: mapPos(s.a, edits, collapsed || s.a > s.f),
+                    f: mapPos(s.f, edits, collapsed || s.f > s.a)
+                };
+            };
+
+            // ---------- commands ----------
+            const cmdTab = () => edit((t, s) => {
+                if (s.start === s.end || isImgSel(t, s)) {
+                    const col = s.start - lineStart(t, s.start);
+                    const ins = ' '.repeat(TAB - (col % TAB));
+                    return { text: t.slice(0, s.start) + ins + t.slice(s.start), a: s.a + ins.length, f: s.f + ins.length };
+                }
+                return shiftLines(t, s, 1);
+            });
+            const cmdIndent = () => edit((t, s) => shiftLines(t, s, 1));
+            const cmdOutdent = () => edit((t, s) => shiftLines(t, s, -1));
+
+            const cmdEnter = () => edit((t, s) => {
+                const ls = lineStart(t, s.start);
+                const indent = leadOf(t, ls).slice(0, Math.max(0, s.start - ls));
+                if (isImgSel(t, s)) { // push the selected image down a line, keep it selected
+                    const ins = '\n' + indent;
+                    return { text: t.slice(0, s.start) + ins + t.slice(s.start), a: s.a + ins.length, f: s.f + ins.length };
+                }
+                const before = t[s.start - 1], after = t[s.end];
+                if (PAIRS[before]) {
+                    const first = '\n' + indent + INDENT;
+                    if (after === PAIRS[before]) {
+                        return { text: t.slice(0, s.start) + first + '\n' + indent + t.slice(s.end), a: s.start + first.length };
+                    }
+                    return { text: t.slice(0, s.start) + first + t.slice(s.end), a: s.start + first.length };
+                }
+                const ins = '\n' + indent;
+                return { text: t.slice(0, s.start) + ins + t.slice(s.end), a: s.start + ins.length };
+            }, 'enter');
+
+            const cmdInsertLine = (dir) => edit((t, s) => {
+                const ls = lineStart(t, s.f), le = lineEnd(t, s.f);
+                const indent = leadOf(t, ls);
+                if (dir > 0) { const ins = '\n' + indent; return { text: t.slice(0, le) + ins + t.slice(le), a: le + ins.length }; }
+                return { text: t.slice(0, ls) + indent + '\n' + t.slice(ls), a: ls + indent.length };
+            });
+
+            const cmdMoveLines = (dir) => edit((t, s) => {
+                const [ls, le] = lineRange(t, s);
+                const block = t.slice(ls, le);
+                if (dir < 0) {
+                    if (ls === 0) return null;
+                    const ps = lineStart(t, ls - 1);
+                    const prev = t.slice(ps, ls - 1);
+                    const d = prev.length + 1;
+                    return { text: t.slice(0, ps) + block + '\n' + prev + t.slice(le), a: s.a - d, f: s.f - d };
+                }
+                if (le >= t.length) return null;
+                const ne = lineEnd(t, le + 1);
+                const next = t.slice(le + 1, ne);
+                const d = next.length + 1;
+                return { text: t.slice(0, ls) + next + '\n' + block + t.slice(ne), a: s.a + d, f: s.f + d };
+            });
+
+            const cmdCopyLines = (dir) => edit((t, s) => {
+                const [ls, le] = lineRange(t, s);
+                const block = t.slice(ls, le);
+                if (dir < 0) return { text: t.slice(0, ls) + block + '\n' + t.slice(ls), a: s.a, f: s.f };
+                const d = block.length + 1;
+                return { text: t.slice(0, le) + '\n' + block + t.slice(le), a: s.a + d, f: s.f + d };
+            });
+
+            const cmdDeleteLines = () => edit((t, s) => {
+                const [ls, le] = lineRange(t, s);
+                let from = ls, to = le;
+                if (to < t.length) to++; else if (from > 0) from--;
+                const nt = t.slice(0, from) + t.slice(to);
+                const col = s.f - lineStart(t, s.f);
+                const p = Math.min(lineStart(nt, from), nt.length);
+                return { text: nt, a: p + Math.min(col, lineEnd(nt, p) - p) };
+            });
+
+            const cmdSelectLine = () => {
+                fixUp();
+                const s = getSel(), t = readText();
+                const start = lineStart(t, s.start);
+                const e = lineEnd(t, s.end);
+                setSel(start, Math.min(e + 1, t.length));
+                revealCaret();
+            };
+
+            const caretTop = (pos) => {
+                const [n, o] = domAt(pos);
+                const r = document.createRange();
+                try { r.setStart(n, o); r.collapse(true); } catch (e) { return null; }
+                const rect = r.getClientRects()[0];
+                return rect ? rect.top : null;
+            };
+            const cmdHome = (extend) => {
+                fixUp();
+                const s = getSel(), t = readText();
+                const ls = lineStart(t, s.f);
+                const first = ls + leadOf(t, ls).length;
+                if (first === ls) return false;                 // no indentation → normal Home
+                const a = caretTop(s.f), b = caretTop(ls);
+                if (a !== null && b !== null && Math.abs(a - b) > 4) return false; // on a wrapped row → normal Home
+                const target = s.f === first ? ls : first;
+                setSel(extend ? s.a : target, target);
+                return true;
+            };
+
+            const cmdBackspace = () => edit((t, s) => {
+                if (s.start !== s.end || s.start === 0) return null;
+                const p = s.start;
+                const before = t.slice(lineStart(t, p), p);
+                if (before.length > 1 && /^ +$/.test(before)) { // delete back to the previous tab stop
+                    const n = before.length - Math.floor((before.length - 1) / TAB) * TAB;
+                    return { text: t.slice(0, p - n) + t.slice(p), a: p - n };
+                }
+                if (PAIRS[t[p - 1]] && t[p] === PAIRS[t[p - 1]]) return { text: t.slice(0, p - 1) + t.slice(p + 1), a: p - 1 };
+                return null;
+            }, 'delete');
+
+            const cmdOpenBracket = (k) => edit((t, s) => {
+                const close = PAIRS[k];
+                if (s.start !== s.end) {
+                    if (isImgSel(t, s)) return null;
+                    return { text: t.slice(0, s.start) + k + t.slice(s.start, s.end) + close + t.slice(s.end), a: s.start + 1, f: s.end + 1 };
+                }
+                const next = t[s.start];
+                if (next !== undefined && !/[\s)\]}]/.test(next)) return null;
+                return { text: t.slice(0, s.start) + k + close + t.slice(s.start), a: s.start + 1 };
+            }, 'type');
+
+            const cmdCloseBracket = (k) => {
+                fixUp();
+                const s = getSel(), t = readText();
+                if (s.start !== s.end || t[s.start] !== k) return false;
+                setSel(s.start + 1);
+                return true;
+            };
+
+            const cmdSpaceOnImage = () => edit((t, s) => isImgSel(t, s)
+                ? { text: t.slice(0, s.start) + ' ' + t.slice(s.start), a: s.a + 1, f: s.f + 1 }
+                : null, 'type');
+
+            // ---------- clipboard / images ----------
+            const escHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const serialize = (part) => {
+                const images = [];
+                let text = '';
+                for (const ch of part) {
+                    if (isImgKey(ch)) { images.push(imgMap.get(ch).getAttribute('src')); text += OBJ; }
+                    else text += ch;
+                }
+                return { text, images };
+            };
+            const insertSerialized = (text, images = []) => {
+                text = String(text).replace(/\r\n?/g, '\n').replace(/[-]/g, (ch) => imgMap.has(ch) ? '' : ch);
+                let i = 0, out = '';
+                for (const ch of text) {
+                    if (ch === OBJ) { const src = images[i++]; if (src) { const k = newKey(); makeImg(src, k); out += k; } }
+                    else out += ch;
+                }
+                if (!out) return false;
+                return edit((t, s) => ({ text: t.slice(0, s.start) + out + t.slice(s.end), a: s.start + out.length }), 'paste');
+            };
+
+            const readAsDataURL = (file) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
+            const loadImage = (src) => new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = src; });
+            const compressImage = async (file) => {
+                const original = await readAsDataURL(file);
+                if (file.type === 'image/gif' && original.length <= TARGET_IMG_CHARS) return original; // keep animation
+                const img = await loadImage(original);
+                let scale = Math.min(1, MAX_IMG_SIDE / Math.max(img.naturalWidth, img.naturalHeight));
+                let q = 0.85, out = original;
+                for (let attempt = 0; attempt < 6; attempt++) {
+                    const c = document.createElement('canvas');
+                    c.width = Math.max(1, Math.round(img.naturalWidth * scale));
+                    c.height = Math.max(1, Math.round(img.naturalHeight * scale));
+                    const ctx = c.getContext('2d');
+                    ctx.drawImage(img, 0, 0, c.width, c.height);
+                    out = c.toDataURL('image/webp', q);
+                    if (!out.startsWith('data:image/webp')) {
+                        ctx.globalCompositeOperation = 'destination-over';
+                        ctx.fillStyle = '#ffffff';
+                        ctx.fillRect(0, 0, c.width, c.height);
+                        out = c.toDataURL('image/jpeg', q);
+                    }
+                    if (out.length <= TARGET_IMG_CHARS) break;
+                    q = Math.max(0.5, q - 0.1);
+                    scale *= 0.8;
+                }
+                if (original.length <= out.length && original.length <= TARGET_IMG_CHARS && scale === 1) return original;
+                return out;
+            };
+            const insertImageFiles = async (files) => {
+                setSaveStatus('saving', 'Adding image…');
+                const srcs = [];
+                for (const f of files) { try { srcs.push(await compressImage(f)); } catch (e) { console.error('Image paste failed', e); } }
+                if (!srcs.length) { setSaveStatus('error', 'Could not read image'); return; }
+                insertSerialized(OBJ.repeat(srcs.length), srcs);
+            };
+
+            // ---------- status / saving ----------
+            const updatePlaceholder = (text) => el.classList.toggle('is-empty', (text ?? readText()).length === 0);
+            const setSaveStatus = (state, text) => {
+                if (!statusSave) return;
+                statusSave.textContent = text;
+                statusSave.dataset.state = state;
+            };
+            const updateStatusPos = () => {
+                if (!statusPos || !enabled) return;
+                const s = getSel(), t = readText();
+                const ln = (t.slice(0, s.f).match(/\n/g) || []).length + 1;
+                const col = s.f - lineStart(t, s.f) + 1;
+                statusPos.textContent = `Ln ${ln}, Col ${col}` + (s.end > s.start ? ` (${s.end - s.start} selected)` : '');
+            };
+            const changed = () => {
+                rev++;
+                updatePlaceholder();
+                updateStatusPos();
+                setSaveStatus('dirty', 'Unsaved');
+                clearTimeout(saveTimer);
+                saveTimer = setTimeout(() => window.saveCurrentNote({ silent: true }), 1200);
+            };
+            const refreshImageSelection = () => {
+                const sel = window.getSelection();
+                const r = sel.rangeCount ? sel.getRangeAt(0) : null;
+                el.querySelectorAll('img.note-img').forEach(img => {
+                    img.classList.toggle('is-selected', !!(r && !r.collapsed && el.contains(r.commonAncestorContainer) && r.intersectsNode(img)));
+                });
+            };
+
+            // ---------- events ----------
+            const onKeyDown = (e) => {
+                if (!enabled || e.isComposing || composing) return;
+                const mod = e.ctrlKey || e.metaKey;
+                const k = e.key;
+                const lower = k.length === 1 ? k.toLowerCase() : k;
+                const stop = () => { e.preventDefault(); e.stopPropagation(); };
+
+                if (mod && !e.altKey && lower === 'z') { stop(); e.shiftKey ? redo() : undo(); return; }
+                if (mod && !e.altKey && lower === 'y') { stop(); redo(); return; }
+                if (mod && !e.altKey && !e.shiftKey && ['b', 'i', 'u'].includes(lower)) { stop(); return; }
+                if (mod && !e.altKey && lower === 's') { stop(); clearTimeout(saveTimer); window.saveCurrentNote(); return; }
+                if (k === 'Tab' && !mod && !e.altKey) { stop(); e.shiftKey ? cmdOutdent() : cmdTab(); return; }
+                if (mod && !e.altKey && e.code === 'BracketRight') { stop(); cmdIndent(); return; }
+                if (mod && !e.altKey && e.code === 'BracketLeft') { stop(); cmdOutdent(); return; }
+                if (e.altKey && !mod && (k === 'ArrowUp' || k === 'ArrowDown')) {
+                    stop();
+                    const dir = k === 'ArrowUp' ? -1 : 1;
+                    e.shiftKey ? cmdCopyLines(dir) : cmdMoveLines(dir);
+                    return;
+                }
+                if (mod && e.shiftKey && !e.altKey && lower === 'k') { stop(); cmdDeleteLines(); return; }
+                if (mod && !e.shiftKey && !e.altKey && lower === 'l') { stop(); cmdSelectLine(); return; }
+                if (k === 'Enter') { stop(); if (mod) cmdInsertLine(e.shiftKey ? -1 : 1); else cmdEnter(); return; }
+                if (k === 'Home' && !mod && !e.altKey) { if (cmdHome(e.shiftKey)) stop(); return; }
+                if (k === 'Backspace' && !mod && !e.altKey) { if (cmdBackspace()) stop(); return; }
+                if (k === ' ' && !mod && !e.altKey) { if (cmdSpaceOnImage()) stop(); return; }
+                if (!mod && !e.altKey && PAIRS[k]) { if (cmdOpenBracket(k)) stop(); return; }
+                if (!mod && !e.altKey && CLOSERS.has(k)) { if (cmdCloseBracket(k)) stop(); return; }
+            };
+
+            const onBeforeInput = (e) => {
+                if (!enabled) { e.preventDefault(); return; }
+                const type = e.inputType || '';
+                if (type === 'historyUndo') { e.preventDefault(); undo(); return; }
+                if (type === 'historyRedo') { e.preventDefault(); redo(); return; }
+                if (type.startsWith('format')) { e.preventDefault(); return; }
+                if (type === 'insertParagraph' || type === 'insertLineBreak') { e.preventDefault(); cmdEnter(); return; }
+                if (type === 'insertCompositionText') return;
+                pushUndo(type.startsWith('delete') ? 'delete' : 'type', snap);
+            };
+
+            const onCopy = (e, isCut) => {
+                if (!enabled) return;
+                fixUp();
+                const s = getSel();
+                if (s.start === s.end) return;
+                e.preventDefault();
+                const part = readText().slice(s.start, s.end);
+                const ser = serialize(part);
+                e.clipboardData.setData('text/plain', ser.text.split(OBJ).join(''));
+                let i = 0;
+                const html = escHtml(ser.text).replace(/￼/g, () => `<img src="${ser.images[i++]}">`).replace(/\n/g, '<br>');
+                e.clipboardData.setData('text/html', `<div style="white-space:pre-wrap">${html}</div>`);
+                if (ser.images.length) e.clipboardData.setData('application/x-note-fragment', JSON.stringify(ser));
+                if (isCut) edit((t, sel) => ({ text: t.slice(0, sel.start) + t.slice(sel.end), a: sel.start }));
+            };
+
+            const onPaste = (e) => {
+                e.preventDefault();
+                if (!enabled) return;
+                const cd = e.clipboardData;
+                const fragRaw = cd.getData('application/x-note-fragment');
+                if (fragRaw) {
+                    try { const fr = JSON.parse(fragRaw); if (fr && typeof fr.text === 'string') { insertSerialized(fr.text, fr.images || []); return; } } catch (err) { /* fall through */ }
+                }
+                const text = cd.getData('text/plain');
+                if (text) { insertSerialized(text.split(OBJ).join('')); return; }
+                const files = [...(cd.files || [])].filter(f => f.type.startsWith('image/'));
+                if (!files.length) {
+                    for (const item of (cd.items || [])) if (item.kind === 'file' && item.type.startsWith('image/')) { const f = item.getAsFile(); if (f) files.push(f); }
+                }
+                if (files.length) insertImageFiles(files);
+            };
+
+            const placeCaretAtPoint = (x, y) => {
+                let r = null;
+                if (document.caretRangeFromPoint) r = document.caretRangeFromPoint(x, y);
+                else if (document.caretPositionFromPoint) {
+                    const p = document.caretPositionFromPoint(x, y);
+                    if (p) { r = document.createRange(); r.setStart(p.offsetNode, p.offset); r.collapse(true); }
+                }
+                if (r && el.contains(r.startContainer)) { const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r); }
+            };
+
+            const onDrop = (e) => {
+                e.preventDefault();
+                if (!enabled) return;
+                placeCaretAtPoint(e.clientX, e.clientY);
+                const files = [...(e.dataTransfer.files || [])].filter(f => f.type.startsWith('image/'));
+                if (files.length) { insertImageFiles(files); return; }
+                const text = e.dataTransfer.getData('text/plain');
+                if (text) insertSerialized(text.split(OBJ).join(''));
+            };
+
+            const applyFont = () => {
+                let mono = true;
+                try { mono = localStorage.getItem(FONT_KEY) !== '0'; } catch (e) { /* ignore */ }
+                el.classList.toggle('mono', mono);
+                const btn = document.getElementById('note-font-toggle');
+                if (btn) btn.textContent = mono ? 'Monospace' : 'Sans';
+            };
+
+            const init = () => {
+                el = document.getElementById('current-note-content');
+                wrap = document.getElementById('note-editor-wrap');
+                statusPos = document.getElementById('note-status-pos');
+                statusSave = document.getElementById('note-save-status');
+                if (!el) return;
+                el.addEventListener('keydown', onKeyDown);
+                el.addEventListener('beforeinput', onBeforeInput);
+                el.addEventListener('input', (e) => { if (e.isComposing || composing) return; fixUp(); changed(); });
+                el.addEventListener('compositionstart', () => { composing = true; pushUndo('op', snap); });
+                el.addEventListener('compositionend', () => { composing = false; fixUp(); changed(); });
+                el.addEventListener('copy', (e) => onCopy(e, false));
+                el.addEventListener('cut', (e) => onCopy(e, true));
+                el.addEventListener('paste', onPaste);
+                el.addEventListener('dragstart', (e) => e.preventDefault());
+                el.addEventListener('dragover', (e) => { e.preventDefault(); });
+                el.addEventListener('drop', onDrop);
+                el.addEventListener('click', (e) => {
+                    if (e.target.nodeName === 'IMG' && el.contains(e.target)) {
+                        const r = document.createRange();
+                        r.selectNode(e.target);
+                        const sel = window.getSelection();
+                        sel.removeAllRanges();
+                        sel.addRange(r);
+                    }
+                });
+                document.addEventListener('selectionchange', () => {
+                    if (!el) return;
+                    const sel = window.getSelection();
+                    if (sel.rangeCount && el.contains(sel.anchorNode)) { updateStatusPos(); refreshImageSelection(); }
+                });
+
+                document.getElementById('note-font-toggle')?.addEventListener('click', () => {
+                    try { localStorage.setItem(FONT_KEY, el.classList.contains('mono') ? '0' : '1'); } catch (e) { /* ignore */ }
+                    applyFont();
+                    el.focus();
+                });
+                const keysBtn = document.getElementById('note-keys-btn');
+                const keysPanel = document.getElementById('note-keys-panel');
+                keysBtn?.addEventListener('click', (e) => { e.stopPropagation(); keysPanel.classList.toggle('hidden'); });
+                document.addEventListener('click', (e) => { if (keysPanel && !keysPanel.contains(e.target) && e.target !== keysBtn) keysPanel.classList.add('hidden'); });
+
+                applyFont();
+                setEnabled(false);
+            };
+
+            const load = (content = '', images = []) => {
+                if (!el) return;
+                clearTimeout(saveTimer);
+                imgMap = new Map();
+                nextKey = KEY_FIRST;
+                undoStack = []; redoStack = []; lastRecord = { t: 0, kind: '' };
+                let i = 0, text = '';
+                for (const ch of String(content || '')) {
+                    if (ch === OBJ) { const src = images[i++]; if (src) { const k = newKey(); makeImg(src, k); text += k; } }
+                    else text += ch;
+                }
+                render(text);
+                el.scrollTop = 0;
+                rev = 0; savedRev = 0;
+                setSaveStatus('saved', 'Saved');
+                if (statusPos) statusPos.textContent = 'Ln 1, Col 1';
+            };
+
+            const getValue = () => {
+                fixUp();
+                const ser = serialize(readText());
+                const bytes = new TextEncoder().encode(ser.text).length + ser.images.reduce((n, s) => n + s.length + 16, 0) + 2048;
+                return { content: ser.text, images: ser.images, bytes };
+            };
+
+            const setEnabled = (on) => {
+                enabled = !!on;
+                if (!el) return;
+                el.contentEditable = enabled ? 'true' : 'false';
+                wrap?.classList.toggle('is-disabled', !enabled);
+            };
+
+            if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+            else init();
+
+            return {
+                load,
+                getValue,
+                setEnabled,
+                focus: () => { if (el && enabled) { el.focus(); setSel(0); } },
+                clear: () => { load('', []); setEnabled(false); },
+                isDirty: () => rev !== savedRev,
+                rev: () => rev,
+                markSaved: (r) => { savedRev = r; if (r === rev) setSaveStatus('saved', 'Saved'); },
+                markFailed: (msg) => {
+                    savedRev = -1;
+                    setSaveStatus('error', msg || 'Save failed – retrying…');
+                    clearTimeout(saveTimer);
+                    saveTimer = setTimeout(() => window.saveCurrentNote({ silent: true }), 5000);
+                },
+                setSaveStatus,
+                cancelAutosave: () => clearTimeout(saveTimer)
+            };
+        })();
 
         const TIMETABLE = {
             Monday: [
@@ -2780,15 +3504,16 @@
             });
 
             document.getElementById('close-notes-app-btn').addEventListener('click', async () => {
-                await window.saveCurrentNote(); 
+                if (await window.saveCurrentNote() === false) return;
                 document.getElementById('notes-app-modal').classList.add('opacity-0', 'pointer-events-none');
             });
 
             // Click outside the Notes modal panel to save & close
             document.getElementById('notes-app-modal').addEventListener('click', async (e) => {
                 if (e.target === e.currentTarget) {
-                    await window.saveCurrentNote();
-                    e.currentTarget.classList.add('opacity-0', 'pointer-events-none');
+                    const modal = e.currentTarget;
+                    if (await window.saveCurrentNote() === false) return;
+                    modal.classList.add('opacity-0', 'pointer-events-none');
                 }
             });
 
@@ -3739,7 +4464,35 @@
                     <p class="text-lg font-medium">Select a note or create a new one</p>
                 </div>
 
-                <textarea id="current-note-content" disabled class="w-full h-full p-10 pt-16 bg-transparent text-white resize-none outline-none text-base leading-relaxed custom-scroll disabled:opacity-0 transition-opacity" placeholder="Start typing..."></textarea>
+                <div id="note-editor-wrap" class="flex-1 flex flex-col min-h-0 min-w-0 transition-opacity is-disabled">
+                    <div id="current-note-content" class="note-editor flex-1 min-h-0 min-w-0 overflow-y-auto custom-scroll p-10 pt-16 text-white text-base leading-relaxed outline-none" contenteditable="false" spellcheck="true" data-placeholder="Start typing... (paste images with Ctrl+V)"></div>
+                    <div class="note-statusbar relative flex items-center gap-4 px-4 py-1.5 border-t border-gray-700/80 bg-gray-800/70 text-[11px] text-white/50 select-none">
+                        <span id="note-status-pos">Ln 1, Col 1</span>
+                        <span>Spaces: 4</span>
+                        <button type="button" id="note-font-toggle" class="hover:text-white transition-colors" title="Toggle monospace font">Monospace</button>
+                        <button type="button" id="note-keys-btn" class="flex items-center gap-1 hover:text-white transition-colors" title="Keyboard shortcuts"><span data-lucide="keyboard" class="w-3.5 h-3.5"></span> Shortcuts</button>
+                        <span id="note-save-status" class="ml-auto" data-state="saved">Saved</span>
+                        <div id="note-keys-panel" class="hidden absolute bottom-full left-4 mb-2 w-80 p-4 rounded-xl bg-gray-800 border border-gray-700 shadow-2xl text-xs text-white/80 z-20">
+                            <p class="font-semibold text-white mb-2">Editor shortcuts</p>
+                            <div class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5">
+                                <kbd>Tab</kbd><span>Indent (selected lines)</span>
+                                <kbd>Shift+Tab</kbd><span>Outdent</span>
+                                <kbd>Ctrl+] / Ctrl+[</kbd><span>Indent / outdent line</span>
+                                <kbd>Alt+&uarr;/&darr;</kbd><span>Move line(s) up / down</span>
+                                <kbd>Shift+Alt+&uarr;/&darr;</kbd><span>Copy line(s) up / down</span>
+                                <kbd>Ctrl+Shift+K</kbd><span>Delete line</span>
+                                <kbd>Ctrl+Enter</kbd><span>New line below</span>
+                                <kbd>Ctrl+Shift+Enter</kbd><span>New line above</span>
+                                <kbd>Ctrl+L</kbd><span>Select line</span>
+                                <kbd>Home</kbd><span>Jump to first character</span>
+                                <kbd>Ctrl+Z / Ctrl+Y</kbd><span>Undo / redo</span>
+                                <kbd>Ctrl+S</kbd><span>Save now (also autosaves)</span>
+                                <kbd>Ctrl+V</kbd><span>Paste text or images</span>
+                            </div>
+                            <p class="mt-3 text-white/50">Click an image to select it, then press Enter, Space or Tab to move it down or right. Shift+Tab moves it back left, Backspace deletes it.</p>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -3825,7 +4578,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 05/11/2026 - 10:47</div>
+    <div id="version-timestamp">Last Update 05/11/2026 - 11:35</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
@@ -6752,6 +7505,18 @@
     .note-row .note-star:hover { color: #fde047; }
     .note-row .note-star.is-fav { opacity: 1; color: #facc15; }
     .note-row .note-star.is-fav svg { fill: currentColor; }
+
+    /* Code-style note editor */
+    #note-editor-wrap.is-disabled { opacity: 0; pointer-events: none; }
+    .note-editor { position: relative; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; -moz-tab-size: 4; caret-color: #60a5fa; cursor: text; }
+    .note-editor.mono { font-family: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', Consolas, 'Courier New', ui-monospace, monospace; font-size: 0.9rem; line-height: 1.7; }
+    .note-editor.is-empty::before { content: attr(data-placeholder); position: absolute; color: rgba(255,255,255,.3); pointer-events: none; }
+    .note-editor ::selection { background: rgba(59,130,246,.45); }
+    .note-editor .note-img { display: inline-block; max-width: 100%; height: auto; vertical-align: bottom; border-radius: 6px; margin: 2px 0; cursor: default; }
+    .note-editor .note-img.is-selected { outline: 2px solid #3b82f6; outline-offset: 2px; }
+    #note-save-status[data-state="dirty"], #note-save-status[data-state="saving"] { color: #fbbf24; }
+    #note-save-status[data-state="error"] { color: #f87171; }
+    #note-keys-panel kbd { font-family: ui-monospace, Consolas, monospace; font-size: 10px; padding: 1px 6px; border-radius: 4px; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.12); white-space: nowrap; justify-self: start; }
 
     .note-folder-header { transition: filter .15s; }
     .note-folder-header:hover { filter: brightness(1.25); }
