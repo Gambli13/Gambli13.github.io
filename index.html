@@ -1916,7 +1916,7 @@
             const note = findNote(id);
             const emptyState = document.getElementById('note-empty-state');
             if (note) {
-                window.noteEditor.load(note.content || '', note.images || []);
+                window.noteEditor.load(note.content || '', note.images || [], note.styles || '', note.imageSizes || []);
                 window.noteEditor.setEnabled(true);
                 emptyState.classList.add('hidden');
                 window.noteEditor.focus();
@@ -1935,13 +1935,13 @@
             if (!note) return true;
             const id = currentNoteId;
             const rev = ed.rev();
-            const { content, images, bytes } = ed.getValue();
+            const { content, images, imageSizes, styles, bytes } = ed.getValue();
             if (bytes > NOTE_MAX_BYTES) {
                 ed.setSaveStatus('error', `Too large to save (${Math.round(bytes / 1024)} KB of ~${Math.round(NOTE_MAX_BYTES / 1024)} KB) – remove an image`);
                 if (!opts.silent) alert('This note is too large to save (a note can hold about 1 MB, images included).\n\nRemove or shrink an image, then try again.');
                 return false;
             }
-            const fields = { content, images, updatedAt: new Date().toISOString() };
+            const fields = { content, images, imageSizes, styles, updatedAt: new Date().toISOString() };
             Object.assign(note, fields);
             ed.markSaved(rev);
             Promise.resolve()
@@ -1959,10 +1959,10 @@
         };
 
 
-        // --- Note editor (code-editor style: VS Code shortcuts + pasted images) ---
-        // Content is kept as plain text. Each image is stored in the text as one private-use
-        // character that maps to its <img>, so line operations (indent, move line, etc.)
-        // carry images along like any other character.
+        // --- Note editor (code-editor shortcuts + rich text + pasted images) ---
+        // The note is kept as a "doc": plain text (t) plus one style key per character (s).
+        // Each image is one private-use character in the text that maps to its <img>, so line
+        // operations (indent, move line, ...) carry images and formatting along automatically.
         window.noteEditor = (() => {
             const INDENT = '    ';
             const TAB = INDENT.length;
@@ -1970,24 +1970,64 @@
             const OBJ = '￼';               // image placeholder used when saving
             const MAX_IMG_SIDE = 1400;          // px, longest side after compression
             const TARGET_IMG_CHARS = 250000;    // ~250 KB of base64 per image
+            const MIN_IMG_W = 32;
+            const IMG_STEP = 1.2;
+            const SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 28, 32, 36, 40, 48, 60, 72];
             const PAIRS = { '(': ')', '[': ']', '{': '}' };
             const CLOSERS = new Set([')', ']', '}']);
             const FONT_KEY = 'notesMonoFont';
 
-            let el = null, wrap = null, statusPos = null, statusSave = null;
-            let imgMap = new Map();
+            let el = null, wrap = null, statusPos = null, statusSave = null, sizeDisplay = null;
+            let imgMap = new Map();     // key char -> <img>
+            let imgW = new Map();       // key char -> width in px (absent = natural size)
             let nextKey = KEY_FIRST;
             let undoStack = [], redoStack = [], lastRecord = { t: 0, kind: '' };
             let enabled = false, composing = false;
             let rev = 0, savedRev = 0, saveTimer = null;
+            let pending = null;         // { pos, key } style to use for the next typed text (after Ctrl+B etc. with no selection)
 
-            // ---------- text model ----------
-            const isImgKey = (ch) => ch && ch.length === 1 && imgMap.has(ch);
+            // ---------- style keys ----------
+            const parseCache = new Map();
+            const parseKey = (key) => {
+                if (!key) return {};
+                let o = parseCache.get(key);
+                if (!o) {
+                    o = {};
+                    for (const part of key.split(',')) {
+                        if (part[0] === 'z') o.z = parseInt(part.slice(1), 10) || undefined;
+                        else if (part) o[part] = 1;
+                    }
+                    parseCache.set(key, o);
+                }
+                return { ...o };
+            };
+            const keyOf = (o) => [o.b && 'b', o.i && 'i', o.u && 'u', o.s && 's', o.z && ('z' + o.z)].filter(Boolean).join(',');
+            const applyStyle = (node, key) => {
+                const o = parseKey(key);
+                node.style.fontWeight = o.b ? '700' : '';
+                node.style.fontStyle = o.i ? 'italic' : '';
+                node.style.textDecorationLine = [o.u && 'underline', o.s && 'line-through'].filter(Boolean).join(' ');
+                node.style.fontSize = o.z ? o.z + 'px' : '';
+            };
+            const baseSize = () => Math.round(parseFloat(getComputedStyle(el).fontSize) || 16);
+
+            // ---------- doc helpers ----------
+            const D = (t, s) => ({ t, s });
+            const sub = (d, a, b = d.t.length) => D(d.t.slice(a, b), d.s.slice(a, b));
+            const txt = (str, key = '') => D(str, new Array(str.length).fill(key));
+            const cat = (...parts) => {
+                let t = '';
+                const s = [];
+                for (const p of parts) { t += p.t; for (const k of p.s) s.push(k); }
+                return D(t, s);
+            };
+            const isImgKey = (ch) => !!ch && ch.length === 1 && imgMap.has(ch);
             const newKey = () => {
                 while (nextKey < KEY_LAST && imgMap.has(String.fromCharCode(nextKey))) nextKey++;
                 return String.fromCharCode(nextKey++);
             };
-            const makeImg = (src, key) => {
+            const applyImgWidth = (img, key) => { const w = imgW.get(key); img.style.width = w ? w + 'px' : ''; };
+            const makeImg = (src, key, width) => {
                 const img = document.createElement('img');
                 img.src = src;
                 img.className = 'note-img';
@@ -1995,69 +2035,121 @@
                 img.alt = '';
                 img.dataset.k = key;
                 imgMap.set(key, img);
+                if (width) imgW.set(key, width);
+                applyImgWidth(img, key);
                 return img;
             };
-            const isSentinel = (n) => n && n.nodeName === 'BR' && n.dataset && n.dataset.sentinel === '1';
+            const isSentinel = (n) => !!n && n.nodeName === 'BR' && n.dataset && n.dataset.sentinel === '1';
+            const isRun = (n) => n.nodeName === 'SPAN' && n.classList.contains('nr');
             const BLOCK_RE = /^(DIV|P|LI|UL|OL|H[1-6]|PRE|BLOCKQUOTE|SECTION|ARTICLE|TABLE|TR)$/;
 
-            // Reads text out of any DOM (also handles stray markup the browser may insert)
-            const textOf = (root, assignKeys) => {
-                let out = '';
-                const walk = (node) => {
+            // Formatting the browser may add by itself (e.g. after deleting a styled run)
+            const styleFromEl = (n, inh) => {
+                const o = { ...inh };
+                if (isRun(n)) return Object.assign(o, parseKey(n.dataset.s || ''));
+                const tag = n.nodeName;
+                if (tag === 'B' || tag === 'STRONG') o.b = 1;
+                if (tag === 'I' || tag === 'EM') o.i = 1;
+                if (tag === 'U') o.u = 1;
+                if (tag === 'S' || tag === 'STRIKE' || tag === 'DEL') o.s = 1;
+                const st = n.style;
+                if (st) {
+                    const fw = st.fontWeight;
+                    if (fw === 'bold' || parseInt(fw, 10) >= 600) o.b = 1;
+                    if (st.fontStyle === 'italic') o.i = 1;
+                    const td = (st.textDecorationLine || st.textDecoration || '');
+                    if (td.includes('underline')) o.u = 1;
+                    if (td.includes('line-through')) o.s = 1;
+                    if (st.fontSize && st.fontSize.endsWith('px')) { const z = Math.round(parseFloat(st.fontSize)); if (z) o.z = z; }
+                }
+                return o;
+            };
+            // Reads a doc out of any DOM
+            const readFrom = (root, assignKeys) => {
+                let t = '';
+                const s = [];
+                const push = (str, key) => { t += str; for (let i = 0; i < str.length; i++) s.push(key); };
+                const walk = (node, inh) => {
                     for (const n of node.childNodes) {
-                        if (n.nodeType === 3) out += n.data;
+                        if (n.nodeType === 3) push(n.data.replace(/ /g, ' ').replace(/​/g, ''), keyOf(inh));
                         else if (n.nodeName === 'IMG') {
-                            if (!assignKeys) { out += n.dataset.k || OBJ; continue; }
+                            if (!assignKeys) { push(n.dataset.k || OBJ, ''); continue; }
                             let k = n.dataset.k;
-                            if (!k || (imgMap.has(k) && imgMap.get(k) !== n)) { k = newKey(); n.dataset.k = k; }
+                            if (!k || (imgMap.has(k) && imgMap.get(k) !== n)) {
+                                const old = k && imgW.get(k);
+                                k = newKey();
+                                n.dataset.k = k;
+                                if (old) imgW.set(k, old);
+                            }
                             imgMap.set(k, n);
-                            out += k;
-                        } else if (n.nodeName === 'BR') { if (!isSentinel(n)) out += '\n'; }
+                            push(k, '');
+                        } else if (n.nodeName === 'BR') { if (!isSentinel(n)) push('\n', keyOf(inh)); }
                         else if (n.nodeType === 1) {
-                            const block = BLOCK_RE.test(n.nodeName);
-                            if (block && out.length && !out.endsWith('\n')) out += '\n';
-                            walk(n);
+                            if (BLOCK_RE.test(n.nodeName) && t.length && !t.endsWith('\n')) push('\n', keyOf(inh));
+                            walk(n, styleFromEl(n, inh));
                         }
                     }
                 };
-                walk(root);
-                return out.replace(/ /g, ' ');
+                walk(root, {});
+                return D(t, s);
             };
-            const readText = () => textOf(el, true);
+            const readDoc = () => readFrom(el, true);
 
-            const nodeLen = (n) => n.nodeType === 3 ? n.data.length : (n.nodeName === 'IMG' ? 1 : (n.nodeName === 'BR' && !isSentinel(n) ? 1 : 0));
+            const nodeLen = (n) => {
+                if (n.nodeType === 3) return n.data.length;
+                if (n.nodeName === 'IMG') return 1;
+                if (isRun(n)) return n.textContent.length;
+                if (n.nodeName === 'BR' && !isSentinel(n)) return 1;
+                return 0;
+            };
             const isFlat = () => {
                 const kids = el.childNodes;
                 for (let i = 0; i < kids.length; i++) {
                     const n = kids[i];
-                    if (n.nodeType === 3) continue;
+                    if (n.nodeType === 3) { if (n.data.includes('​')) return false; continue; }
                     if (n.nodeName === 'IMG' && n.dataset.k && imgMap.get(n.dataset.k) === n) continue;
+                    if (isRun(n) && n.childNodes.length === 1 && n.firstChild.nodeType === 3 && n.firstChild.data.length && !n.firstChild.data.includes('​')) continue;
                     if (isSentinel(n) && i === kids.length - 1) continue;
                     return false;
                 }
                 return true;
             };
 
-            const render = (text) => {
+            const render = (d) => {
                 const frag = document.createDocumentFragment();
                 const used = new Set();
-                let buf = '';
-                const flush = () => { if (buf) { frag.appendChild(document.createTextNode(buf)); buf = ''; } };
-                for (const ch of text) {
+                const n = d.t.length;
+                let i = 0;
+                while (i < n) {
+                    const ch = d.t[i];
                     if (isImgKey(ch)) {
-                        flush();
                         let img = imgMap.get(ch);
-                        if (used.has(ch)) img = makeImg(img.getAttribute('src'), newKey()); // duplicated line → copy image
+                        if (used.has(ch)) img = makeImg(img.getAttribute('src'), newKey(), imgW.get(ch)); // duplicated line → copy image
                         used.add(ch);
                         frag.appendChild(img);
-                    } else buf += ch;
+                        i++;
+                        continue;
+                    }
+                    const key = d.s[i] || '';
+                    let j = i + 1;
+                    while (j < n && (d.s[j] || '') === key && !isImgKey(d.t[j])) j++;
+                    const str = d.t.slice(i, j);
+                    if (!key) frag.appendChild(document.createTextNode(str));
+                    else {
+                        const span = document.createElement('span');
+                        span.className = 'nr';
+                        span.dataset.s = key;
+                        applyStyle(span, key);
+                        span.textContent = str;
+                        frag.appendChild(span);
+                    }
+                    i = j;
                 }
-                flush();
-                if (text.endsWith('\n')) { const br = document.createElement('br'); br.dataset.sentinel = '1'; frag.appendChild(br); }
+                if (d.t.endsWith('\n')) { const br = document.createElement('br'); br.dataset.sentinel = '1'; frag.appendChild(br); }
                 const top = el.scrollTop;
                 el.replaceChildren(frag);
                 el.scrollTop = top;
-                updatePlaceholder(text);
+                updatePlaceholder(d.t);
             };
 
             // ---------- selection <-> offsets ----------
@@ -2066,23 +2158,42 @@
                 if (isFlat()) {
                     let pos = 0;
                     if (node === el) { for (let i = 0; i < offset; i++) pos += nodeLen(el.childNodes[i]); return pos; }
-                    if (node.parentNode === el) {
-                        for (let n = el.firstChild; n && n !== node; n = n.nextSibling) pos += nodeLen(n);
-                        return pos + (node.nodeType === 3 ? offset : 0);
+                    const top = node.parentNode === el ? node : (node.parentNode && node.parentNode.parentNode === el ? node.parentNode : null);
+                    if (top) {
+                        for (let n = el.firstChild; n && n !== top; n = n.nextSibling) pos += nodeLen(n);
+                        if (node.nodeType === 3) return pos + offset;
+                        if (isRun(node)) return pos + (offset > 0 ? nodeLen(node) : 0);
+                        return pos;
                     }
                 }
                 const r = document.createRange();
                 r.setStart(el, 0);
                 r.setEnd(node, offset);
-                return textOf(r.cloneContents(), false).length;
+                return readFrom(r.cloneContents(), false).t.length;
             };
-            const domAt = (pos) => {
+            // Where to put the caret for a text offset. At the boundary between two runs the
+            // caret joins the run on the left (so typing continues its style), except at the
+            // start of a line, where it joins the run on the right.
+            const domAt = (pos, t) => {
+                const preferRight = pos === 0 || (t ? t[pos - 1] === '\n' : false);
                 const kids = el.childNodes;
                 for (let i = 0; i < kids.length; i++) {
-                    const n = kids[i], L = nodeLen(n);
-                    if (n.nodeType === 3) { if (pos <= L) return [n, pos]; pos -= L; }
-                    else if (isSentinel(n)) return [el, i];
-                    else { if (pos === 0) return [el, i]; pos -= L; }
+                    const n = kids[i];
+                    if (isSentinel(n)) return [el, i];
+                    const L = nodeLen(n);
+                    if (n.nodeType === 3 || isRun(n)) {
+                        const tn = n.nodeType === 3 ? n : n.firstChild;
+                        const next = kids[i + 1];
+                        const goRight = preferRight && next && !isSentinel(next);
+                        // Never leave the caret right after a line break at the end of a node:
+                        // Chrome would type outside the run there.
+                        const endsWithBreak = L > 0 && tn.data.endsWith('\n');
+                        if (pos < L || (pos === L && !goRight && !endsWithBreak)) return [tn, pos];
+                        pos -= L;
+                    } else {
+                        if (pos === 0) return [el, i];
+                        pos -= L;
+                    }
                 }
                 return [el, kids.length];
             };
@@ -2093,53 +2204,65 @@
                     a = posOf(sel.anchorNode, sel.anchorOffset);
                     f = posOf(sel.focusNode, sel.focusOffset);
                 }
-                if (a === null || f === null) { const len = readText().length; a = f = len; }
+                if (a === null || f === null) { const len = readDoc().t.length; a = f = len; }
                 return { a, f, start: Math.min(a, f), end: Math.max(a, f) };
             };
-            const setSel = (a, f = a) => {
+            const setSel = (a, f = a, t) => {
+                if (t === undefined) t = readDoc().t;
                 const sel = window.getSelection();
-                const [an, ao] = domAt(a), [fn, fo] = domAt(f);
+                const [an, ao] = domAt(a, t), [fn, fo] = domAt(f, t);
                 try { sel.setBaseAndExtent(an, ao, fn, fo); } catch (e) { /* ignore */ }
             };
-            const revealCaret = () => {
-                const sel = window.getSelection();
-                if (!sel.rangeCount) return;
-                const r = document.createRange();
-                try { r.setStart(sel.focusNode, sel.focusOffset); } catch (e) { return; }
-                r.collapse(true);
-                let rect = r.getClientRects()[0];
-                if (!rect && r.startContainer.nodeType === 1) {
-                    const n = r.startContainer.childNodes[r.startOffset] || r.startContainer.childNodes[r.startOffset - 1];
-                    if (n && n.getBoundingClientRect) rect = n.getBoundingClientRect();
+
+            // Scrolls so the caret at `pos` stays visible. A temporary marker is measured because
+            // a collapsed range right after a line break reports the wrong line in Chrome.
+            const revealPos = (pos, t) => {
+                const [n, o] = domAt(pos, t);
+                const mark = document.createElement('span');
+                mark.textContent = '​';
+                let rect = null;
+                if (n.nodeType === 3) {
+                    const after = n.splitText(o);
+                    n.parentNode.insertBefore(mark, after);
+                    rect = mark.getBoundingClientRect();
+                    mark.remove();
+                    n.data += after.data;
+                    after.remove();
+                } else {
+                    n.insertBefore(mark, n.childNodes[o] || null);
+                    rect = mark.getBoundingClientRect();
+                    mark.remove();
                 }
-                if (!rect) return;
+                if (!rect || (!rect.top && !rect.bottom)) return;
                 const box = el.getBoundingClientRect();
-                if (rect.bottom > box.bottom - 24) el.scrollTop += rect.bottom - box.bottom + 48;
-                else if (rect.top < box.top + 8) el.scrollTop -= box.top - rect.top + 48;
+                const margin = Math.min(64, box.height / 4);
+                if (rect.bottom > box.bottom - margin) el.scrollTop += rect.bottom - (box.bottom - margin);
+                else if (rect.top < box.top + 12) el.scrollTop -= (box.top + 12) - rect.top;
             };
 
-            // Repairs the DOM after native typing (browsers sometimes add <br>/<div>)
+            // Repairs the DOM after native typing (browsers sometimes add <br>/<div>/<b>)
             const fixUp = () => {
                 if (el.childNodes.length === 1 && el.firstChild.nodeName === 'BR' && !isSentinel(el.firstChild)) el.replaceChildren();
                 if (!isFlat()) {
                     const s = getSel();
-                    render(readText());
-                    setSel(s.a, s.f);
+                    const d = readDoc();
+                    render(d);
+                    setSel(s.a, s.f, d.t);
                     return;
                 }
-                const text = readText();
-                const want = text.endsWith('\n'), has = isSentinel(el.lastChild);
+                const t = readDoc().t;
+                const want = t.endsWith('\n'), has = isSentinel(el.lastChild);
                 if (want !== has) {
                     const s = getSel();
                     if (want) { const br = document.createElement('br'); br.dataset.sentinel = '1'; el.appendChild(br); }
                     else el.lastChild.remove();
-                    setSel(s.a, s.f);
+                    setSel(s.a, s.f, t);
                 }
-                updatePlaceholder(text);
+                updatePlaceholder(t);
             };
 
             // ---------- undo / redo ----------
-            const snap = () => { const s = getSel(); return { text: readText(), a: s.a, f: s.f }; };
+            const snap = () => { const s = getSel(); return { d: readDoc(), w: new Map(imgW), a: s.a, f: s.f }; };
             const pushUndo = (kind, snapshot) => {
                 const now = Date.now();
                 const merge = (kind === 'type' || kind === 'delete') && lastRecord.kind === kind && now - lastRecord.t < 800;
@@ -2149,7 +2272,14 @@
                 if (undoStack.length > 300) undoStack.shift();
                 redoStack = [];
             };
-            const restore = (s) => { render(s.text); setSel(s.a, s.f); revealCaret(); changed(); };
+            const restore = (sn) => {
+                imgW = new Map(sn.w);
+                render(sn.d);
+                imgMap.forEach((img, k) => applyImgWidth(img, k));
+                revealPos(sn.f, sn.d.t);
+                setSel(sn.a, sn.f, sn.d.t);
+                changed();
+            };
             const undo = () => {
                 if (!undoStack.length) return;
                 fixUp();
@@ -2165,18 +2295,19 @@
                 restore(redoStack.pop());
             };
 
-            // Runs fn(text, sel) → { text, a, f } and applies it as one undoable step
+            // Runs fn(doc, sel) → { d, a, f } and applies it as one undoable step
             const edit = (fn, kind = 'op') => {
                 if (!enabled) return false;
                 fixUp();
                 const s = getSel();
-                const t = readText();
-                const r = fn(t, s);
+                const d = readDoc();
+                const r = fn(d, s);
                 if (!r) return false;
-                pushUndo(kind, { text: t, a: s.a, f: s.f });
-                render(r.text);
-                setSel(r.a, r.f ?? r.a);
-                revealCaret();
+                pushUndo(kind, { d, w: new Map(imgW), a: s.a, f: s.f });
+                const f = r.f ?? r.a;
+                render(r.d);
+                revealPos(f, r.d.t);
+                setSel(r.a, f, r.d.t);
                 changed();
                 return true;
             };
@@ -2192,10 +2323,33 @@
                 return [ls, lineEnd(t, Math.max(endPos, ls))];
             };
             const isImgSel = (t, s) => s.end - s.start === 1 && isImgKey(t[s.start]);
-            const applyEdits = (t, edits) => {
-                let out = '', last = 0;
-                for (const e of edits) { out += t.slice(last, e.at) + e.ins; last = e.at + e.del; }
-                return out + t.slice(last);
+            // Style that newly typed text at `pos` gets
+            const styleAt = (d, pos) => {
+                if (pending && pending.pos === pos) return pending.key;
+                const prev = d.t[pos - 1], next = d.t[pos];
+                if (pos > 0 && prev !== '\n' && !isImgKey(prev)) return d.s[pos - 1] || '';
+                if (next !== undefined && next !== '\n' && !isImgKey(next)) return d.s[pos] || '';
+                if (pos > 0 && !isImgKey(prev)) return d.s[pos - 1] || '';
+                return '';
+            };
+            const insertAt = (d, s, part, keepSelection) => {
+                const nd = cat(sub(d, 0, s.start), part, sub(d, s.end));
+                const L = part.t.length;
+                return keepSelection ? { d: nd, a: s.a + L, f: s.f + L } : { d: nd, a: s.start + L };
+            };
+            const applyEdits = (d, edits) => {
+                const parts = [];
+                let last = 0;
+                for (const e of edits) {
+                    parts.push(sub(d, last, e.at));
+                    if (e.ins) {
+                        const k = d.t[e.at] && d.t[e.at] !== '\n' && !isImgKey(d.t[e.at]) ? d.s[e.at] : '';
+                        parts.push(txt(e.ins, k || ''));
+                    }
+                    last = e.at + e.del;
+                }
+                parts.push(sub(d, last));
+                return cat(...parts);
             };
             const mapPos = (p, edits, moveAtEdge) => {
                 let shift = 0;
@@ -2203,11 +2357,12 @@
                     if (p < e.at) break;
                     if (p === e.at && e.del === 0 && !moveAtEdge) break;
                     if (p >= e.at + e.del) shift += e.ins.length - e.del;
-                    else { shift += (e.at - p) + e.ins.length; }
+                    else shift += (e.at - p) + e.ins.length;
                 }
                 return p + shift;
             };
-            const shiftLines = (t, s, dir) => {
+            const shiftLines = (d, s, dir) => {
+                const t = d.t;
                 const [ls, le] = lineRange(t, s);
                 const multi = t.slice(ls, le).includes('\n');
                 const edits = [];
@@ -2232,96 +2387,103 @@
                 if (!edits.length) return null;
                 const collapsed = s.a === s.f;
                 return {
-                    text: applyEdits(t, edits),
+                    d: applyEdits(d, edits),
                     a: mapPos(s.a, edits, collapsed || s.a > s.f),
                     f: mapPos(s.f, edits, collapsed || s.f > s.a)
                 };
             };
 
-            // ---------- commands ----------
-            const cmdTab = () => edit((t, s) => {
-                if (s.start === s.end || isImgSel(t, s)) {
-                    const col = s.start - lineStart(t, s.start);
+            // ---------- editing commands ----------
+            const cmdTab = () => edit((d, s) => {
+                if (s.start === s.end || isImgSel(d.t, s)) {
+                    const col = s.start - lineStart(d.t, s.start);
                     const ins = ' '.repeat(TAB - (col % TAB));
-                    return { text: t.slice(0, s.start) + ins + t.slice(s.start), a: s.a + ins.length, f: s.f + ins.length };
+                    return insertAt(d, { ...s, end: s.start }, txt(ins, styleAt(d, s.start)), true);
                 }
-                return shiftLines(t, s, 1);
+                return shiftLines(d, s, 1);
             });
-            const cmdIndent = () => edit((t, s) => shiftLines(t, s, 1));
-            const cmdOutdent = () => edit((t, s) => shiftLines(t, s, -1));
+            const cmdIndent = () => edit((d, s) => shiftLines(d, s, 1));
+            const cmdOutdent = () => edit((d, s) => shiftLines(d, s, -1));
 
-            const cmdEnter = () => edit((t, s) => {
+            const cmdEnter = () => edit((d, s) => {
+                const t = d.t;
                 const ls = lineStart(t, s.start);
                 const indent = leadOf(t, ls).slice(0, Math.max(0, s.start - ls));
-                if (isImgSel(t, s)) { // push the selected image down a line, keep it selected
-                    const ins = '\n' + indent;
-                    return { text: t.slice(0, s.start) + ins + t.slice(s.start), a: s.a + ins.length, f: s.f + ins.length };
-                }
+                const key = styleAt(d, s.start);
+                if (isImgSel(t, s)) return insertAt(d, { ...s, end: s.start }, txt('\n' + indent, key), true); // push image down
                 const before = t[s.start - 1], after = t[s.end];
                 if (PAIRS[before]) {
                     const first = '\n' + indent + INDENT;
                     if (after === PAIRS[before]) {
-                        return { text: t.slice(0, s.start) + first + '\n' + indent + t.slice(s.end), a: s.start + first.length };
+                        const nd = cat(sub(d, 0, s.start), txt(first + '\n' + indent, key), sub(d, s.end));
+                        return { d: nd, a: s.start + first.length };
                     }
-                    return { text: t.slice(0, s.start) + first + t.slice(s.end), a: s.start + first.length };
+                    return insertAt(d, s, txt(first, key));
                 }
-                const ins = '\n' + indent;
-                return { text: t.slice(0, s.start) + ins + t.slice(s.end), a: s.start + ins.length };
+                return insertAt(d, s, txt('\n' + indent, key));
             }, 'enter');
 
-            const cmdInsertLine = (dir) => edit((t, s) => {
+            const cmdInsertLine = (dir) => edit((d, s) => {
+                const t = d.t;
                 const ls = lineStart(t, s.f), le = lineEnd(t, s.f);
                 const indent = leadOf(t, ls);
-                if (dir > 0) { const ins = '\n' + indent; return { text: t.slice(0, le) + ins + t.slice(le), a: le + ins.length }; }
-                return { text: t.slice(0, ls) + indent + '\n' + t.slice(ls), a: ls + indent.length };
+                if (dir > 0) {
+                    const ins = '\n' + indent;
+                    return { d: cat(sub(d, 0, le), txt(ins, styleAt(d, le)), sub(d, le)), a: le + ins.length };
+                }
+                return { d: cat(sub(d, 0, ls), txt(indent + '\n', styleAt(d, ls)), sub(d, ls)), a: ls + indent.length };
             });
 
-            const cmdMoveLines = (dir) => edit((t, s) => {
+            const cmdMoveLines = (dir) => edit((d, s) => {
+                const t = d.t;
                 const [ls, le] = lineRange(t, s);
-                const block = t.slice(ls, le);
+                const block = sub(d, ls, le);
                 if (dir < 0) {
                     if (ls === 0) return null;
                     const ps = lineStart(t, ls - 1);
-                    const prev = t.slice(ps, ls - 1);
-                    const d = prev.length + 1;
-                    return { text: t.slice(0, ps) + block + '\n' + prev + t.slice(le), a: s.a - d, f: s.f - d };
+                    const prev = sub(d, ps, ls - 1), nl = sub(d, ls - 1, ls);
+                    const dd = prev.t.length + 1;
+                    return { d: cat(sub(d, 0, ps), block, nl, prev, sub(d, le)), a: s.a - dd, f: s.f - dd };
                 }
                 if (le >= t.length) return null;
                 const ne = lineEnd(t, le + 1);
-                const next = t.slice(le + 1, ne);
-                const d = next.length + 1;
-                return { text: t.slice(0, ls) + next + '\n' + block + t.slice(ne), a: s.a + d, f: s.f + d };
+                const next = sub(d, le + 1, ne), nl = sub(d, le, le + 1);
+                const dd = next.t.length + 1;
+                return { d: cat(sub(d, 0, ls), next, nl, block, sub(d, ne)), a: s.a + dd, f: s.f + dd };
             });
 
-            const cmdCopyLines = (dir) => edit((t, s) => {
-                const [ls, le] = lineRange(t, s);
-                const block = t.slice(ls, le);
-                if (dir < 0) return { text: t.slice(0, ls) + block + '\n' + t.slice(ls), a: s.a, f: s.f };
-                const d = block.length + 1;
-                return { text: t.slice(0, le) + '\n' + block + t.slice(le), a: s.a + d, f: s.f + d };
+            const cmdCopyLines = (dir) => edit((d, s) => {
+                const [ls, le] = lineRange(d.t, s);
+                const block = sub(d, ls, le);
+                const nl = txt('\n', block.s[block.s.length - 1] || '');
+                if (dir < 0) return { d: cat(sub(d, 0, ls), block, nl, sub(d, ls)), a: s.a, f: s.f };
+                const dd = block.t.length + 1;
+                return { d: cat(sub(d, 0, le), nl, block, sub(d, le)), a: s.a + dd, f: s.f + dd };
             });
 
-            const cmdDeleteLines = () => edit((t, s) => {
+            const cmdDeleteLines = () => edit((d, s) => {
+                const t = d.t;
                 const [ls, le] = lineRange(t, s);
                 let from = ls, to = le;
                 if (to < t.length) to++; else if (from > 0) from--;
-                const nt = t.slice(0, from) + t.slice(to);
+                const nd = cat(sub(d, 0, from), sub(d, to));
                 const col = s.f - lineStart(t, s.f);
-                const p = Math.min(lineStart(nt, from), nt.length);
-                return { text: nt, a: p + Math.min(col, lineEnd(nt, p) - p) };
+                const p = Math.min(lineStart(nd.t, from), nd.t.length);
+                return { d: nd, a: p + Math.min(col, lineEnd(nd.t, p) - p) };
             });
 
             const cmdSelectLine = () => {
                 fixUp();
-                const s = getSel(), t = readText();
+                const s = getSel(), t = readDoc().t;
                 const start = lineStart(t, s.start);
                 const e = lineEnd(t, s.end);
-                setSel(start, Math.min(e + 1, t.length));
-                revealCaret();
+                const end = Math.min(e + 1, t.length);
+                revealPos(end, t);
+                setSel(start, end, t);
             };
 
-            const caretTop = (pos) => {
-                const [n, o] = domAt(pos);
+            const caretTop = (pos, t) => {
+                const [n, o] = domAt(pos, t);
                 const r = document.createRange();
                 try { r.setStart(n, o); r.collapse(true); } catch (e) { return null; }
                 const rect = r.getClientRects()[0];
@@ -2329,72 +2491,246 @@
             };
             const cmdHome = (extend) => {
                 fixUp();
-                const s = getSel(), t = readText();
+                const s = getSel(), t = readDoc().t;
                 const ls = lineStart(t, s.f);
                 const first = ls + leadOf(t, ls).length;
                 if (first === ls) return false;                 // no indentation → normal Home
-                const a = caretTop(s.f), b = caretTop(ls);
+                const a = caretTop(s.f, t), b = caretTop(ls, t);
                 if (a !== null && b !== null && Math.abs(a - b) > 4) return false; // on a wrapped row → normal Home
                 const target = s.f === first ? ls : first;
-                setSel(extend ? s.a : target, target);
+                setSel(extend ? s.a : target, target, t);
                 return true;
             };
 
-            const cmdBackspace = () => edit((t, s) => {
+            const cmdBackspace = () => edit((d, s) => {
                 if (s.start !== s.end || s.start === 0) return null;
-                const p = s.start;
+                const t = d.t, p = s.start;
                 const before = t.slice(lineStart(t, p), p);
                 if (before.length > 1 && /^ +$/.test(before)) { // delete back to the previous tab stop
                     const n = before.length - Math.floor((before.length - 1) / TAB) * TAB;
-                    return { text: t.slice(0, p - n) + t.slice(p), a: p - n };
+                    return { d: cat(sub(d, 0, p - n), sub(d, p)), a: p - n };
                 }
-                if (PAIRS[t[p - 1]] && t[p] === PAIRS[t[p - 1]]) return { text: t.slice(0, p - 1) + t.slice(p + 1), a: p - 1 };
+                if (PAIRS[t[p - 1]] && t[p] === PAIRS[t[p - 1]]) return { d: cat(sub(d, 0, p - 1), sub(d, p + 1)), a: p - 1 };
                 return null;
             }, 'delete');
 
-            const cmdOpenBracket = (k) => edit((t, s) => {
+            const cmdOpenBracket = (k) => edit((d, s) => {
                 const close = PAIRS[k];
+                const key = styleAt(d, s.start);
                 if (s.start !== s.end) {
-                    if (isImgSel(t, s)) return null;
-                    return { text: t.slice(0, s.start) + k + t.slice(s.start, s.end) + close + t.slice(s.end), a: s.start + 1, f: s.end + 1 };
+                    if (isImgSel(d.t, s)) return null;
+                    const nd = cat(sub(d, 0, s.start), txt(k, key), sub(d, s.start, s.end), txt(close, key), sub(d, s.end));
+                    return { d: nd, a: s.start + 1, f: s.end + 1 };
                 }
-                const next = t[s.start];
+                const next = d.t[s.start];
                 if (next !== undefined && !/[\s)\]}]/.test(next)) return null;
-                return { text: t.slice(0, s.start) + k + close + t.slice(s.start), a: s.start + 1 };
+                return { d: cat(sub(d, 0, s.start), txt(k + close, key), sub(d, s.start)), a: s.start + 1 };
             }, 'type');
 
             const cmdCloseBracket = (k) => {
                 fixUp();
-                const s = getSel(), t = readText();
+                const s = getSel(), t = readDoc().t;
                 if (s.start !== s.end || t[s.start] !== k) return false;
-                setSel(s.start + 1);
+                setSel(s.start + 1, s.start + 1, t);
                 return true;
             };
 
-            const cmdSpaceOnImage = () => edit((t, s) => isImgSel(t, s)
-                ? { text: t.slice(0, s.start) + ' ' + t.slice(s.start), a: s.a + 1, f: s.f + 1 }
+            const cmdSpaceOnImage = () => edit((d, s) => isImgSel(d.t, s)
+                ? insertAt(d, { ...s, end: s.start }, txt(' ', styleAt(d, s.start)), true)
                 : null, 'type');
 
+            const typeWithPending = (str) => edit((d, s) => insertAt(d, s, txt(str, pending ? pending.key : styleAt(d, s.start))), 'type');
+
+            // ---------- formatting ----------
+            const styledIdx = (d, s) => {
+                const all = [];
+                for (let i = s.start; i < s.end; i++) if (!isImgKey(d.t[i])) all.push(i);
+                const visible = all.filter(i => d.t[i] !== '\n');
+                return { all, visible: visible.length ? visible : all };
+            };
+            const setPending = (key, pos) => { pending = { key, pos }; updateToolbar(); };
+
+            const cmdToggle = (attr) => {
+                if (!enabled) return;
+                fixUp();
+                const s = getSel();
+                const d = readDoc();
+                if (s.start === s.end) {
+                    const o = parseKey(styleAt(d, s.start));
+                    if (o[attr]) delete o[attr]; else o[attr] = 1;
+                    setPending(keyOf(o), s.start);
+                    return;
+                }
+                edit((dd, ss) => {
+                    const { all, visible } = styledIdx(dd, ss);
+                    if (!all.length) return null;
+                    const on = !visible.every(i => parseKey(dd.s[i])[attr]);
+                    const ns = dd.s.slice();
+                    for (const i of all) { const o = parseKey(ns[i]); if (on) o[attr] = 1; else delete o[attr]; ns[i] = keyOf(o); }
+                    return { d: D(dd.t, ns), a: ss.a, f: ss.f };
+                }, 'format');
+            };
+
+            const stepSize = (cur, dir) => {
+                if (dir > 0) return SIZES.find(z => z > cur) ?? SIZES[SIZES.length - 1];
+                for (let i = SIZES.length - 1; i >= 0; i--) if (SIZES[i] < cur) return SIZES[i];
+                return SIZES[0];
+            };
+            const cmdFontSize = (dir) => {
+                if (!enabled) return;
+                fixUp();
+                const s = getSel();
+                const d = readDoc();
+                if (isImgSel(d.t, s)) { resizeImage(dir); return; }
+                const base = baseSize();
+                if (s.start === s.end) {
+                    const o = parseKey(styleAt(d, s.start));
+                    const z = stepSize(o.z || base, dir);
+                    if (z === base) delete o.z; else o.z = z;
+                    setPending(keyOf(o), s.start);
+                    return;
+                }
+                edit((dd, ss) => {
+                    const { all } = styledIdx(dd, ss);
+                    if (!all.length) return null;
+                    const ns = dd.s.slice();
+                    for (const i of all) {
+                        const o = parseKey(ns[i]);
+                        const z = stepSize(o.z || base, dir);
+                        if (z === base) delete o.z; else o.z = z;
+                        ns[i] = keyOf(o);
+                    }
+                    return { d: D(dd.t, ns), a: ss.a, f: ss.f };
+                }, 'format');
+            };
+
+            const cmdClearFormat = () => {
+                if (!enabled) return;
+                fixUp();
+                const s = getSel();
+                const d = readDoc();
+                if (isImgSel(d.t, s)) { resizeImage(0); return; }
+                if (s.start === s.end) { setPending('', s.start); return; }
+                edit((dd, ss) => {
+                    const ns = dd.s.slice();
+                    for (let i = ss.start; i < ss.end; i++) ns[i] = '';
+                    return { d: D(dd.t, ns), a: ss.a, f: ss.f };
+                }, 'format');
+            };
+
+            // ---------- image sizing ----------
+            const contentWidth = () => {
+                const cs = getComputedStyle(el);
+                return Math.max(MIN_IMG_W, el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight));
+            };
+            const imgWidthOf = (k) => {
+                const img = imgMap.get(k);
+                return imgW.get(k) || Math.round(img.getBoundingClientRect().width) || Math.min(img.naturalWidth || 300, contentWidth());
+            };
+            // dir: +1 bigger, -1 smaller, 0 back to original size
+            const resizeImage = (dir) => {
+                fixUp();
+                const s = getSel(), d = readDoc();
+                if (!isImgSel(d.t, s)) return false;
+                const k = d.t[s.start];
+                const img = imgMap.get(k);
+                const cur = imgWidthOf(k);
+                let next = 0;
+                if (dir > 0) next = Math.min(Math.round(cur * IMG_STEP), contentWidth());
+                else if (dir < 0) next = Math.max(Math.round(cur / IMG_STEP), MIN_IMG_W);
+                if ((imgW.get(k) || 0) === next) return true;
+                pushUndo('image', { d, w: new Map(imgW), a: s.a, f: s.f });
+                if (next) imgW.set(k, next); else imgW.delete(k);
+                applyImgWidth(img, k);
+                changed();
+                return true;
+            };
+
             // ---------- clipboard / images ----------
-            const escHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            const serialize = (part) => {
-                const images = [];
+            const escHtml = (str) => str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const encodeRuns = (s) => {
+                if (!s.some(Boolean)) return '';
+                const out = [];
+                let i = 0;
+                while (i < s.length) {
+                    let j = i + 1;
+                    while (j < s.length && s[j] === s[i]) j++;
+                    out.push((j - i) + ':' + (s[i] || ''));
+                    i = j;
+                }
+                return out.join(';');
+            };
+            const decodeRuns = (str, len) => {
+                const s = [];
+                if (str) {
+                    for (const part of String(str).split(';')) {
+                        const c = part.indexOf(':');
+                        const n = parseInt(part.slice(0, c), 10) || 0;
+                        const k = part.slice(c + 1);
+                        for (let i = 0; i < n && s.length < len; i++) s.push(k);
+                    }
+                }
+                while (s.length < len) s.push('');
+                return s;
+            };
+            const serialize = (d) => {
+                const images = [], sizes = [];
                 let text = '';
-                for (const ch of part) {
-                    if (isImgKey(ch)) { images.push(imgMap.get(ch).getAttribute('src')); text += OBJ; }
+                for (const ch of d.t) {
+                    if (isImgKey(ch)) { images.push(imgMap.get(ch).getAttribute('src')); sizes.push(imgW.get(ch) || 0); text += OBJ; }
                     else text += ch;
                 }
-                return { text, images };
+                return { text, images, sizes, styles: encodeRuns(d.s) };
             };
-            const insertSerialized = (text, images = []) => {
-                text = String(text).replace(/\r\n?/g, '\n').replace(/[-]/g, (ch) => imgMap.has(ch) ? '' : ch);
-                let i = 0, out = '';
-                for (const ch of text) {
-                    if (ch === OBJ) { const src = images[i++]; if (src) { const k = newKey(); makeImg(src, k); out += k; } }
-                    else out += ch;
+            const toHtml = (d) => {
+                let html = '', i = 0;
+                while (i < d.t.length) {
+                    const ch = d.t[i];
+                    if (isImgKey(ch)) {
+                        const w = imgW.get(ch);
+                        html += `<img src="${imgMap.get(ch).getAttribute('src')}"${w ? ` width="${w}"` : ''}>`;
+                        i++;
+                        continue;
+                    }
+                    let j = i + 1;
+                    while (j < d.t.length && d.s[j] === d.s[i] && !isImgKey(d.t[j])) j++;
+                    const o = parseKey(d.s[i]);
+                    const css = [o.b && 'font-weight:700', o.i && 'font-style:italic', (o.u || o.s) && `text-decoration:${[o.u && 'underline', o.s && 'line-through'].filter(Boolean).join(' ')}`, o.z && `font-size:${o.z}px`].filter(Boolean).join(';');
+                    const body = escHtml(d.t.slice(i, j)).replace(/\n/g, '<br>');
+                    html += css ? `<span style="${css}">${body}</span>` : body;
+                    i = j;
                 }
-                if (!out) return false;
-                return edit((t, s) => ({ text: t.slice(0, s.start) + out + t.slice(s.end), a: s.start + out.length }), 'paste');
+                return `<div style="white-space:pre-wrap">${html}</div>`;
+            };
+            // text uses OBJ for images; styles is a run string or null (null = use typing style)
+            const insertSerialized = (text, images = [], styles = null, sizes = []) => {
+                text = String(text).replace(/\r\n?/g, '\n');
+                const srcS = styles === null ? null : decodeRuns(styles, text.length);
+                return edit((d, s) => {
+                    const typing = styleAt(d, s.start);
+                    let t = '';
+                    const st = [];
+                    let i = 0, idx = 0;
+                    for (const ch of text) {
+                        const key = srcS ? (srcS[idx] || '') : typing;
+                        idx += ch.length;
+                        if (ch === OBJ) {
+                            const src = images[i], w = sizes[i];
+                            i++;
+                            if (!src) continue;
+                            const k = newKey();
+                            makeImg(src, k, w || 0);
+                            t += k; st.push('');
+                        } else if (ch.length === 1 && ch.charCodeAt(0) >= KEY_FIRST && ch.charCodeAt(0) <= KEY_LAST && imgMap.has(ch)) {
+                            continue; // never let pasted text collide with an image key
+                        } else {
+                            t += ch;
+                            for (let n = 0; n < ch.length; n++) st.push(key);
+                        }
+                    }
+                    if (!t) return null;
+                    return insertAt(d, s, D(t, st));
+                }, 'paste');
             };
 
             const readAsDataURL = (file) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
@@ -2430,19 +2766,45 @@
                 const srcs = [];
                 for (const f of files) { try { srcs.push(await compressImage(f)); } catch (e) { console.error('Image paste failed', e); } }
                 if (!srcs.length) { setSaveStatus('error', 'Could not read image'); return; }
-                insertSerialized(OBJ.repeat(srcs.length), srcs);
+                insertSerialized(OBJ.repeat(srcs.length), srcs, '', []);
             };
 
-            // ---------- status / saving ----------
-            const updatePlaceholder = (text) => el.classList.toggle('is-empty', (text ?? readText()).length === 0);
+            // ---------- status / toolbar / saving ----------
+            const updatePlaceholder = (t) => el.classList.toggle('is-empty', (t ?? readDoc().t).length === 0);
             const setSaveStatus = (state, text) => {
                 if (!statusSave) return;
                 statusSave.textContent = text;
                 statusSave.dataset.state = state;
             };
+            const updateToolbar = () => {
+                if (!el || !enabled) return;
+                const s = getSel(), d = readDoc();
+                const base = baseSize();
+                let o, size;
+                if (isImgSel(d.t, s)) {
+                    document.querySelectorAll('#note-toolbar [data-fmt]').forEach(b => b.classList.remove('is-active'));
+                    if (sizeDisplay) sizeDisplay.textContent = imgWidthOf(d.t[s.start]) + 'px';
+                    return;
+                }
+                if (s.start === s.end) { o = parseKey(styleAt(d, s.start)); size = o.z || base; }
+                else {
+                    const { visible } = styledIdx(d, s);
+                    const objs = visible.map(i => parseKey(d.s[i]));
+                    o = {};
+                    for (const a of ['b', 'i', 'u', 's']) o[a] = objs.length && objs.every(x => x[a]);
+                    const zs = new Set(objs.map(x => x.z || base));
+                    size = zs.size === 1 ? [...zs][0] : null;
+                }
+                document.querySelectorAll('#note-toolbar [data-fmt]').forEach(b => {
+                    const a = b.dataset.fmt;
+                    if (['b', 'i', 'u', 's'].includes(a)) b.classList.toggle('is-active', !!o[a]);
+                });
+                if (sizeDisplay) sizeDisplay.textContent = size === null ? '—' : String(size);
+            };
             const updateStatusPos = () => {
                 if (!statusPos || !enabled) return;
-                const s = getSel(), t = readText();
+                const s = getSel(), t = readDoc().t;
+                if (isImgSel(t, s)) { statusPos.textContent = `Image selected · ${imgWidthOf(t[s.start])}px wide`; return; }
                 const ln = (t.slice(0, s.f).match(/\n/g) || []).length + 1;
                 const col = s.f - lineStart(t, s.f) + 1;
                 statusPos.textContent = `Ln ${ln}, Col ${col}` + (s.end > s.start ? ` (${s.end - s.start} selected)` : '');
@@ -2451,6 +2813,7 @@
                 rev++;
                 updatePlaceholder();
                 updateStatusPos();
+                updateToolbar();
                 setSaveStatus('dirty', 'Unsaved');
                 clearTimeout(saveTimer);
                 saveTimer = setTimeout(() => window.saveCurrentNote({ silent: true }), 1200);
@@ -2471,10 +2834,21 @@
                 const lower = k.length === 1 ? k.toLowerCase() : k;
                 const stop = () => { e.preventDefault(); e.stopPropagation(); };
 
+                // history & saving
                 if (mod && !e.altKey && lower === 'z') { stop(); e.shiftKey ? redo() : undo(); return; }
                 if (mod && !e.altKey && lower === 'y') { stop(); redo(); return; }
-                if (mod && !e.altKey && !e.shiftKey && ['b', 'i', 'u'].includes(lower)) { stop(); return; }
                 if (mod && !e.altKey && lower === 's') { stop(); clearTimeout(saveTimer); window.saveCurrentNote(); return; }
+
+                // formatting (Word / Google Docs style)
+                if (mod && !e.altKey && !e.shiftKey && lower === 'b') { stop(); cmdToggle('b'); return; }
+                if (mod && !e.altKey && !e.shiftKey && lower === 'i') { stop(); cmdToggle('i'); return; }
+                if (mod && !e.altKey && !e.shiftKey && lower === 'u') { stop(); cmdToggle('u'); return; }
+                if ((mod && e.shiftKey && !e.altKey && lower === 'x') || (e.altKey && e.shiftKey && !mod && e.code === 'Digit5')) { stop(); cmdToggle('s'); return; }
+                if (mod && e.shiftKey && !e.altKey && e.code === 'Period') { stop(); cmdFontSize(1); return; }
+                if (mod && e.shiftKey && !e.altKey && e.code === 'Comma') { stop(); cmdFontSize(-1); return; }
+                if (mod && !e.altKey && !e.shiftKey && (e.code === 'Backslash' || e.code === 'Space')) { stop(); cmdClearFormat(); return; }
+
+                // code-editor commands (VS Code style)
                 if (k === 'Tab' && !mod && !e.altKey) { stop(); e.shiftKey ? cmdOutdent() : cmdTab(); return; }
                 if (mod && !e.altKey && e.code === 'BracketRight') { stop(); cmdIndent(); return; }
                 if (mod && !e.altKey && e.code === 'BracketLeft') { stop(); cmdOutdent(); return; }
@@ -2499,9 +2873,26 @@
                 const type = e.inputType || '';
                 if (type === 'historyUndo') { e.preventDefault(); undo(); return; }
                 if (type === 'historyRedo') { e.preventDefault(); redo(); return; }
+                if (type === 'formatBold') { e.preventDefault(); cmdToggle('b'); return; }
+                if (type === 'formatItalic') { e.preventDefault(); cmdToggle('i'); return; }
+                if (type === 'formatUnderline') { e.preventDefault(); cmdToggle('u'); return; }
                 if (type.startsWith('format')) { e.preventDefault(); return; }
                 if (type === 'insertParagraph' || type === 'insertLineBreak') { e.preventDefault(); cmdEnter(); return; }
                 if (type === 'insertCompositionText') return;
+                if (type === 'insertText' && e.data) {
+                    const s = getSel();
+                    if (pending && s.start === pending.pos) { e.preventDefault(); typeWithPending(e.data); pending = null; return; }
+                    // If the browser would put the text in a run with the wrong formatting
+                    // (e.g. at the start of a new line), insert it ourselves with the right one.
+                    if (s.start === s.end) {
+                        const sel = window.getSelection();
+                        const node = sel.focusNode;
+                        let have = null;
+                        if (node && node.nodeType === 3) have = isRun(node.parentNode) ? (node.parentNode.dataset.s || '') : (node.parentNode === el ? '' : null);
+                        const want = styleAt(readDoc(), s.start);
+                        if (have === null || have !== want) { e.preventDefault(); typeWithPending(e.data); return; }
+                    }
+                }
                 pushUndo(type.startsWith('delete') ? 'delete' : 'type', snap);
             };
 
@@ -2511,14 +2902,12 @@
                 const s = getSel();
                 if (s.start === s.end) return;
                 e.preventDefault();
-                const part = readText().slice(s.start, s.end);
+                const part = sub(readDoc(), s.start, s.end);
                 const ser = serialize(part);
                 e.clipboardData.setData('text/plain', ser.text.split(OBJ).join(''));
-                let i = 0;
-                const html = escHtml(ser.text).replace(/￼/g, () => `<img src="${ser.images[i++]}">`).replace(/\n/g, '<br>');
-                e.clipboardData.setData('text/html', `<div style="white-space:pre-wrap">${html}</div>`);
-                if (ser.images.length) e.clipboardData.setData('application/x-note-fragment', JSON.stringify(ser));
-                if (isCut) edit((t, sel) => ({ text: t.slice(0, sel.start) + t.slice(sel.end), a: sel.start }));
+                e.clipboardData.setData('text/html', toHtml(part));
+                e.clipboardData.setData('application/x-note-fragment', JSON.stringify(ser));
+                if (isCut) edit((d, sel) => ({ d: cat(sub(d, 0, sel.start), sub(d, sel.end)), a: sel.start }));
             };
 
             const onPaste = (e) => {
@@ -2527,7 +2916,10 @@
                 const cd = e.clipboardData;
                 const fragRaw = cd.getData('application/x-note-fragment');
                 if (fragRaw) {
-                    try { const fr = JSON.parse(fragRaw); if (fr && typeof fr.text === 'string') { insertSerialized(fr.text, fr.images || []); return; } } catch (err) { /* fall through */ }
+                    try {
+                        const fr = JSON.parse(fragRaw);
+                        if (fr && typeof fr.text === 'string') { insertSerialized(fr.text, fr.images || [], fr.styles ?? '', fr.sizes || []); return; }
+                    } catch (err) { /* fall through */ }
                 }
                 const text = cd.getData('text/plain');
                 if (text) { insertSerialized(text.split(OBJ).join('')); return; }
@@ -2564,6 +2956,7 @@
                 el.classList.toggle('mono', mono);
                 const btn = document.getElementById('note-font-toggle');
                 if (btn) btn.textContent = mono ? 'Monospace' : 'Sans';
+                updateToolbar();
             };
 
             const init = () => {
@@ -2571,6 +2964,7 @@
                 wrap = document.getElementById('note-editor-wrap');
                 statusPos = document.getElementById('note-status-pos');
                 statusSave = document.getElementById('note-save-status');
+                sizeDisplay = document.getElementById('note-size-display');
                 if (!el) return;
                 el.addEventListener('keydown', onKeyDown);
                 el.addEventListener('beforeinput', onBeforeInput);
@@ -2595,7 +2989,23 @@
                 document.addEventListener('selectionchange', () => {
                     if (!el) return;
                     const sel = window.getSelection();
-                    if (sel.rangeCount && el.contains(sel.anchorNode)) { updateStatusPos(); refreshImageSelection(); }
+                    if (!(sel.rangeCount && el.contains(sel.anchorNode))) return;
+                    if (pending) { const s = getSel(); if (s.start !== s.end || s.f !== pending.pos) pending = null; }
+                    updateStatusPos();
+                    updateToolbar();
+                    refreshImageSelection();
+                });
+
+                // Toolbar: mousedown is cancelled so the editor keeps its selection
+                document.querySelectorAll('#note-toolbar [data-fmt]').forEach(btn => {
+                    btn.addEventListener('mousedown', (e) => e.preventDefault());
+                    btn.addEventListener('click', () => {
+                        const a = btn.dataset.fmt;
+                        if (['b', 'i', 'u', 's'].includes(a)) cmdToggle(a);
+                        else if (a === 'bigger') cmdFontSize(1);
+                        else if (a === 'smaller') cmdFontSize(-1);
+                        else if (a === 'clear') cmdClearFormat();
+                    });
                 });
 
                 document.getElementById('note-font-toggle')?.addEventListener('click', () => {
@@ -2606,24 +3016,33 @@
                 const keysBtn = document.getElementById('note-keys-btn');
                 const keysPanel = document.getElementById('note-keys-panel');
                 keysBtn?.addEventListener('click', (e) => { e.stopPropagation(); keysPanel.classList.toggle('hidden'); });
-                document.addEventListener('click', (e) => { if (keysPanel && !keysPanel.contains(e.target) && e.target !== keysBtn) keysPanel.classList.add('hidden'); });
+                document.addEventListener('click', (e) => { if (keysPanel && !keysPanel.contains(e.target) && !keysBtn.contains(e.target)) keysPanel.classList.add('hidden'); });
 
                 applyFont();
                 setEnabled(false);
             };
 
-            const load = (content = '', images = []) => {
+            const load = (content = '', images = [], styles = '', imageSizes = []) => {
                 if (!el) return;
                 clearTimeout(saveTimer);
                 imgMap = new Map();
+                imgW = new Map();
                 nextKey = KEY_FIRST;
+                pending = null;
                 undoStack = []; redoStack = []; lastRecord = { t: 0, kind: '' };
-                let i = 0, text = '';
-                for (const ch of String(content || '')) {
-                    if (ch === OBJ) { const src = images[i++]; if (src) { const k = newKey(); makeImg(src, k); text += k; } }
-                    else text += ch;
+                const src = String(content || '');
+                const srcS = decodeRuns(styles || '', src.length);
+                let i = 0, t = '';
+                const s = [];
+                for (let idx = 0; idx < src.length; idx++) {
+                    const ch = src[idx];
+                    if (ch === OBJ) {
+                        const img = images[i], w = imageSizes[i];
+                        i++;
+                        if (img) { const k = newKey(); makeImg(img, k, w || 0); t += k; s.push(''); }
+                    } else { t += ch; s.push(srcS[idx] || ''); }
                 }
-                render(text);
+                render(D(t, s));
                 el.scrollTop = 0;
                 rev = 0; savedRev = 0;
                 setSaveStatus('saved', 'Saved');
@@ -2632,9 +3051,9 @@
 
             const getValue = () => {
                 fixUp();
-                const ser = serialize(readText());
-                const bytes = new TextEncoder().encode(ser.text).length + ser.images.reduce((n, s) => n + s.length + 16, 0) + 2048;
-                return { content: ser.text, images: ser.images, bytes };
+                const ser = serialize(readDoc());
+                const bytes = new TextEncoder().encode(ser.text + ser.styles).length + ser.images.reduce((n, x) => n + x.length + 24, 0) + 2048;
+                return { content: ser.text, images: ser.images, imageSizes: ser.sizes, styles: ser.styles, bytes };
             };
 
             const setEnabled = (on) => {
@@ -2651,7 +3070,7 @@
                 load,
                 getValue,
                 setEnabled,
-                focus: () => { if (el && enabled) { el.focus(); setSel(0); } },
+                focus: () => { if (el && enabled) { el.focus(); setSel(0, 0); updateToolbar(); } },
                 clear: () => { load('', []); setEnabled(false); },
                 isDirty: () => rev !== savedRev,
                 rev: () => rev,
@@ -4465,16 +4884,32 @@
                 </div>
 
                 <div id="note-editor-wrap" class="flex-1 flex flex-col min-h-0 min-w-0 transition-opacity is-disabled">
-                    <div id="current-note-content" class="note-editor flex-1 min-h-0 min-w-0 overflow-y-auto custom-scroll p-10 pt-16 text-white text-base leading-relaxed outline-none" contenteditable="false" spellcheck="true" data-placeholder="Start typing... (paste images with Ctrl+V)"></div>
+                    <div id="note-toolbar" class="flex items-center gap-1 pl-6 pr-20 py-3 border-b border-gray-700/60 select-none">
+                        <button type="button" data-fmt="b" class="note-tb-btn" title="Bold (Ctrl+B)"><span data-lucide="bold" class="w-4 h-4"></span></button>
+                        <button type="button" data-fmt="i" class="note-tb-btn" title="Italic (Ctrl+I)"><span data-lucide="italic" class="w-4 h-4"></span></button>
+                        <button type="button" data-fmt="u" class="note-tb-btn" title="Underline (Ctrl+U)"><span data-lucide="underline" class="w-4 h-4"></span></button>
+                        <button type="button" data-fmt="s" class="note-tb-btn" title="Strikethrough (Ctrl+Shift+X)"><span data-lucide="strikethrough" class="w-4 h-4"></span></button>
+                        <span class="w-px h-5 bg-gray-700 mx-2"></span>
+                        <button type="button" data-fmt="smaller" class="note-tb-btn" title="Smaller text / image (Ctrl+Shift+&lt;)"><span data-lucide="a-arrow-down" class="w-4 h-4"></span></button>
+                        <span id="note-size-display" class="min-w-[3.25rem] text-center text-xs tabular-nums text-white/70" title="Font size (or image width)">16</span>
+                        <button type="button" data-fmt="bigger" class="note-tb-btn" title="Bigger text / image (Ctrl+Shift+&gt;)"><span data-lucide="a-arrow-up" class="w-4 h-4"></span></button>
+                        <span class="w-px h-5 bg-gray-700 mx-2"></span>
+                        <button type="button" data-fmt="clear" class="note-tb-btn" title="Clear formatting / original image size (Ctrl+\)"><span data-lucide="remove-formatting" class="w-4 h-4"></span></button>
+                    </div>
+                    <div id="current-note-content" class="note-editor flex-1 min-h-0 min-w-0 overflow-y-auto custom-scroll p-10 pt-6 text-white text-base leading-relaxed outline-none" contenteditable="false" spellcheck="true" data-placeholder="Start typing... (paste images with Ctrl+V)"></div>
                     <div class="note-statusbar relative flex items-center gap-4 px-4 py-1.5 border-t border-gray-700/80 bg-gray-800/70 text-[11px] text-white/50 select-none">
                         <span id="note-status-pos">Ln 1, Col 1</span>
                         <span>Spaces: 4</span>
                         <button type="button" id="note-font-toggle" class="hover:text-white transition-colors" title="Toggle monospace font">Monospace</button>
                         <button type="button" id="note-keys-btn" class="flex items-center gap-1 hover:text-white transition-colors" title="Keyboard shortcuts"><span data-lucide="keyboard" class="w-3.5 h-3.5"></span> Shortcuts</button>
                         <span id="note-save-status" class="ml-auto" data-state="saved">Saved</span>
-                        <div id="note-keys-panel" class="hidden absolute bottom-full left-4 mb-2 w-80 p-4 rounded-xl bg-gray-800 border border-gray-700 shadow-2xl text-xs text-white/80 z-20">
+                        <div id="note-keys-panel" class="hidden absolute bottom-full left-4 mb-2 w-[22rem] p-4 rounded-xl bg-gray-800 border border-gray-700 shadow-2xl text-xs text-white/80 z-20">
                             <p class="font-semibold text-white mb-2">Editor shortcuts</p>
                             <div class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5">
+                                <kbd>Ctrl+B / I / U</kbd><span>Bold / italic / underline</span>
+                                <kbd>Ctrl+Shift+X</kbd><span>Strikethrough</span>
+                                <kbd>Ctrl+Shift+&gt; / &lt;</kbd><span>Bigger / smaller text or image</span>
+                                <kbd>Ctrl+\ or Ctrl+Space</kbd><span>Clear formatting / reset image</span>
                                 <kbd>Tab</kbd><span>Indent (selected lines)</span>
                                 <kbd>Shift+Tab</kbd><span>Outdent</span>
                                 <kbd>Ctrl+] / Ctrl+[</kbd><span>Indent / outdent line</span>
@@ -4489,7 +4924,7 @@
                                 <kbd>Ctrl+S</kbd><span>Save now (also autosaves)</span>
                                 <kbd>Ctrl+V</kbd><span>Paste text or images</span>
                             </div>
-                            <p class="mt-3 text-white/50">Click an image to select it, then press Enter, Space or Tab to move it down or right. Shift+Tab moves it back left, Backspace deletes it.</p>
+                            <p class="mt-3 text-white/50">Click an image to select it, then press Enter, Space or Tab to move it down or right, Shift+Tab to move it back left, Ctrl+Shift+&gt; / &lt; to resize it and Backspace to delete it.</p>
                         </div>
                     </div>
                 </div>
@@ -4578,7 +5013,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 05/11/2026 - 11:35</div>
+    <div id="version-timestamp">Last Update 05/11/2026 - 15:15</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
@@ -7516,6 +7951,9 @@
     .note-editor .note-img.is-selected { outline: 2px solid #3b82f6; outline-offset: 2px; }
     #note-save-status[data-state="dirty"], #note-save-status[data-state="saving"] { color: #fbbf24; }
     #note-save-status[data-state="error"] { color: #f87171; }
+    .note-tb-btn { width: 2rem; height: 2rem; display: inline-flex; align-items: center; justify-content: center; border-radius: .5rem; color: rgba(255,255,255,.65); transition: background-color .15s, color .15s; }
+    .note-tb-btn:hover { background: rgba(255,255,255,.08); color: #fff; }
+    .note-tb-btn.is-active { background: rgba(59,130,246,.25); color: #93c5fd; }
     #note-keys-panel kbd { font-family: ui-monospace, Consolas, monospace; font-size: 10px; padding: 1px 6px; border-radius: 4px; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.12); white-space: nowrap; justify-self: start; }
 
     .note-folder-header { transition: filter .15s; }
