@@ -853,8 +853,17 @@
         onSnapshot(collection(db, getCollectionPath('notes')), (snapshot) => {
             const loadedNotes = [];
             snapshot.forEach(doc => loadedNotes.push({ id: doc.id, ...doc.data() }));
-            loadedNotes.sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || "")); 
+            loadedNotes.sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
             window.userNotes = loadedNotes;
+            window.renderNotesSidebar();
+        });
+
+        // 6b. Note folders listener
+        onSnapshot(collection(db, getCollectionPath('note_folders')), (snapshot) => {
+            const folders = [];
+            snapshot.forEach(d => folders.push({ ...d.data(), id: d.id }));
+            folders.sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+            window.noteFolders = folders;
             window.renderNotesSidebar();
         });
     };
@@ -995,16 +1004,16 @@
             if (!db || !userId) return;
             try { await deleteDoc(doc(db, getCollectionPath('map_locations'), id)); } catch (e) { console.error(e); }
         },
-        addNote: async (title, content) => {
+                addNote: async (title, content, extra = {}) => {
             const now = new Date().toISOString();
             if (db && userId) {
                 try {
-                    const docRef = await addDoc(collection(db, getCollectionPath('notes')), { title, content, updatedAt: now });
+                    const docRef = await addDoc(collection(db, getCollectionPath('notes')), { title, content, updatedAt: now, ...extra });
                     return docRef.id;
                 } catch(e) { console.error(e); return null; }
             } else {
                 const id = 'note_' + Date.now();
-                window.userNotes.push({ id, title, content, updatedAt: now });
+                window.userNotes.push({ id, title, content, updatedAt: now, ...extra });
                 localStorage.setItem('mockNotes', JSON.stringify(window.userNotes));
                 window.renderNotesSidebar();
                 return id;
@@ -1027,6 +1036,25 @@
                 localStorage.setItem('mockNotes', JSON.stringify(window.userNotes));
                 window.renderNotesSidebar();
             }
+        },
+        patchNote: async (id, fields) => {
+            if (!db || !userId) return;
+            try { await setDoc(doc(db, getCollectionPath('notes'), id), fields, { merge: true }); } catch (e) { console.error(e); }
+        },
+        addNoteFolder: async (name, color) => {
+            if (!db || !userId) return null;
+            try {
+                const ref = await addDoc(collection(db, getCollectionPath('note_folders')), { name, color, createdAt: new Date().toISOString() });
+                return ref.id;
+            } catch (e) { console.error(e); return null; }
+        },
+        updateNoteFolder: async (id, fields) => {
+            if (!db || !userId) return;
+            try { await setDoc(doc(db, getCollectionPath('note_folders'), id), fields, { merge: true }); } catch (e) { console.error(e); }
+        },
+        deleteNoteFolder: async (id) => {
+            if (!db || !userId) return;
+            try { await deleteDoc(doc(db, getCollectionPath('note_folders'), id)); } catch (e) { console.error(e); }
         }
     };
 
@@ -1447,141 +1475,471 @@
             renderScheduleWidget();
             
             window.userNotes = JSON.parse(localStorage.getItem('mockNotes')) || [];
+            window.noteFolders = JSON.parse(localStorage.getItem('mockNoteFolders')) || [];
+            const saveMockNotes = () => { localStorage.setItem('mockNotes', JSON.stringify(window.userNotes)); window.renderNotesSidebar(); };
+            const saveMockFolders = () => { localStorage.setItem('mockNoteFolders', JSON.stringify(window.noteFolders)); window.renderNotesSidebar(); };
             window.renderNotesSidebar();
 
-            window.db = {
+                        window.db = {
                 addAssignment: (t, d, time) => {}, updateAssignment: () => {}, deleteAssignment: () => {},
                 addFinishedAssignment: () => {}, deleteFinishedAssignment: () => {}, addBookmark: () => {},
                 deleteBookmark: () => {}, addBackground: () => {}, deleteBackground: () => {}, activateBackground: () => {},
-                addNote: async (title, content) => {
+                addNote: async (title, content, extra = {}) => {
                     const id = 'note_' + Date.now();
-                    window.userNotes.push({ id, title, content, updatedAt: new Date().toISOString() });
-                    localStorage.setItem('mockNotes', JSON.stringify(window.userNotes));
-                    window.renderNotesSidebar();
+                    window.userNotes.unshift({ id, title, content, updatedAt: new Date().toISOString(), ...extra });
+                    saveMockNotes();
                     return id;
                 },
                 updateNote: async (id, title, content) => {
                     const note = window.userNotes.find(n => n.id === id);
-                    if (note) { note.title = title; note.content = content; note.updatedAt = new Date().toISOString(); localStorage.setItem('mockNotes', JSON.stringify(window.userNotes)); window.renderNotesSidebar(); }
+                    if (note) { note.title = title; note.content = content; note.updatedAt = new Date().toISOString(); saveMockNotes(); }
                 },
                 deleteNote: async (id) => {
                     window.userNotes = window.userNotes.filter(n => n.id !== id);
-                    localStorage.setItem('mockNotes', JSON.stringify(window.userNotes));
-                    window.renderNotesSidebar();
+                    saveMockNotes();
+                },
+                patchNote: async (id, fields) => {
+                    const note = window.userNotes.find(n => n.id === id);
+                    if (note) { Object.assign(note, fields); saveMockNotes(); }
+                },
+                addNoteFolder: async (name, color) => {
+                    const id = 'folder_' + Date.now();
+                    window.noteFolders.push({ id, name, color, createdAt: new Date().toISOString() });
+                    saveMockFolders();
+                    return id;
+                },
+                updateNoteFolder: async (id, fields) => {
+                    const f = window.noteFolders.find(x => x.id === id);
+                    if (f) { Object.assign(f, fields); saveMockFolders(); }
+                },
+                deleteNoteFolder: async (id) => {
+                    window.noteFolders = window.noteFolders.filter(x => x.id !== id);
+                    saveMockFolders();
                 }
             };
         };
 
-        // --- Notes Logic ---
+        // --- Notes Logic (favourites + coloured folders) ---
         let currentNoteId = null;
+        let justOpenedFolderId = null;
+        window.noteFolders = window.noteFolders || [];
+
+        const NOTE_FOLDER_COLORS = ['#60a5fa', '#34d399', '#fbbf24', '#f87171', '#a78bfa', '#f472b6', '#22d3ee', '#fb923c'];
+        const OPEN_FOLDERS_KEY = 'notesOpenFolders';
+        let openNoteFolders = new Set();
+        try { openNoteFolders = new Set(JSON.parse(localStorage.getItem(OPEN_FOLDERS_KEY) || '[]')); } catch (e) {}
+        const saveOpenFolders = () => { try { localStorage.setItem(OPEN_FOLDERS_KEY, JSON.stringify([...openNoteFolders])); } catch (e) {} };
+
+        const noteEsc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        const noteDateStr = (iso) => iso ? new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+        const findNote = (id) => (window.userNotes || []).find(n => n.id === id) || null;
+        const folderById = (id) => id ? ((window.noteFolders || []).find(f => f.id === id) || null) : null;
+
+        // ---- Drag a note onto a folder (or onto "Notes" to un-file it) ----
+        const NOTE_DRAG_TYPE = 'application/x-note-id';
+        const makeNoteDropTarget = (el, folderId) => {
+            el.addEventListener('dragover', (e) => {
+                if (![...e.dataTransfer.types].includes(NOTE_DRAG_TYPE)) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                el.classList.add('note-drop-over');
+            });
+            el.addEventListener('dragleave', (e) => { if (!el.contains(e.relatedTarget)) el.classList.remove('note-drop-over'); });
+            el.addEventListener('drop', (e) => {
+                e.preventDefault();
+                el.classList.remove('note-drop-over');
+                const id = e.dataTransfer.getData(NOTE_DRAG_TYPE);
+                if (id) window.moveNoteToFolder(id, folderId);
+            });
+        };
+
+        const sectionLabel = (icon, text, iconClass) => {
+            const el = document.createElement('div');
+            el.className = 'flex items-center text-[10px] font-bold uppercase tracking-wider text-white/40 px-1 pt-4 first:pt-1 pb-1.5';
+            el.innerHTML = `<span data-lucide="${icon}" class="w-3 h-3 mr-1.5 ${iconClass}"></span>${text}`;
+            return el;
+        };
+
+        // context: 'fav' | 'folder' | 'loose'
+        const buildNoteRow = (note, context) => {
+            const folder = folderById(note.folderId);
+            const isActive = currentNoteId === note.id;
+            const row = document.createElement('div');
+            row.className = `note-row flex justify-between items-center p-2.5 cursor-pointer rounded-lg transition-colors group ${isActive ? 'bg-blue-600/30 border border-blue-500/50' : 'bg-white/5 hover:bg-white/10 border border-transparent'}`;
+            row.draggable = true;
+
+            // In Favourites, a note that lives in a folder shows the folder name in grey
+            const subLine = (context === 'fav' && folder)
+                ? `<span class="text-[10px] text-white/40 mt-0.5 flex items-center min-w-0"><span class="inline-flex mr-1 flex-shrink-0" style="color:${folder.color}"><span data-lucide="folder" class="w-3 h-3"></span></span><span class="truncate">${noteEsc(folder.name)}</span></span>`
+                : `<span class="text-[10px] text-white/40 mt-0.5">${noteDateStr(note.updatedAt)}</span>`;
+
+            row.innerHTML = `
+                <div class="flex-1 flex items-start overflow-hidden pr-2 min-w-0">
+                    <span data-lucide="file-text" class="w-4 h-4 mr-2 mt-0.5 text-white/50 flex-shrink-0"></span>
+                    <div class="flex flex-col w-full overflow-hidden min-w-0">
+                        <input type="text" value="${noteEsc(note.title)}" readonly
+                               class="note-title-input bg-transparent outline-none text-white text-sm w-full truncate pointer-events-none border-b border-transparent focus:border-blue-500 transition-colors">
+                        ${subLine}
+                    </div>
+                </div>
+                <div class="flex items-center flex-shrink-0">
+                    <button data-act="fav" class="note-star ${note.favourite ? 'is-fav' : ''} p-1.5 rounded hover:bg-yellow-900/30 transition-colors" title="${note.favourite ? 'Remove from favourites' : 'Add to favourites'}"><span data-lucide="star" class="w-3.5 h-3.5"></span></button>
+                    <div class="note-actions flex space-x-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button data-act="move" class="p-1.5 text-white/60 hover:text-white rounded hover:bg-white/10 transition-colors" title="Move to folder"><span data-lucide="folder-input" class="w-3.5 h-3.5"></span></button>
+                        <button data-act="rename" class="p-1.5 text-blue-400 hover:text-blue-300 rounded hover:bg-blue-900/40 transition-colors" title="Edit Name"><span data-lucide="pencil" class="w-3.5 h-3.5"></span></button>
+                        <button data-act="delete" class="p-1.5 text-red-400 hover:text-red-300 rounded hover:bg-red-900/40 transition-colors" title="Delete Note"><span data-lucide="trash-2" class="w-3.5 h-3.5"></span></button>
+                    </div>
+                </div>`;
+
+            row.addEventListener('click', (e) => {
+                // Don't re-open the note while its title is being renamed
+                if (e.target.classList.contains('note-title-input') && !e.target.readOnly) return;
+                const btn = e.target.closest('button[data-act]');
+                if (!btn) { window.openNote(note.id); return; }
+                e.stopPropagation();
+                const act = btn.dataset.act;
+                if (act === 'fav') window.toggleNoteFavourite(note.id);
+                else if (act === 'move') window.openNoteMoveMenu(note.id, btn);
+                else if (act === 'rename') window.enableNoteTitleEdit(note.id, btn);
+                else if (act === 'delete') window.deleteNote(note.id);
+            });
+            row.addEventListener('dragstart', (e) => {
+                e.dataTransfer.setData(NOTE_DRAG_TYPE, note.id);
+                e.dataTransfer.effectAllowed = 'move';
+                row.classList.add('opacity-50');
+            });
+            row.addEventListener('dragend', () => row.classList.remove('opacity-50'));
+            return row;
+        };
+
+        const buildFolderBlock = (folder, notesIn) => {
+            const isOpen = openNoteFolders.has(folder.id);
+            const current = findNote(currentNoteId);
+            const editingHere = current && current.folderId === folder.id;
+
+            const wrap = document.createElement('div');
+            wrap.className = 'note-folder mb-1.5';
+
+            const header = document.createElement('div');
+            header.className = 'note-folder-header group flex items-center justify-between p-2.5 rounded-lg cursor-pointer';
+            header.style.background = `${folder.color}1f`;
+            header.style.borderLeft = `3px solid ${folder.color}`;
+            header.innerHTML = `
+                <div class="flex items-start min-w-0 flex-1">
+                    <span class="inline-flex mt-0.5 mr-2 flex-shrink-0" style="color:${folder.color}"><span data-lucide="${isOpen ? 'folder-open' : 'folder'}" class="w-4 h-4"></span></span>
+                    <div class="flex flex-col min-w-0">
+                        <span class="text-sm font-semibold text-white truncate">${noteEsc(folder.name)} <span class="text-white/40 font-normal text-xs ml-0.5">${notesIn.length}</span></span>
+                        ${editingHere ? `<span class="text-[11px] text-white/45 truncate flex items-center"><span data-lucide="pencil-line" class="w-3 h-3 mr-1 flex-shrink-0"></span><span class="truncate">${noteEsc(current.title)}</span></span>` : ''}
+                    </div>
+                </div>
+                <div class="flex items-center flex-shrink-0">
+                    <div class="note-actions flex space-x-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button data-act="add" class="p-1.5 text-green-400 hover:text-green-300 rounded hover:bg-white/10 transition-colors" title="New note in this folder"><span data-lucide="plus" class="w-3.5 h-3.5"></span></button>
+                        <button data-act="edit" class="p-1.5 text-white/60 hover:text-white rounded hover:bg-white/10 transition-colors" title="Rename / colour / delete folder"><span data-lucide="settings-2" class="w-3.5 h-3.5"></span></button>
+                    </div>
+                    <span data-lucide="chevron-down" class="w-4 h-4 text-white/50 ml-1 transition-transform ${isOpen ? 'rotate-180' : ''}"></span>
+                </div>`;
+
+            header.addEventListener('click', (e) => {
+                const btn = e.target.closest('button[data-act]');
+                if (btn) {
+                    e.stopPropagation();
+                    if (btn.dataset.act === 'add') window.createNewNote(folder.id);
+                    else window.openNoteFolderModal(folder.id);
+                    return;
+                }
+                window.toggleNoteFolder(folder.id);
+            });
+            makeNoteDropTarget(header, folder.id);
+            wrap.appendChild(header);
+
+            if (isOpen) {
+                const body = document.createElement('div');
+                body.className = 'ml-3 pl-2 mt-1 space-y-1 border-l' + (justOpenedFolderId === folder.id ? ' note-folder-anim' : '');
+                body.style.borderColor = `${folder.color}55`;
+                if (notesIn.length === 0) {
+                    body.innerHTML = `<p class="text-[11px] text-white/35 italic px-2 py-1.5">Empty — drag a note here or press +</p>`;
+                } else {
+                    notesIn.forEach(n => body.appendChild(buildNoteRow(n, 'folder')));
+                }
+                makeNoteDropTarget(body, folder.id);
+                wrap.appendChild(body);
+            }
+            return wrap;
+        };
 
         window.renderNotesSidebar = () => {
             const list = document.getElementById('notes-list-container');
-            if(!list) return;
+            if (!list) return;
+            const notes = window.userNotes || [];
+            const folders = window.noteFolders || [];
+            const folderIds = new Set(folders.map(f => f.id));
             list.innerHTML = '';
-            window.userNotes.forEach(note => {
-                const item = document.createElement('div');
-                item.className = `flex justify-between items-center p-3 cursor-pointer rounded-lg mb-2 transition-colors group ${currentNoteId === note.id ? 'bg-blue-600/30 border border-blue-500/50' : 'bg-white/5 hover:bg-white/10 border border-transparent'}`;
-                
-                // Format the date
-                let dateStr = '';
-                if (note.updatedAt) {
-                    const d = new Date(note.updatedAt);
-                    dateStr = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-                }
 
-                item.innerHTML = `
-                    <div class="flex-1 flex items-start overflow-hidden pr-2">
-                        <span data-lucide="file-text" class="w-4 h-4 mr-2 mt-1 text-white/50 flex-shrink-0"></span>
-                        <div class="flex flex-col w-full overflow-hidden">
-                            <input type="text" id="note-title-input-${note.id}" value="${note.title}" placeholder="${note.title}" class="bg-transparent outline-none text-white text-sm w-full truncate pointer-events-none border-b border-transparent focus:border-blue-500 transition-colors" readonly>
-                            <span class="text-[10px] text-white/40 mt-0.5">${dateStr}</span>
-                        </div>
-                    </div>
-                    <div class="flex space-x-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" id="note-actions-${note.id}">
-                        <button class="p-1.5 text-blue-400 hover:text-blue-300 rounded hover:bg-blue-900/40 transition-colors" onclick="event.stopPropagation(); window.enableNoteTitleEdit('${note.id}')" title="Edit Name"><span data-lucide="pencil" class="w-3.5 h-3.5"></span></button>
-                        <button class="p-1.5 text-red-400 hover:text-red-300 rounded hover:bg-red-900/40 transition-colors" onclick="event.stopPropagation(); window.deleteNote('${note.id}')" title="Delete Note"><span data-lucide="trash-2" class="w-3.5 h-3.5"></span></button>
-                    </div>
-                `;
-                item.onclick = () => window.openNote(note.id);
-                list.appendChild(item);
-            });
-            if(window.lucide) window.lucide.createIcons();
+            // Favourites
+            const favs = notes.filter(n => n.favourite);
+            if (favs.length) {
+                list.appendChild(sectionLabel('star', 'Favourites', 'text-yellow-400'));
+                const favBox = document.createElement('div');
+                favBox.className = 'space-y-1';
+                favs.forEach(n => favBox.appendChild(buildNoteRow(n, 'fav')));
+                list.appendChild(favBox);
+            }
+
+            // Folders
+            if (folders.length) {
+                list.appendChild(sectionLabel('folders', 'Folders', 'text-white/40'));
+                folders.forEach(f => list.appendChild(buildFolderBlock(f, notes.filter(n => n.folderId === f.id))));
+            }
+
+            // Loose notes (also catches notes whose folder was deleted on another device)
+            const loose = notes.filter(n => !n.folderId || !folderIds.has(n.folderId));
+            const looseLabel = sectionLabel('file-text', 'Notes', 'text-white/40');
+            const looseBox = document.createElement('div');
+            looseBox.className = 'space-y-1 min-h-[2.5rem]';
+            if (loose.length) loose.forEach(n => looseBox.appendChild(buildNoteRow(n, 'loose')));
+            else looseBox.innerHTML = `<p class="text-[11px] text-white/35 italic px-2 py-1.5">${notes.length ? 'All notes are in folders' : 'No notes yet — press + to create one'}</p>`;
+            makeNoteDropTarget(looseLabel, null);
+            makeNoteDropTarget(looseBox, null);
+            list.appendChild(looseLabel);
+            list.appendChild(looseBox);
+
+            justOpenedFolderId = null;
+            if (window.lucide) window.lucide.createIcons();
         };
 
-        window.enableNoteTitleEdit = (id) => {
-            const input = document.getElementById(`note-title-input-${id}`);
-            const note = window.userNotes.find(n => n.id === id);
-            
+        window.toggleNoteFolder = (id) => {
+            if (openNoteFolders.has(id)) openNoteFolders.delete(id);
+            else { openNoteFolders.add(id); justOpenedFolderId = id; }
+            saveOpenFolders();
+            window.renderNotesSidebar();
+        };
+
+        window.toggleNoteFavourite = async (id) => {
+            const note = findNote(id);
+            if (note) await window.db.patchNote(id, { favourite: !note.favourite });
+        };
+
+        window.moveNoteToFolder = async (id, folderId) => {
+            const note = findNote(id);
+            if (!note || (note.folderId || null) === (folderId || null)) return;
+            if (folderId) { openNoteFolders.add(folderId); saveOpenFolders(); }
+            await window.db.patchNote(id, { folderId: folderId || null });
+        };
+
+        // ---- "Move to folder" popover (works on touch where drag & drop doesn't) ----
+        const closeNoteMoveMenu = () => document.getElementById('note-move-menu')?.classList.add('hidden');
+
+        window.openNoteMoveMenu = (noteId, anchor) => {
+            const menu = document.getElementById('note-move-menu');
+            const note = findNote(noteId);
+            if (!menu || !note) return;
+            const currentFolder = note.folderId || '';
+            const item = (fid, label, color, icon) => `
+                <button data-folder="${fid || ''}" class="w-full flex items-center px-3 py-2 text-sm text-left rounded-lg hover:bg-white/10 transition-colors ${currentFolder === (fid || '') ? 'text-white font-semibold bg-white/5' : 'text-white/80'}">
+                    <span class="inline-flex mr-2 flex-shrink-0" style="color:${color}"><span data-lucide="${icon}" class="w-4 h-4"></span></span>
+                    <span class="truncate">${noteEsc(label)}</span>
+                </button>`;
+            menu.innerHTML =
+                `<p class="px-3 pt-1 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-white/40">Move to</p>` +
+                item(null, 'No folder', 'rgba(255,255,255,0.5)', 'file-text') +
+                (window.noteFolders || []).map(f => item(f.id, f.name, f.color, 'folder')).join('') +
+                `<div class="border-t border-white/10 my-1"></div>
+                 <button data-new="1" class="w-full flex items-center px-3 py-2 text-sm text-left rounded-lg hover:bg-white/10 text-blue-300 transition-colors">
+                    <span data-lucide="folder-plus" class="w-4 h-4 mr-2"></span>New folder…
+                 </button>`;
+            menu.onclick = (e) => {
+                const b = e.target.closest('button');
+                if (!b) return;
+                e.stopPropagation();
+                closeNoteMoveMenu();
+                if (b.dataset.new) window.openNoteFolderModal(null, noteId);
+                else window.moveNoteToFolder(noteId, b.dataset.folder || null);
+            };
+            menu.classList.remove('hidden');
+            if (window.lucide) window.lucide.createIcons();
+
+            const r = anchor.getBoundingClientRect();
+            const mw = menu.offsetWidth, mh = menu.offsetHeight;
+            const left = Math.max(8, Math.min(r.right - mw, window.innerWidth - mw - 8));
+            let top = r.bottom + 6;
+            if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 6);
+            menu.style.left = `${left}px`;
+            menu.style.top = `${top}px`;
+        };
+
+        // ---- Folder create / edit modal ----
+        let editingFolderId = null;
+        let folderPendingNoteId = null;
+        let folderPickedColor = NOTE_FOLDER_COLORS[0];
+
+        const renderFolderSwatches = () => {
+            const wrap = document.getElementById('note-folder-color-picker');
+            if (!wrap) return;
+            const isCustom = !NOTE_FOLDER_COLORS.includes(folderPickedColor);
+            wrap.innerHTML =
+                NOTE_FOLDER_COLORS.map(c => `<button type="button" class="pm-color-swatch ${c === folderPickedColor ? 'selected' : ''}" data-color="${c}" style="background:${c}"></button>`).join('') +
+                `<label class="pm-color-swatch note-color-custom ${isCustom ? 'selected' : ''}" title="Custom colour" ${isCustom ? `style="background:${folderPickedColor}"` : ''}>
+                    <input type="color" value="${isCustom ? folderPickedColor : '#ffffff'}">
+                 </label>`;
+            wrap.querySelectorAll('button[data-color]').forEach(b => {
+                b.onclick = () => { folderPickedColor = b.dataset.color; renderFolderSwatches(); };
+            });
+            const custom = wrap.querySelector('.note-color-custom');
+            custom.querySelector('input').addEventListener('input', (e) => {
+                folderPickedColor = e.target.value;
+                wrap.querySelectorAll('.pm-color-swatch').forEach(s => s.classList.remove('selected'));
+                custom.classList.add('selected');
+                custom.style.background = folderPickedColor;
+            });
+        };
+
+        window.openNoteFolderModal = (folderId = null, pendingNoteId = null) => {
+            const modal = document.getElementById('note-folder-modal');
+            if (!modal) return;
+            closeNoteMoveMenu();
+            const folder = folderById(folderId);
+            editingFolderId = folder ? folder.id : null;
+            folderPendingNoteId = pendingNoteId;
+            folderPickedColor = folder?.color || NOTE_FOLDER_COLORS[(window.noteFolders || []).length % NOTE_FOLDER_COLORS.length];
+            document.getElementById('note-folder-modal-title').textContent = folder ? 'Edit Folder' : 'New Folder';
+            document.getElementById('note-folder-name').value = folder ? folder.name : '';
+            document.getElementById('note-folder-delete-btn').classList.toggle('hidden', !folder);
+            renderFolderSwatches();
+            modal.classList.remove('opacity-0', 'pointer-events-none');
+            setTimeout(() => document.getElementById('note-folder-name').focus(), 60);
+        };
+
+        const closeNoteFolderModal = () => {
+            document.getElementById('note-folder-modal')?.classList.add('opacity-0', 'pointer-events-none');
+        };
+
+        const saveNoteFolder = async () => {
+            const input = document.getElementById('note-folder-name');
+            const name = input.value.trim();
+            if (!name) { input.focus(); return; }
+            const id = editingFolderId, color = folderPickedColor, pendingNote = folderPendingNoteId;
+            closeNoteFolderModal();
+            if (id) {
+                await window.db.updateNoteFolder(id, { name, color });
+            } else {
+                const newId = await window.db.addNoteFolder(name, color);
+                if (newId) {
+                    openNoteFolders.add(newId);
+                    justOpenedFolderId = newId;
+                    saveOpenFolders();
+                    if (pendingNote) await window.moveNoteToFolder(pendingNote, newId);
+                    window.renderNotesSidebar();
+                }
+            }
+        };
+
+        const deleteNoteFolderFromModal = async () => {
+            if (!editingFolderId) return;
+            const id = editingFolderId;
+            const folder = folderById(id);
+            const inside = (window.userNotes || []).filter(n => n.folderId === id);
+            const msg = `Delete folder "${folder ? folder.name : ''}"?` + (inside.length ? `\nIts ${inside.length} note(s) will be moved to Notes.` : '');
+            if (!confirm(msg)) return;
+            closeNoteFolderModal();
+            await Promise.all(inside.map(n => window.db.patchNote(n.id, { folderId: null })));
+            await window.db.deleteNoteFolder(id);
+            openNoteFolders.delete(id);
+            saveOpenFolders();
+        };
+
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('note-folder-save-btn')?.addEventListener('click', saveNoteFolder);
+            document.getElementById('note-folder-cancel-btn')?.addEventListener('click', closeNoteFolderModal);
+            document.getElementById('note-folder-delete-btn')?.addEventListener('click', deleteNoteFolderFromModal);
+            document.getElementById('note-folder-modal')?.addEventListener('click', (e) => { if (e.target === e.currentTarget) closeNoteFolderModal(); });
+            document.getElementById('note-folder-name')?.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); saveNoteFolder(); }
+                if (e.key === 'Escape') closeNoteFolderModal();
+            });
+            document.getElementById('notes-list-container')?.addEventListener('scroll', closeNoteMoveMenu);
+            document.getElementById('close-notes-app-btn')?.addEventListener('click', closeNoteMoveMenu);
+        });
+        document.addEventListener('click', (e) => { if (!e.target.closest('#note-move-menu')) closeNoteMoveMenu(); });
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeNoteMoveMenu(); });
+
+        // ---- Note actions ----
+        window.enableNoteTitleEdit = (id, el) => {
+            const row = el?.closest('.note-row');
+            const input = row?.querySelector('.note-title-input');
+            const note = findNote(id);
+            if (!input || !note) return;
+
+            row.draggable = false;
             input.readOnly = false;
             input.classList.remove('pointer-events-none');
-            
-            // Auto-clear but keep old title as placeholder
-            input.placeholder = note.title; 
-            input.value = ''; 
+            input.placeholder = note.title;
+            input.value = '';
             input.focus();
-            
+
+            let done = false;
             const finishEdit = async () => {
+                if (done) return;
+                done = true;
                 input.readOnly = true;
                 input.classList.add('pointer-events-none');
-                
-                // Use typed value, or default to "New Note" if left entirely empty
-                const newTitle = input.value.trim() || "New Note"; 
-                
-                if (note && note.title !== newTitle) {
-                    await window.db.updateNote(id, newTitle, note.content);
+                const newTitle = input.value.trim() || 'New Note';
+                if (note.title !== newTitle) {
+                    // Only patch the title so unsaved editor content is never overwritten
+                    await window.db.patchNote(id, { title: newTitle, updatedAt: new Date().toISOString() });
                 } else {
-                    // Revert visually if it wasn't a meaningful change
-                    input.value = newTitle; 
+                    input.value = newTitle;
                 }
             };
-
             input.onblur = finishEdit;
-            input.onkeydown = (e) => { if(e.key === 'Enter') input.blur(); };
+            input.onkeydown = (e) => {
+                if (e.key === 'Enter') input.blur();
+                if (e.key === 'Escape') { input.value = note.title; input.blur(); }
+            };
         };
 
         window.deleteNote = async (id) => {
-            if(confirm('Delete this note?')) {
-                if (currentNoteId === id) { 
-                    currentNoteId = null; 
-                    document.getElementById('current-note-content').value = ''; 
-                    document.getElementById('current-note-content').disabled = true; 
-                    document.getElementById('note-empty-state').classList.remove('hidden'); 
+            if (confirm('Delete this note?')) {
+                if (currentNoteId === id) {
+                    currentNoteId = null;
+                    document.getElementById('current-note-content').value = '';
+                    document.getElementById('current-note-content').disabled = true;
+                    document.getElementById('note-empty-state').classList.remove('hidden');
                 }
                 await window.db.deleteNote(id);
             }
         };
 
         window.openNote = async (id) => {
-            await window.saveCurrentNote(); 
+            await window.saveCurrentNote();
             currentNoteId = id;
-            const note = window.userNotes.find(n => n.id === id);
+            const note = findNote(id);
             const textarea = document.getElementById('current-note-content');
             const emptyState = document.getElementById('note-empty-state');
-            
             if (note) {
                 textarea.value = note.content;
                 textarea.disabled = false;
                 emptyState.classList.add('hidden');
                 textarea.focus();
             }
-            window.renderNotesSidebar(); 
+            window.renderNotesSidebar();
         };
 
         window.saveCurrentNote = async () => {
             if (!currentNoteId) return;
             const textarea = document.getElementById('current-note-content');
             const content = textarea.value;
-            const note = window.userNotes.find(n => n.id === currentNoteId);
+            const note = findNote(currentNoteId);
             if (note && note.content !== content) {
                 await window.db.updateNote(currentNoteId, note.title, content);
             }
         };
 
-        window.createNewNote = async () => {
+        window.createNewNote = async (folderId = null) => {
             await window.saveCurrentNote();
-            const id = await window.db.addNote("New Note", "");
-            await window.openNote(id);
+            const id = await window.db.addNote('New Note', '', folderId ? { folderId } : {});
+            if (folderId) { openNoteFolders.add(folderId); saveOpenFolders(); }
+            if (id) await window.openNote(id);
         };
 
 
@@ -3357,9 +3715,9 @@
         </button>
     </div>
 
-    <div id="notes-app-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition-opacity duration-300 z-[70]">
+        <div id="notes-app-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition-opacity duration-300 z-[70]">
         <div class="bg-gray-900 w-full max-w-6xl h-[85vh] rounded-2xl shadow-2xl border border-gray-700 flex overflow-hidden relative transform transition-all duration-300">
-            
+
             <button id="close-notes-app-btn" class="absolute top-4 right-4 z-20 p-2 rounded-lg bg-gray-800 border border-gray-600 hover:bg-red-600 hover:border-red-500 text-white transition-colors" title="Save & Close">
                 <span data-lucide="x" class="w-5 h-5"></span>
             </button>
@@ -3367,10 +3725,12 @@
             <div class="w-72 bg-gray-800/80 flex flex-col border-r border-gray-700 h-full flex-shrink-0 relative z-10">
                 <div class="p-5 border-b border-gray-700 flex justify-between items-center bg-gray-800">
                     <h3 class="text-lg font-bold text-white flex items-center"><span data-lucide="book" class="w-5 h-5 mr-2 text-green-400"></span> My Notes</h3>
-                    <button onclick="window.createNewNote()" class="w-8 h-8 flex items-center justify-center rounded-lg bg-green-600 hover:bg-green-500 text-white transition-colors shadow-md"><span data-lucide="plus" class="w-5 h-5"></span></button>
+                    <div class="flex items-center gap-2">
+                        <button onclick="window.openNoteFolderModal()" title="New folder" class="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-700 hover:bg-gray-600 text-white transition-colors shadow-md"><span data-lucide="folder-plus" class="w-4 h-4"></span></button>
+                        <button onclick="window.createNewNote()" title="New note" class="w-8 h-8 flex items-center justify-center rounded-lg bg-green-600 hover:bg-green-500 text-white transition-colors shadow-md"><span data-lucide="plus" class="w-5 h-5"></span></button>
+                    </div>
                 </div>
-                <div id="notes-list-container" class="flex-1 overflow-y-auto custom-scroll p-4 space-y-1">
-                </div>
+                <div id="notes-list-container" class="flex-1 overflow-y-auto custom-scroll p-3"></div>
             </div>
 
             <div class="flex-1 bg-gray-900/90 flex flex-col relative z-0">
@@ -3383,6 +3743,24 @@
             </div>
         </div>
     </div>
+
+    <div id="note-folder-modal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition-opacity duration-300 z-[80]">
+        <div class="bg-gray-800 p-6 rounded-2xl shadow-2xl w-full max-w-sm border border-gray-700">
+            <h3 id="note-folder-modal-title" class="text-xl font-bold text-white mb-4">New Folder</h3>
+            <input type="text" id="note-folder-name" placeholder="Folder name" class="w-full p-3 rounded-xl bg-gray-700 text-white placeholder-gray-400 border border-gray-600 focus:border-blue-500 outline-none transition-colors">
+            <label class="block text-white/70 text-xs font-semibold uppercase tracking-wider mt-4 mb-2">Colour</label>
+            <div id="note-folder-color-picker" class="flex gap-2 flex-wrap"></div>
+            <div class="flex justify-between items-center mt-6">
+                <button id="note-folder-delete-btn" class="px-4 py-2 rounded-xl bg-red-600 text-white hover:bg-red-700 font-semibold text-sm hidden">Delete</button>
+                <div class="flex gap-2 ml-auto">
+                    <button id="note-folder-cancel-btn" class="px-4 py-2 rounded-xl bg-gray-600 text-white hover:bg-gray-500 text-sm">Cancel</button>
+                    <button id="note-folder-save-btn" class="px-4 py-2 rounded-xl bg-blue-500 text-white hover:bg-blue-600 font-semibold text-sm">Save</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="note-move-menu" class="hidden fixed z-[90] w-56 max-h-72 overflow-y-auto custom-scroll p-1.5 rounded-xl bg-gray-800/95 backdrop-blur-md border border-gray-600 shadow-2xl"></div>
 
 
     <div id="calendar-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition-opacity duration-300 z-50">
@@ -3447,7 +3825,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 03/11/2026 - 11:51</div>
+    <div id="version-timestamp">Last Update 05/11/2026 - 10:47</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
@@ -6368,6 +6746,26 @@
     </script>
 
 <style>
+    /* ===== Notes: favourites + folders ===== */
+    .note-row .note-star { opacity: 0; color: rgba(255,255,255,.45); transition: opacity .15s, color .15s; }
+    .note-row:hover .note-star { opacity: 1; }
+    .note-row .note-star:hover { color: #fde047; }
+    .note-row .note-star.is-fav { opacity: 1; color: #facc15; }
+    .note-row .note-star.is-fav svg { fill: currentColor; }
+
+    .note-folder-header { transition: filter .15s; }
+    .note-folder-header:hover { filter: brightness(1.25); }
+    .note-drop-over { outline: 2px dashed rgba(96,165,250,.85); outline-offset: 2px; border-radius: .5rem; }
+
+    .note-folder-anim { animation: noteFolderOpen .22s ease-out; transform-origin: top; }
+    @keyframes noteFolderOpen { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+
+    .note-color-custom { background: conic-gradient(#f87171, #fbbf24, #34d399, #22d3ee, #60a5fa, #a78bfa, #f472b6, #f87171); position: relative; overflow: hidden; display: inline-block; }
+    .note-color-custom input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+
+    @media (hover: none), (pointer: coarse) {
+        .note-actions, .note-row .note-star { opacity: 1 !important; }
+    }
     /* ===================== Mobile / touch layer ===================== */
     /* Only the page-level container. .scroll-container is also reused on inner lists. */
     body > .scroll-container { height: 100vh; height: 100dvh; }
