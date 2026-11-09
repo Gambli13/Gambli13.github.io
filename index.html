@@ -10,6 +10,10 @@
             window.location.href = 'work.html';
         }
     </script>
+    <script>
+        // Apply the Christmas theme before the first paint so it doesn't flash
+        try { if (localStorage.getItem('christmasTheme') === '1') document.documentElement.classList.add('christmas'); } catch (e) {}
+    </script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@0.577.0/dist/umd/lucide.min.js"></script>
     <script>
@@ -687,6 +691,13 @@
         saveOverride: (id, data) => setDoc(doc(db, getCollectionPath('hardcoded_overrides'), id), JSON.parse(JSON.stringify(data)))
     };
 
+    // Bridge for the Christmas theme (classic script) so the toggle syncs across devices
+    window.firestoreHelpers = {
+        ready: () => Boolean(db && userId),
+        get db() { return db; },
+        doc, setDoc, onSnapshot, getCollectionPath
+    };
+
     const initFirebase = async () => {
         try {
             const app = initializeApp(firebaseConfig);
@@ -842,8 +853,17 @@
         onSnapshot(collection(db, getCollectionPath('notes')), (snapshot) => {
             const loadedNotes = [];
             snapshot.forEach(doc => loadedNotes.push({ id: doc.id, ...doc.data() }));
-            loadedNotes.sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || "")); 
+            loadedNotes.sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
             window.userNotes = loadedNotes;
+            window.renderNotesSidebar();
+        });
+
+        // 6b. Note folders listener
+        onSnapshot(collection(db, getCollectionPath('note_folders')), (snapshot) => {
+            const folders = [];
+            snapshot.forEach(d => folders.push({ ...d.data(), id: d.id }));
+            folders.sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+            window.noteFolders = folders;
             window.renderNotesSidebar();
         });
     };
@@ -988,16 +1008,16 @@
             if (!db || !userId) return;
             try { await deleteDoc(doc(db, getCollectionPath('map_locations'), id)); } catch (e) { console.error(e); }
         },
-        addNote: async (title, content) => {
+                addNote: async (title, content, extra = {}) => {
             const now = new Date().toISOString();
             if (db && userId) {
                 try {
-                    const docRef = await addDoc(collection(db, getCollectionPath('notes')), { title, content, updatedAt: now });
+                    const docRef = await addDoc(collection(db, getCollectionPath('notes')), { title, content, updatedAt: now, ...extra });
                     return docRef.id;
                 } catch(e) { console.error(e); return null; }
             } else {
                 const id = 'note_' + Date.now();
-                window.userNotes.push({ id, title, content, updatedAt: now });
+                window.userNotes.push({ id, title, content, updatedAt: now, ...extra });
                 localStorage.setItem('mockNotes', JSON.stringify(window.userNotes));
                 window.renderNotesSidebar();
                 return id;
@@ -1020,6 +1040,25 @@
                 localStorage.setItem('mockNotes', JSON.stringify(window.userNotes));
                 window.renderNotesSidebar();
             }
+        },
+        patchNote: async (id, fields) => {
+            if (!db || !userId) return false;
+            try { await setDoc(doc(db, getCollectionPath('notes'), id), fields, { merge: true }); return true; } catch (e) { console.error(e); return false; }
+        },
+        addNoteFolder: async (name, color) => {
+            if (!db || !userId) return null;
+            try {
+                const ref = await addDoc(collection(db, getCollectionPath('note_folders')), { name, color, createdAt: new Date().toISOString() });
+                return ref.id;
+            } catch (e) { console.error(e); return null; }
+        },
+        updateNoteFolder: async (id, fields) => {
+            if (!db || !userId) return;
+            try { await setDoc(doc(db, getCollectionPath('note_folders'), id), fields, { merge: true }); } catch (e) { console.error(e); }
+        },
+        deleteNoteFolder: async (id) => {
+            if (!db || !userId) return;
+            try { await deleteDoc(doc(db, getCollectionPath('note_folders'), id)); } catch (e) { console.error(e); }
         }
     };
 
@@ -1440,143 +1479,1616 @@
             renderScheduleWidget();
             
             window.userNotes = JSON.parse(localStorage.getItem('mockNotes')) || [];
+            window.noteFolders = JSON.parse(localStorage.getItem('mockNoteFolders')) || [];
+            const saveMockNotes = () => { localStorage.setItem('mockNotes', JSON.stringify(window.userNotes)); window.renderNotesSidebar(); };
+            const saveMockFolders = () => { localStorage.setItem('mockNoteFolders', JSON.stringify(window.noteFolders)); window.renderNotesSidebar(); };
             window.renderNotesSidebar();
 
-            window.db = {
+                        window.db = {
                 addAssignment: (t, d, time) => {}, updateAssignment: () => {}, deleteAssignment: () => {},
                 addFinishedAssignment: () => {}, deleteFinishedAssignment: () => {}, addBookmark: () => {},
                 deleteBookmark: () => {}, addBackground: () => {}, deleteBackground: () => {}, activateBackground: () => {},
-                addNote: async (title, content) => {
+                addNote: async (title, content, extra = {}) => {
                     const id = 'note_' + Date.now();
-                    window.userNotes.push({ id, title, content, updatedAt: new Date().toISOString() });
-                    localStorage.setItem('mockNotes', JSON.stringify(window.userNotes));
-                    window.renderNotesSidebar();
+                    window.userNotes.unshift({ id, title, content, updatedAt: new Date().toISOString(), ...extra });
+                    saveMockNotes();
                     return id;
                 },
                 updateNote: async (id, title, content) => {
                     const note = window.userNotes.find(n => n.id === id);
-                    if (note) { note.title = title; note.content = content; note.updatedAt = new Date().toISOString(); localStorage.setItem('mockNotes', JSON.stringify(window.userNotes)); window.renderNotesSidebar(); }
+                    if (note) { note.title = title; note.content = content; note.updatedAt = new Date().toISOString(); saveMockNotes(); }
                 },
                 deleteNote: async (id) => {
                     window.userNotes = window.userNotes.filter(n => n.id !== id);
-                    localStorage.setItem('mockNotes', JSON.stringify(window.userNotes));
-                    window.renderNotesSidebar();
+                    saveMockNotes();
+                },
+                patchNote: async (id, fields) => {
+                    const note = window.userNotes.find(n => n.id === id);
+                    if (note) { Object.assign(note, fields); saveMockNotes(); }
+                },
+                addNoteFolder: async (name, color) => {
+                    const id = 'folder_' + Date.now();
+                    window.noteFolders.push({ id, name, color, createdAt: new Date().toISOString() });
+                    saveMockFolders();
+                    return id;
+                },
+                updateNoteFolder: async (id, fields) => {
+                    const f = window.noteFolders.find(x => x.id === id);
+                    if (f) { Object.assign(f, fields); saveMockFolders(); }
+                },
+                deleteNoteFolder: async (id) => {
+                    window.noteFolders = window.noteFolders.filter(x => x.id !== id);
+                    saveMockFolders();
                 }
             };
         };
 
-        // --- Notes Logic ---
+        // --- Notes Logic (favourites + coloured folders) ---
         let currentNoteId = null;
+        let justOpenedFolderId = null;
+        window.noteFolders = window.noteFolders || [];
+
+        const NOTE_FOLDER_COLORS = ['#60a5fa', '#34d399', '#fbbf24', '#f87171', '#a78bfa', '#f472b6', '#22d3ee', '#fb923c'];
+        const OPEN_FOLDERS_KEY = 'notesOpenFolders';
+        let openNoteFolders = new Set();
+        try { openNoteFolders = new Set(JSON.parse(localStorage.getItem(OPEN_FOLDERS_KEY) || '[]')); } catch (e) {}
+        const saveOpenFolders = () => { try { localStorage.setItem(OPEN_FOLDERS_KEY, JSON.stringify([...openNoteFolders])); } catch (e) {} };
+
+        const noteEsc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        const noteDateStr = (iso) => iso ? new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+        const findNote = (id) => (window.userNotes || []).find(n => n.id === id) || null;
+        const folderById = (id) => id ? ((window.noteFolders || []).find(f => f.id === id) || null) : null;
+
+        // ---- Drag a note onto a folder (or onto "Notes" to un-file it) ----
+        const NOTE_DRAG_TYPE = 'application/x-note-id';
+        const makeNoteDropTarget = (el, folderId) => {
+            el.addEventListener('dragover', (e) => {
+                if (![...e.dataTransfer.types].includes(NOTE_DRAG_TYPE)) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                el.classList.add('note-drop-over');
+            });
+            el.addEventListener('dragleave', (e) => { if (!el.contains(e.relatedTarget)) el.classList.remove('note-drop-over'); });
+            el.addEventListener('drop', (e) => {
+                e.preventDefault();
+                el.classList.remove('note-drop-over');
+                const id = e.dataTransfer.getData(NOTE_DRAG_TYPE);
+                if (id) window.moveNoteToFolder(id, folderId);
+            });
+        };
+
+        const sectionLabel = (icon, text, iconClass) => {
+            const el = document.createElement('div');
+            el.className = 'flex items-center text-[10px] font-bold uppercase tracking-wider text-white/40 px-1 pt-4 first:pt-1 pb-1.5';
+            el.innerHTML = `<span data-lucide="${icon}" class="w-3 h-3 mr-1.5 ${iconClass}"></span>${text}`;
+            return el;
+        };
+
+        // context: 'fav' | 'folder' | 'loose'
+        const buildNoteRow = (note, context) => {
+            const folder = folderById(note.folderId);
+            const isActive = currentNoteId === note.id;
+            const row = document.createElement('div');
+            row.className = `note-row flex justify-between items-center p-2.5 cursor-pointer rounded-lg transition-colors group ${isActive ? 'bg-blue-600/30 border border-blue-500/50' : 'bg-white/5 hover:bg-white/10 border border-transparent'}`;
+            row.draggable = true;
+
+            // In Favourites, a note that lives in a folder shows the folder name in grey
+            const subLine = (context === 'fav' && folder)
+                ? `<span class="text-[10px] text-white/40 mt-0.5 flex items-center min-w-0"><span class="inline-flex mr-1 flex-shrink-0" style="color:${folder.color}"><span data-lucide="folder" class="w-3 h-3"></span></span><span class="truncate">${noteEsc(folder.name)}</span></span>`
+                : `<span class="text-[10px] text-white/40 mt-0.5">${noteDateStr(note.updatedAt)}</span>`;
+
+            row.innerHTML = `
+                <div class="flex-1 flex items-start overflow-hidden pr-2 min-w-0">
+                    <span data-lucide="file-text" class="w-4 h-4 mr-2 mt-0.5 text-white/50 flex-shrink-0"></span>
+                    <div class="flex flex-col w-full overflow-hidden min-w-0">
+                        <input type="text" value="${noteEsc(note.title)}" readonly
+                               class="note-title-input bg-transparent outline-none text-white text-sm w-full truncate pointer-events-none border-b border-transparent focus:border-blue-500 transition-colors">
+                        ${subLine}
+                    </div>
+                </div>
+                <div class="flex items-center flex-shrink-0">
+                    <button data-act="fav" class="note-star ${note.favourite ? 'is-fav' : ''} p-1.5 rounded hover:bg-yellow-900/30 transition-colors" title="${note.favourite ? 'Remove from favourites' : 'Add to favourites'}"><span data-lucide="star" class="w-3.5 h-3.5"></span></button>
+                    <div class="note-actions flex space-x-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button data-act="move" class="p-1.5 text-white/60 hover:text-white rounded hover:bg-white/10 transition-colors" title="Move to folder"><span data-lucide="folder-input" class="w-3.5 h-3.5"></span></button>
+                        <button data-act="rename" class="p-1.5 text-blue-400 hover:text-blue-300 rounded hover:bg-blue-900/40 transition-colors" title="Edit Name"><span data-lucide="pencil" class="w-3.5 h-3.5"></span></button>
+                        <button data-act="delete" class="p-1.5 text-red-400 hover:text-red-300 rounded hover:bg-red-900/40 transition-colors" title="Delete Note"><span data-lucide="trash-2" class="w-3.5 h-3.5"></span></button>
+                    </div>
+                </div>`;
+
+            row.addEventListener('click', (e) => {
+                // Don't re-open the note while its title is being renamed
+                if (e.target.classList.contains('note-title-input') && !e.target.readOnly) return;
+                const btn = e.target.closest('button[data-act]');
+                if (!btn) { window.openNote(note.id); return; }
+                e.stopPropagation();
+                const act = btn.dataset.act;
+                if (act === 'fav') window.toggleNoteFavourite(note.id);
+                else if (act === 'move') window.openNoteMoveMenu(note.id, btn);
+                else if (act === 'rename') window.enableNoteTitleEdit(note.id, btn);
+                else if (act === 'delete') window.deleteNote(note.id);
+            });
+            row.addEventListener('dragstart', (e) => {
+                e.dataTransfer.setData(NOTE_DRAG_TYPE, note.id);
+                e.dataTransfer.effectAllowed = 'move';
+                row.classList.add('opacity-50');
+            });
+            row.addEventListener('dragend', () => row.classList.remove('opacity-50'));
+            return row;
+        };
+
+        const buildFolderBlock = (folder, notesIn) => {
+            const isOpen = openNoteFolders.has(folder.id);
+            const current = findNote(currentNoteId);
+            const editingHere = current && current.folderId === folder.id;
+
+            const wrap = document.createElement('div');
+            wrap.className = 'note-folder mb-1.5';
+
+            const header = document.createElement('div');
+            header.className = 'note-folder-header group flex items-center justify-between p-2.5 rounded-lg cursor-pointer';
+            header.style.background = `${folder.color}1f`;
+            header.style.borderLeft = `3px solid ${folder.color}`;
+            header.innerHTML = `
+                <div class="flex items-start min-w-0 flex-1">
+                    <span class="inline-flex mt-0.5 mr-2 flex-shrink-0" style="color:${folder.color}"><span data-lucide="${isOpen ? 'folder-open' : 'folder'}" class="w-4 h-4"></span></span>
+                    <div class="flex flex-col min-w-0">
+                        <span class="text-sm font-semibold text-white truncate">${noteEsc(folder.name)} <span class="text-white/40 font-normal text-xs ml-0.5">${notesIn.length}</span></span>
+                        ${editingHere ? `<span class="text-[11px] text-white/45 truncate flex items-center"><span data-lucide="pencil-line" class="w-3 h-3 mr-1 flex-shrink-0"></span><span class="truncate">${noteEsc(current.title)}</span></span>` : ''}
+                    </div>
+                </div>
+                <div class="flex items-center flex-shrink-0">
+                    <div class="note-actions flex space-x-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button data-act="add" class="p-1.5 text-green-400 hover:text-green-300 rounded hover:bg-white/10 transition-colors" title="New note in this folder"><span data-lucide="plus" class="w-3.5 h-3.5"></span></button>
+                        <button data-act="edit" class="p-1.5 text-white/60 hover:text-white rounded hover:bg-white/10 transition-colors" title="Rename / colour / delete folder"><span data-lucide="settings-2" class="w-3.5 h-3.5"></span></button>
+                    </div>
+                    <span data-lucide="chevron-down" class="w-4 h-4 text-white/50 ml-1 transition-transform ${isOpen ? 'rotate-180' : ''}"></span>
+                </div>`;
+
+            header.addEventListener('click', (e) => {
+                const btn = e.target.closest('button[data-act]');
+                if (btn) {
+                    e.stopPropagation();
+                    if (btn.dataset.act === 'add') window.createNewNote(folder.id);
+                    else window.openNoteFolderModal(folder.id);
+                    return;
+                }
+                window.toggleNoteFolder(folder.id);
+            });
+            makeNoteDropTarget(header, folder.id);
+            wrap.appendChild(header);
+
+            if (isOpen) {
+                const body = document.createElement('div');
+                body.className = 'ml-3 pl-2 mt-1 space-y-1 border-l' + (justOpenedFolderId === folder.id ? ' note-folder-anim' : '');
+                body.style.borderColor = `${folder.color}55`;
+                if (notesIn.length === 0) {
+                    body.innerHTML = `<p class="text-[11px] text-white/35 italic px-2 py-1.5">Empty — drag a note here or press +</p>`;
+                } else {
+                    notesIn.forEach(n => body.appendChild(buildNoteRow(n, 'folder')));
+                }
+                makeNoteDropTarget(body, folder.id);
+                wrap.appendChild(body);
+            }
+            return wrap;
+        };
 
         window.renderNotesSidebar = () => {
             const list = document.getElementById('notes-list-container');
-            if(!list) return;
+            if (!list) return;
+            const notes = window.userNotes || [];
+            const folders = window.noteFolders || [];
+            const folderIds = new Set(folders.map(f => f.id));
             list.innerHTML = '';
-            window.userNotes.forEach(note => {
-                const item = document.createElement('div');
-                item.className = `flex justify-between items-center p-3 cursor-pointer rounded-lg mb-2 transition-colors group ${currentNoteId === note.id ? 'bg-blue-600/30 border border-blue-500/50' : 'bg-white/5 hover:bg-white/10 border border-transparent'}`;
-                
-                // Format the date
-                let dateStr = '';
-                if (note.updatedAt) {
-                    const d = new Date(note.updatedAt);
-                    dateStr = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-                }
 
-                item.innerHTML = `
-                    <div class="flex-1 flex items-start overflow-hidden pr-2">
-                        <span data-lucide="file-text" class="w-4 h-4 mr-2 mt-1 text-white/50 flex-shrink-0"></span>
-                        <div class="flex flex-col w-full overflow-hidden">
-                            <input type="text" id="note-title-input-${note.id}" value="${note.title}" placeholder="${note.title}" class="bg-transparent outline-none text-white text-sm w-full truncate pointer-events-none border-b border-transparent focus:border-blue-500 transition-colors" readonly>
-                            <span class="text-[10px] text-white/40 mt-0.5">${dateStr}</span>
-                        </div>
-                    </div>
-                    <div class="flex space-x-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" id="note-actions-${note.id}">
-                        <button class="p-1.5 text-blue-400 hover:text-blue-300 rounded hover:bg-blue-900/40 transition-colors" onclick="event.stopPropagation(); window.enableNoteTitleEdit('${note.id}')" title="Edit Name"><span data-lucide="pencil" class="w-3.5 h-3.5"></span></button>
-                        <button class="p-1.5 text-red-400 hover:text-red-300 rounded hover:bg-red-900/40 transition-colors" onclick="event.stopPropagation(); window.deleteNote('${note.id}')" title="Delete Note"><span data-lucide="trash-2" class="w-3.5 h-3.5"></span></button>
-                    </div>
-                `;
-                item.onclick = () => window.openNote(note.id);
-                list.appendChild(item);
-            });
-            if(window.lucide) window.lucide.createIcons();
+            // Favourites
+            const favs = notes.filter(n => n.favourite);
+            if (favs.length) {
+                list.appendChild(sectionLabel('star', 'Favourites', 'text-yellow-400'));
+                const favBox = document.createElement('div');
+                favBox.className = 'space-y-1';
+                favs.forEach(n => favBox.appendChild(buildNoteRow(n, 'fav')));
+                list.appendChild(favBox);
+            }
+
+            // Folders
+            if (folders.length) {
+                list.appendChild(sectionLabel('folders', 'Folders', 'text-white/40'));
+                folders.forEach(f => list.appendChild(buildFolderBlock(f, notes.filter(n => n.folderId === f.id))));
+            }
+
+            // Loose notes (also catches notes whose folder was deleted on another device)
+            const loose = notes.filter(n => !n.folderId || !folderIds.has(n.folderId));
+            const looseLabel = sectionLabel('file-text', 'Notes', 'text-white/40');
+            const looseBox = document.createElement('div');
+            looseBox.className = 'space-y-1 min-h-[2.5rem]';
+            if (loose.length) loose.forEach(n => looseBox.appendChild(buildNoteRow(n, 'loose')));
+            else looseBox.innerHTML = `<p class="text-[11px] text-white/35 italic px-2 py-1.5">${notes.length ? 'All notes are in folders' : 'No notes yet — press + to create one'}</p>`;
+            makeNoteDropTarget(looseLabel, null);
+            makeNoteDropTarget(looseBox, null);
+            list.appendChild(looseLabel);
+            list.appendChild(looseBox);
+
+            justOpenedFolderId = null;
+            if (window.lucide) window.lucide.createIcons();
         };
 
-        window.enableNoteTitleEdit = (id) => {
-            const input = document.getElementById(`note-title-input-${id}`);
-            const note = window.userNotes.find(n => n.id === id);
-            
+        window.toggleNoteFolder = (id) => {
+            if (openNoteFolders.has(id)) openNoteFolders.delete(id);
+            else { openNoteFolders.add(id); justOpenedFolderId = id; }
+            saveOpenFolders();
+            window.renderNotesSidebar();
+        };
+
+        window.toggleNoteFavourite = async (id) => {
+            const note = findNote(id);
+            if (note) await window.db.patchNote(id, { favourite: !note.favourite });
+        };
+
+        window.moveNoteToFolder = async (id, folderId) => {
+            const note = findNote(id);
+            if (!note || (note.folderId || null) === (folderId || null)) return;
+            if (folderId) { openNoteFolders.add(folderId); saveOpenFolders(); }
+            await window.db.patchNote(id, { folderId: folderId || null });
+        };
+
+        // ---- "Move to folder" popover (works on touch where drag & drop doesn't) ----
+        const closeNoteMoveMenu = () => document.getElementById('note-move-menu')?.classList.add('hidden');
+
+        window.openNoteMoveMenu = (noteId, anchor) => {
+            const menu = document.getElementById('note-move-menu');
+            const note = findNote(noteId);
+            if (!menu || !note) return;
+            const currentFolder = note.folderId || '';
+            const item = (fid, label, color, icon) => `
+                <button data-folder="${fid || ''}" class="w-full flex items-center px-3 py-2 text-sm text-left rounded-lg hover:bg-white/10 transition-colors ${currentFolder === (fid || '') ? 'text-white font-semibold bg-white/5' : 'text-white/80'}">
+                    <span class="inline-flex mr-2 flex-shrink-0" style="color:${color}"><span data-lucide="${icon}" class="w-4 h-4"></span></span>
+                    <span class="truncate">${noteEsc(label)}</span>
+                </button>`;
+            menu.innerHTML =
+                `<p class="px-3 pt-1 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-white/40">Move to</p>` +
+                item(null, 'No folder', 'rgba(255,255,255,0.5)', 'file-text') +
+                (window.noteFolders || []).map(f => item(f.id, f.name, f.color, 'folder')).join('') +
+                `<div class="border-t border-white/10 my-1"></div>
+                 <button data-new="1" class="w-full flex items-center px-3 py-2 text-sm text-left rounded-lg hover:bg-white/10 text-blue-300 transition-colors">
+                    <span data-lucide="folder-plus" class="w-4 h-4 mr-2"></span>New folder…
+                 </button>`;
+            menu.onclick = (e) => {
+                const b = e.target.closest('button');
+                if (!b) return;
+                e.stopPropagation();
+                closeNoteMoveMenu();
+                if (b.dataset.new) window.openNoteFolderModal(null, noteId);
+                else window.moveNoteToFolder(noteId, b.dataset.folder || null);
+            };
+            menu.classList.remove('hidden');
+            if (window.lucide) window.lucide.createIcons();
+
+            const r = anchor.getBoundingClientRect();
+            const mw = menu.offsetWidth, mh = menu.offsetHeight;
+            const left = Math.max(8, Math.min(r.right - mw, window.innerWidth - mw - 8));
+            let top = r.bottom + 6;
+            if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 6);
+            menu.style.left = `${left}px`;
+            menu.style.top = `${top}px`;
+        };
+
+        // ---- Folder create / edit modal ----
+        let editingFolderId = null;
+        let folderPendingNoteId = null;
+        let folderPickedColor = NOTE_FOLDER_COLORS[0];
+
+        const renderFolderSwatches = () => {
+            const wrap = document.getElementById('note-folder-color-picker');
+            if (!wrap) return;
+            const isCustom = !NOTE_FOLDER_COLORS.includes(folderPickedColor);
+            wrap.innerHTML =
+                NOTE_FOLDER_COLORS.map(c => `<button type="button" class="pm-color-swatch ${c === folderPickedColor ? 'selected' : ''}" data-color="${c}" style="background:${c}"></button>`).join('') +
+                `<label class="pm-color-swatch note-color-custom ${isCustom ? 'selected' : ''}" title="Custom colour" ${isCustom ? `style="background:${folderPickedColor}"` : ''}>
+                    <input type="color" value="${isCustom ? folderPickedColor : '#ffffff'}">
+                 </label>`;
+            wrap.querySelectorAll('button[data-color]').forEach(b => {
+                b.onclick = () => { folderPickedColor = b.dataset.color; renderFolderSwatches(); };
+            });
+            const custom = wrap.querySelector('.note-color-custom');
+            custom.querySelector('input').addEventListener('input', (e) => {
+                folderPickedColor = e.target.value;
+                wrap.querySelectorAll('.pm-color-swatch').forEach(s => s.classList.remove('selected'));
+                custom.classList.add('selected');
+                custom.style.background = folderPickedColor;
+            });
+        };
+
+        window.openNoteFolderModal = (folderId = null, pendingNoteId = null) => {
+            const modal = document.getElementById('note-folder-modal');
+            if (!modal) return;
+            closeNoteMoveMenu();
+            const folder = folderById(folderId);
+            editingFolderId = folder ? folder.id : null;
+            folderPendingNoteId = pendingNoteId;
+            folderPickedColor = folder?.color || NOTE_FOLDER_COLORS[(window.noteFolders || []).length % NOTE_FOLDER_COLORS.length];
+            document.getElementById('note-folder-modal-title').textContent = folder ? 'Edit Folder' : 'New Folder';
+            document.getElementById('note-folder-name').value = folder ? folder.name : '';
+            document.getElementById('note-folder-delete-btn').classList.toggle('hidden', !folder);
+            renderFolderSwatches();
+            modal.classList.remove('opacity-0', 'pointer-events-none');
+            setTimeout(() => document.getElementById('note-folder-name').focus(), 60);
+        };
+
+        const closeNoteFolderModal = () => {
+            document.getElementById('note-folder-modal')?.classList.add('opacity-0', 'pointer-events-none');
+        };
+
+        const saveNoteFolder = async () => {
+            const input = document.getElementById('note-folder-name');
+            const name = input.value.trim();
+            if (!name) { input.focus(); return; }
+            const id = editingFolderId, color = folderPickedColor, pendingNote = folderPendingNoteId;
+            closeNoteFolderModal();
+            if (id) {
+                await window.db.updateNoteFolder(id, { name, color });
+            } else {
+                const newId = await window.db.addNoteFolder(name, color);
+                if (newId) {
+                    openNoteFolders.add(newId);
+                    justOpenedFolderId = newId;
+                    saveOpenFolders();
+                    if (pendingNote) await window.moveNoteToFolder(pendingNote, newId);
+                    window.renderNotesSidebar();
+                }
+            }
+        };
+
+        const deleteNoteFolderFromModal = async () => {
+            if (!editingFolderId) return;
+            const id = editingFolderId;
+            const folder = folderById(id);
+            const inside = (window.userNotes || []).filter(n => n.folderId === id);
+            const msg = `Delete folder "${folder ? folder.name : ''}"?` + (inside.length ? `\nIts ${inside.length} note(s) will be moved to Notes.` : '');
+            if (!confirm(msg)) return;
+            closeNoteFolderModal();
+            await Promise.all(inside.map(n => window.db.patchNote(n.id, { folderId: null })));
+            await window.db.deleteNoteFolder(id);
+            openNoteFolders.delete(id);
+            saveOpenFolders();
+        };
+
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('note-folder-save-btn')?.addEventListener('click', saveNoteFolder);
+            document.getElementById('note-folder-cancel-btn')?.addEventListener('click', closeNoteFolderModal);
+            document.getElementById('note-folder-delete-btn')?.addEventListener('click', deleteNoteFolderFromModal);
+            document.getElementById('note-folder-modal')?.addEventListener('click', (e) => { if (e.target === e.currentTarget) closeNoteFolderModal(); });
+            document.getElementById('note-folder-name')?.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); saveNoteFolder(); }
+                if (e.key === 'Escape') closeNoteFolderModal();
+            });
+            document.getElementById('notes-list-container')?.addEventListener('scroll', closeNoteMoveMenu);
+            document.getElementById('close-notes-app-btn')?.addEventListener('click', closeNoteMoveMenu);
+        });
+        document.addEventListener('click', (e) => { if (!e.target.closest('#note-move-menu')) closeNoteMoveMenu(); });
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeNoteMoveMenu(); });
+
+        // ---- Note actions ----
+        window.enableNoteTitleEdit = (id, el) => {
+            const row = el?.closest('.note-row');
+            const input = row?.querySelector('.note-title-input');
+            const note = findNote(id);
+            if (!input || !note) return;
+
+            row.draggable = false;
             input.readOnly = false;
             input.classList.remove('pointer-events-none');
-            
-            // Auto-clear but keep old title as placeholder
-            input.placeholder = note.title; 
-            input.value = ''; 
+            input.placeholder = note.title;
+            input.value = '';
             input.focus();
-            
+
+            let done = false;
             const finishEdit = async () => {
+                if (done) return;
+                done = true;
                 input.readOnly = true;
                 input.classList.add('pointer-events-none');
-                
-                // Use typed value, or default to "New Note" if left entirely empty
-                const newTitle = input.value.trim() || "New Note"; 
-                
-                if (note && note.title !== newTitle) {
-                    await window.db.updateNote(id, newTitle, note.content);
+                const newTitle = input.value.trim() || 'New Note';
+                if (note.title !== newTitle) {
+                    // Only patch the title so unsaved editor content is never overwritten
+                    await window.db.patchNote(id, { title: newTitle, updatedAt: new Date().toISOString() });
                 } else {
-                    // Revert visually if it wasn't a meaningful change
-                    input.value = newTitle; 
+                    input.value = newTitle;
                 }
             };
-
             input.onblur = finishEdit;
-            input.onkeydown = (e) => { if(e.key === 'Enter') input.blur(); };
+            input.onkeydown = (e) => {
+                if (e.key === 'Enter') input.blur();
+                if (e.key === 'Escape') { input.value = note.title; input.blur(); }
+            };
         };
 
         window.deleteNote = async (id) => {
-            if(confirm('Delete this note?')) {
-                if (currentNoteId === id) { 
-                    currentNoteId = null; 
-                    document.getElementById('current-note-content').value = ''; 
-                    document.getElementById('current-note-content').disabled = true; 
-                    document.getElementById('note-empty-state').classList.remove('hidden'); 
+            if (confirm('Delete this note?')) {
+                if (currentNoteId === id) {
+                    currentNoteId = null;
+                    window.noteEditor.cancelAutosave();
+                    window.noteEditor.clear();
+                    document.getElementById('note-empty-state').classList.remove('hidden');
                 }
                 await window.db.deleteNote(id);
             }
         };
 
         window.openNote = async (id) => {
-            await window.saveCurrentNote(); 
+            if (await window.saveCurrentNote() === false) return;
             currentNoteId = id;
-            const note = window.userNotes.find(n => n.id === id);
-            const textarea = document.getElementById('current-note-content');
+            const note = findNote(id);
             const emptyState = document.getElementById('note-empty-state');
-            
             if (note) {
-                textarea.value = note.content;
-                textarea.disabled = false;
+                window.noteEditor.load(note.content || '', note.images || [], note.styles || '', note.imageSizes || []);
+                window.noteEditor.setEnabled(true);
                 emptyState.classList.add('hidden');
-                textarea.focus();
+                window.noteEditor.focus();
             }
-            window.renderNotesSidebar(); 
+            window.renderNotesSidebar();
         };
 
-        window.saveCurrentNote = async () => {
-            if (!currentNoteId) return;
-            const textarea = document.getElementById('current-note-content');
-            const content = textarea.value;
-            const note = window.userNotes.find(n => n.id === currentNoteId);
-            if (note && note.content !== content) {
-                await window.db.updateNote(currentNoteId, note.title, content);
+        // Firestore caps a document at 1 MiB, so leave a little headroom
+        const NOTE_MAX_BYTES = 1000000;
+
+        // Returns false when the note could not be saved (caller should not close/switch)
+        window.saveCurrentNote = async (opts = {}) => {
+            const ed = window.noteEditor;
+            if (!currentNoteId || !ed || !ed.isDirty()) return true;
+            const note = findNote(currentNoteId);
+            if (!note) return true;
+            const id = currentNoteId;
+            const rev = ed.rev();
+            const { content, images, imageSizes, styles, bytes } = ed.getValue();
+            if (bytes > NOTE_MAX_BYTES) {
+                ed.setSaveStatus('error', `Too large to save (${Math.round(bytes / 1024)} KB of ~${Math.round(NOTE_MAX_BYTES / 1024)} KB) – remove an image`);
+                if (!opts.silent) alert('This note is too large to save (a note can hold about 1 MB, images included).\n\nRemove or shrink an image, then try again.');
+                return false;
             }
+            const fields = { content, images, imageSizes, styles, updatedAt: new Date().toISOString() };
+            Object.assign(note, fields);
+            ed.markSaved(rev);
+            Promise.resolve()
+                .then(() => window.db.patchNote(id, fields))
+                .then(ok => { if (ok === false && currentNoteId === id) ed.markFailed(); })
+                .catch(err => { console.error(err); if (currentNoteId === id) ed.markFailed(); });
+            return true;
         };
 
-        window.createNewNote = async () => {
-            await window.saveCurrentNote();
-            const id = await window.db.addNote("New Note", "");
-            await window.openNote(id);
+        window.createNewNote = async (folderId = null) => {
+            if (await window.saveCurrentNote() === false) return;
+            const id = await window.db.addNote('New Note', '', folderId ? { folderId } : {});
+            if (folderId) { openNoteFolders.add(folderId); saveOpenFolders(); }
+            if (id) await window.openNote(id);
         };
 
+
+        // --- Note editor (code-editor shortcuts + rich text + pasted images) ---
+        // The note is kept as a "doc": plain text (t) plus one style key per character (s).
+        // Each image is one private-use character in the text that maps to its <img>, so line
+        // operations (indent, move line, ...) carry images and formatting along automatically.
+        window.noteEditor = (() => {
+            const INDENT = '    ';
+            const TAB = INDENT.length;
+            const KEY_FIRST = 0xE000, KEY_LAST = 0xF8FF;
+            const OBJ = '￼';               // image placeholder used when saving
+            const MAX_IMG_SIDE = 1400;          // px, longest side after compression
+            const TARGET_IMG_CHARS = 250000;    // ~250 KB of base64 per image
+            const MIN_IMG_W = 32;
+            const IMG_STEP = 1.2;
+            const SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 28, 32, 36, 40, 48, 60, 72];
+            const PAIRS = { '(': ')', '[': ']', '{': '}' };
+            const CLOSERS = new Set([')', ']', '}']);
+            const FONT_KEY = 'notesMonoFont';
+
+            let el = null, wrap = null, statusPos = null, statusSave = null, sizeDisplay = null;
+            let imgMap = new Map();     // key char -> <img>
+            let imgW = new Map();       // key char -> width in px (absent = natural size)
+            let nextKey = KEY_FIRST;
+            let undoStack = [], redoStack = [], lastRecord = { t: 0, kind: '' };
+            let enabled = false, composing = false;
+            let rev = 0, savedRev = 0, saveTimer = null;
+            let pending = null;         // { pos, key } style to use for the next typed text (after Ctrl+B etc. with no selection)
+
+            // ---------- style keys ----------
+            const parseCache = new Map();
+            const parseKey = (key) => {
+                if (!key) return {};
+                let o = parseCache.get(key);
+                if (!o) {
+                    o = {};
+                    for (const part of key.split(',')) {
+                        if (part[0] === 'z') o.z = parseInt(part.slice(1), 10) || undefined;
+                        else if (part) o[part] = 1;
+                    }
+                    parseCache.set(key, o);
+                }
+                return { ...o };
+            };
+            const keyOf = (o) => [o.b && 'b', o.i && 'i', o.u && 'u', o.s && 's', o.z && ('z' + o.z)].filter(Boolean).join(',');
+            const applyStyle = (node, key) => {
+                const o = parseKey(key);
+                node.style.fontWeight = o.b ? '700' : '';
+                node.style.fontStyle = o.i ? 'italic' : '';
+                node.style.textDecorationLine = [o.u && 'underline', o.s && 'line-through'].filter(Boolean).join(' ');
+                node.style.fontSize = o.z ? o.z + 'px' : '';
+            };
+            const baseSize = () => Math.round(parseFloat(getComputedStyle(el).fontSize) || 16);
+
+            // ---------- doc helpers ----------
+            const D = (t, s) => ({ t, s });
+            const sub = (d, a, b = d.t.length) => D(d.t.slice(a, b), d.s.slice(a, b));
+            const txt = (str, key = '') => D(str, new Array(str.length).fill(key));
+            const cat = (...parts) => {
+                let t = '';
+                const s = [];
+                for (const p of parts) { t += p.t; for (const k of p.s) s.push(k); }
+                return D(t, s);
+            };
+            const isImgKey = (ch) => !!ch && ch.length === 1 && imgMap.has(ch);
+            const newKey = () => {
+                while (nextKey < KEY_LAST && imgMap.has(String.fromCharCode(nextKey))) nextKey++;
+                return String.fromCharCode(nextKey++);
+            };
+            const applyImgWidth = (img, key) => { const w = imgW.get(key); img.style.width = w ? w + 'px' : ''; };
+            const makeImg = (src, key, width) => {
+                const img = document.createElement('img');
+                img.src = src;
+                img.className = 'note-img';
+                img.draggable = false;
+                img.alt = '';
+                img.dataset.k = key;
+                imgMap.set(key, img);
+                if (width) imgW.set(key, width);
+                applyImgWidth(img, key);
+                return img;
+            };
+            const isSentinel = (n) => !!n && n.nodeName === 'BR' && n.dataset && n.dataset.sentinel === '1';
+            const isRun = (n) => n.nodeName === 'SPAN' && n.classList.contains('nr');
+            const BLOCK_RE = /^(DIV|P|LI|UL|OL|H[1-6]|PRE|BLOCKQUOTE|SECTION|ARTICLE|TABLE|TR)$/;
+
+            // Formatting the browser may add by itself (e.g. after deleting a styled run)
+            const styleFromEl = (n, inh) => {
+                const o = { ...inh };
+                if (isRun(n)) return Object.assign(o, parseKey(n.dataset.s || ''));
+                const tag = n.nodeName;
+                if (tag === 'B' || tag === 'STRONG') o.b = 1;
+                if (tag === 'I' || tag === 'EM') o.i = 1;
+                if (tag === 'U') o.u = 1;
+                if (tag === 'S' || tag === 'STRIKE' || tag === 'DEL') o.s = 1;
+                const st = n.style;
+                if (st) {
+                    const fw = st.fontWeight;
+                    if (fw === 'bold' || parseInt(fw, 10) >= 600) o.b = 1;
+                    if (st.fontStyle === 'italic') o.i = 1;
+                    const td = (st.textDecorationLine || st.textDecoration || '');
+                    if (td.includes('underline')) o.u = 1;
+                    if (td.includes('line-through')) o.s = 1;
+                    if (st.fontSize && st.fontSize.endsWith('px')) { const z = Math.round(parseFloat(st.fontSize)); if (z) o.z = z; }
+                }
+                return o;
+            };
+            // Reads a doc out of any DOM
+            const readFrom = (root, assignKeys) => {
+                let t = '';
+                const s = [];
+                const push = (str, key) => { t += str; for (let i = 0; i < str.length; i++) s.push(key); };
+                const walk = (node, inh) => {
+                    for (const n of node.childNodes) {
+                        if (n.nodeType === 3) push(n.data.replace(/ /g, ' ').replace(/​/g, ''), keyOf(inh));
+                        else if (n.nodeName === 'IMG') {
+                            if (!assignKeys) { push(n.dataset.k || OBJ, ''); continue; }
+                            let k = n.dataset.k;
+                            if (!k || (imgMap.has(k) && imgMap.get(k) !== n)) {
+                                const old = k && imgW.get(k);
+                                k = newKey();
+                                n.dataset.k = k;
+                                if (old) imgW.set(k, old);
+                            }
+                            imgMap.set(k, n);
+                            push(k, '');
+                        } else if (n.nodeName === 'BR') { if (!isSentinel(n)) push('\n', keyOf(inh)); }
+                        else if (n.nodeType === 1) {
+                            if (BLOCK_RE.test(n.nodeName) && t.length && !t.endsWith('\n')) push('\n', keyOf(inh));
+                            walk(n, styleFromEl(n, inh));
+                        }
+                    }
+                };
+                walk(root, {});
+                return D(t, s);
+            };
+            const readDoc = () => readFrom(el, true);
+
+            const nodeLen = (n) => {
+                if (n.nodeType === 3) return n.data.length;
+                if (n.nodeName === 'IMG') return 1;
+                if (isRun(n)) return n.textContent.length;
+                if (n.nodeName === 'BR' && !isSentinel(n)) return 1;
+                return 0;
+            };
+            const isFlat = () => {
+                const kids = el.childNodes;
+                for (let i = 0; i < kids.length; i++) {
+                    const n = kids[i];
+                    if (n.nodeType === 3) { if (n.data.includes('​')) return false; continue; }
+                    if (n.nodeName === 'IMG' && n.dataset.k && imgMap.get(n.dataset.k) === n) continue;
+                    if (isRun(n) && n.childNodes.length === 1 && n.firstChild.nodeType === 3 && n.firstChild.data.length && !n.firstChild.data.includes('​')) continue;
+                    if (isSentinel(n) && i === kids.length - 1) continue;
+                    return false;
+                }
+                return true;
+            };
+
+            const render = (d) => {
+                const frag = document.createDocumentFragment();
+                const used = new Set();
+                const n = d.t.length;
+                let i = 0;
+                while (i < n) {
+                    const ch = d.t[i];
+                    if (isImgKey(ch)) {
+                        let img = imgMap.get(ch);
+                        if (used.has(ch)) img = makeImg(img.getAttribute('src'), newKey(), imgW.get(ch)); // duplicated line → copy image
+                        used.add(ch);
+                        frag.appendChild(img);
+                        i++;
+                        continue;
+                    }
+                    const key = d.s[i] || '';
+                    let j = i + 1;
+                    while (j < n && (d.s[j] || '') === key && !isImgKey(d.t[j])) j++;
+                    const str = d.t.slice(i, j);
+                    if (!key) frag.appendChild(document.createTextNode(str));
+                    else {
+                        const span = document.createElement('span');
+                        span.className = 'nr';
+                        span.dataset.s = key;
+                        applyStyle(span, key);
+                        span.textContent = str;
+                        frag.appendChild(span);
+                    }
+                    i = j;
+                }
+                if (d.t.endsWith('\n')) { const br = document.createElement('br'); br.dataset.sentinel = '1'; frag.appendChild(br); }
+                const top = el.scrollTop;
+                el.replaceChildren(frag);
+                el.scrollTop = top;
+                updatePlaceholder(d.t);
+            };
+
+            // ---------- selection <-> offsets ----------
+            const posOf = (node, offset) => {
+                if (node !== el && !el.contains(node)) return null;
+                if (isFlat()) {
+                    let pos = 0;
+                    if (node === el) { for (let i = 0; i < offset; i++) pos += nodeLen(el.childNodes[i]); return pos; }
+                    const top = node.parentNode === el ? node : (node.parentNode && node.parentNode.parentNode === el ? node.parentNode : null);
+                    if (top) {
+                        for (let n = el.firstChild; n && n !== top; n = n.nextSibling) pos += nodeLen(n);
+                        if (node.nodeType === 3) return pos + offset;
+                        if (isRun(node)) return pos + (offset > 0 ? nodeLen(node) : 0);
+                        return pos;
+                    }
+                }
+                const r = document.createRange();
+                r.setStart(el, 0);
+                r.setEnd(node, offset);
+                return readFrom(r.cloneContents(), false).t.length;
+            };
+            // Where to put the caret for a text offset. At the boundary between two runs the
+            // caret joins the run on the left (so typing continues its style), except at the
+            // start of a line, where it joins the run on the right.
+            const domAt = (pos, t) => {
+                const preferRight = pos === 0 || (t ? t[pos - 1] === '\n' : false);
+                const kids = el.childNodes;
+                for (let i = 0; i < kids.length; i++) {
+                    const n = kids[i];
+                    if (isSentinel(n)) return [el, i];
+                    const L = nodeLen(n);
+                    if (n.nodeType === 3 || isRun(n)) {
+                        const tn = n.nodeType === 3 ? n : n.firstChild;
+                        const next = kids[i + 1];
+                        const goRight = preferRight && next && !isSentinel(next);
+                        // Never leave the caret right after a line break at the end of a node:
+                        // Chrome would type outside the run there.
+                        const endsWithBreak = L > 0 && tn.data.endsWith('\n');
+                        if (pos < L || (pos === L && !goRight && !endsWithBreak)) return [tn, pos];
+                        pos -= L;
+                    } else {
+                        if (pos === 0) return [el, i];
+                        pos -= L;
+                    }
+                }
+                return [el, kids.length];
+            };
+            const getSel = () => {
+                const sel = window.getSelection();
+                let a = null, f = null;
+                if (sel && sel.rangeCount && el.contains(sel.anchorNode) && el.contains(sel.focusNode)) {
+                    a = posOf(sel.anchorNode, sel.anchorOffset);
+                    f = posOf(sel.focusNode, sel.focusOffset);
+                }
+                if (a === null || f === null) { const len = readDoc().t.length; a = f = len; }
+                return { a, f, start: Math.min(a, f), end: Math.max(a, f) };
+            };
+            const setSel = (a, f = a, t) => {
+                if (t === undefined) t = readDoc().t;
+                const sel = window.getSelection();
+                const [an, ao] = domAt(a, t), [fn, fo] = domAt(f, t);
+                try { sel.setBaseAndExtent(an, ao, fn, fo); } catch (e) { /* ignore */ }
+            };
+
+            // Scrolls so the caret at `pos` stays visible. A temporary marker is measured because
+            // a collapsed range right after a line break reports the wrong line in Chrome.
+            const revealPos = (pos, t) => {
+                const [n, o] = domAt(pos, t);
+                const mark = document.createElement('span');
+                mark.textContent = '​';
+                let rect = null;
+                if (n.nodeType === 3) {
+                    const after = n.splitText(o);
+                    n.parentNode.insertBefore(mark, after);
+                    rect = mark.getBoundingClientRect();
+                    mark.remove();
+                    n.data += after.data;
+                    after.remove();
+                } else {
+                    n.insertBefore(mark, n.childNodes[o] || null);
+                    rect = mark.getBoundingClientRect();
+                    mark.remove();
+                }
+                if (!rect || (!rect.top && !rect.bottom)) return;
+                const box = el.getBoundingClientRect();
+                const margin = Math.min(64, box.height / 4);
+                if (rect.bottom > box.bottom - margin) el.scrollTop += rect.bottom - (box.bottom - margin);
+                else if (rect.top < box.top + 12) el.scrollTop -= (box.top + 12) - rect.top;
+            };
+
+            // Repairs the DOM after native typing (browsers sometimes add <br>/<div>/<b>)
+            const fixUp = () => {
+                if (el.childNodes.length === 1 && el.firstChild.nodeName === 'BR' && !isSentinel(el.firstChild)) el.replaceChildren();
+                if (!isFlat()) {
+                    const s = getSel();
+                    const d = readDoc();
+                    render(d);
+                    setSel(s.a, s.f, d.t);
+                    return;
+                }
+                const t = readDoc().t;
+                const want = t.endsWith('\n'), has = isSentinel(el.lastChild);
+                if (want !== has) {
+                    const s = getSel();
+                    if (want) { const br = document.createElement('br'); br.dataset.sentinel = '1'; el.appendChild(br); }
+                    else el.lastChild.remove();
+                    setSel(s.a, s.f, t);
+                }
+                updatePlaceholder(t);
+            };
+
+            // ---------- undo / redo ----------
+            const snap = () => { const s = getSel(); return { d: readDoc(), w: new Map(imgW), a: s.a, f: s.f }; };
+            const pushUndo = (kind, snapshot) => {
+                const now = Date.now();
+                const merge = (kind === 'type' || kind === 'delete') && lastRecord.kind === kind && now - lastRecord.t < 800;
+                lastRecord = { t: now, kind };
+                if (merge) return;
+                undoStack.push(typeof snapshot === 'function' ? snapshot() : snapshot);
+                if (undoStack.length > 300) undoStack.shift();
+                redoStack = [];
+            };
+            const restore = (sn) => {
+                imgW = new Map(sn.w);
+                render(sn.d);
+                imgMap.forEach((img, k) => applyImgWidth(img, k));
+                revealPos(sn.f, sn.d.t);
+                setSel(sn.a, sn.f, sn.d.t);
+                changed();
+            };
+            const undo = () => {
+                if (!undoStack.length) return;
+                fixUp();
+                redoStack.push(snap());
+                lastRecord = { t: 0, kind: 'undo' };
+                restore(undoStack.pop());
+            };
+            const redo = () => {
+                if (!redoStack.length) return;
+                fixUp();
+                undoStack.push(snap());
+                lastRecord = { t: 0, kind: 'redo' };
+                restore(redoStack.pop());
+            };
+
+            // Runs fn(doc, sel) → { d, a, f } and applies it as one undoable step
+            const edit = (fn, kind = 'op') => {
+                if (!enabled) return false;
+                fixUp();
+                const s = getSel();
+                const d = readDoc();
+                const r = fn(d, s);
+                if (!r) return false;
+                pushUndo(kind, { d, w: new Map(imgW), a: s.a, f: s.f });
+                const f = r.f ?? r.a;
+                render(r.d);
+                revealPos(f, r.d.t);
+                setSel(r.a, f, r.d.t);
+                changed();
+                return true;
+            };
+
+            // ---------- line helpers ----------
+            const lineStart = (t, i) => i <= 0 ? 0 : t.lastIndexOf('\n', i - 1) + 1;
+            const lineEnd = (t, i) => { const j = t.indexOf('\n', i); return j < 0 ? t.length : j; };
+            const leadOf = (t, ls) => t.slice(ls, lineEnd(t, ls)).match(/^[ \t]*/)[0];
+            const lineRange = (t, s) => {
+                const ls = lineStart(t, s.start);
+                let endPos = s.end;
+                if (s.end > s.start && s.end === lineStart(t, s.end)) endPos = s.end - 1;
+                return [ls, lineEnd(t, Math.max(endPos, ls))];
+            };
+            const isImgSel = (t, s) => s.end - s.start === 1 && isImgKey(t[s.start]);
+            // Style that newly typed text at `pos` gets
+            const styleAt = (d, pos) => {
+                if (pending && pending.pos === pos) return pending.key;
+                const prev = d.t[pos - 1], next = d.t[pos];
+                if (pos > 0 && prev !== '\n' && !isImgKey(prev)) return d.s[pos - 1] || '';
+                if (next !== undefined && next !== '\n' && !isImgKey(next)) return d.s[pos] || '';
+                if (pos > 0 && !isImgKey(prev)) return d.s[pos - 1] || '';
+                return '';
+            };
+            const insertAt = (d, s, part, keepSelection) => {
+                const nd = cat(sub(d, 0, s.start), part, sub(d, s.end));
+                const L = part.t.length;
+                return keepSelection ? { d: nd, a: s.a + L, f: s.f + L } : { d: nd, a: s.start + L };
+            };
+            const applyEdits = (d, edits) => {
+                const parts = [];
+                let last = 0;
+                for (const e of edits) {
+                    parts.push(sub(d, last, e.at));
+                    if (e.ins) {
+                        const k = d.t[e.at] && d.t[e.at] !== '\n' && !isImgKey(d.t[e.at]) ? d.s[e.at] : '';
+                        parts.push(txt(e.ins, k || ''));
+                    }
+                    last = e.at + e.del;
+                }
+                parts.push(sub(d, last));
+                return cat(...parts);
+            };
+            const mapPos = (p, edits, moveAtEdge) => {
+                let shift = 0;
+                for (const e of edits) {
+                    if (p < e.at) break;
+                    if (p === e.at && e.del === 0 && !moveAtEdge) break;
+                    if (p >= e.at + e.del) shift += e.ins.length - e.del;
+                    else shift += (e.at - p) + e.ins.length;
+                }
+                return p + shift;
+            };
+            const shiftLines = (d, s, dir) => {
+                const t = d.t;
+                const [ls, le] = lineRange(t, s);
+                const multi = t.slice(ls, le).includes('\n');
+                const edits = [];
+                let p = ls;
+                while (true) {
+                    const e = lineEnd(t, p);
+                    const line = t.slice(p, e);
+                    if (dir > 0) {
+                        if (!(multi && line.length === 0)) edits.push({ at: p, del: 0, ins: INDENT });
+                    } else {
+                        let del = 0;
+                        if (line[0] === '\t') del = 1;
+                        else {
+                            const m = line.match(/^ */)[0].length;
+                            if (m) del = m - Math.floor((m - 1) / TAB) * TAB;
+                        }
+                        if (del) edits.push({ at: p, del, ins: '' });
+                    }
+                    if (e >= le) break;
+                    p = e + 1;
+                }
+                if (!edits.length) return null;
+                const collapsed = s.a === s.f;
+                return {
+                    d: applyEdits(d, edits),
+                    a: mapPos(s.a, edits, collapsed || s.a > s.f),
+                    f: mapPos(s.f, edits, collapsed || s.f > s.a)
+                };
+            };
+
+            // ---------- editing commands ----------
+            const cmdTab = () => edit((d, s) => {
+                if (s.start === s.end || isImgSel(d.t, s)) {
+                    const col = s.start - lineStart(d.t, s.start);
+                    const ins = ' '.repeat(TAB - (col % TAB));
+                    return insertAt(d, { ...s, end: s.start }, txt(ins, styleAt(d, s.start)), true);
+                }
+                return shiftLines(d, s, 1);
+            });
+            const cmdIndent = () => edit((d, s) => shiftLines(d, s, 1));
+            const cmdOutdent = () => edit((d, s) => shiftLines(d, s, -1));
+
+            const cmdEnter = () => edit((d, s) => {
+                const t = d.t;
+                const ls = lineStart(t, s.start);
+                const indent = leadOf(t, ls).slice(0, Math.max(0, s.start - ls));
+                const key = styleAt(d, s.start);
+                if (isImgSel(t, s)) return insertAt(d, { ...s, end: s.start }, txt('\n' + indent, key), true); // push image down
+                const before = t[s.start - 1], after = t[s.end];
+                if (PAIRS[before]) {
+                    const first = '\n' + indent + INDENT;
+                    if (after === PAIRS[before]) {
+                        const nd = cat(sub(d, 0, s.start), txt(first + '\n' + indent, key), sub(d, s.end));
+                        return { d: nd, a: s.start + first.length };
+                    }
+                    return insertAt(d, s, txt(first, key));
+                }
+                return insertAt(d, s, txt('\n' + indent, key));
+            }, 'enter');
+
+            const cmdInsertLine = (dir) => edit((d, s) => {
+                const t = d.t;
+                const ls = lineStart(t, s.f), le = lineEnd(t, s.f);
+                const indent = leadOf(t, ls);
+                if (dir > 0) {
+                    const ins = '\n' + indent;
+                    return { d: cat(sub(d, 0, le), txt(ins, styleAt(d, le)), sub(d, le)), a: le + ins.length };
+                }
+                return { d: cat(sub(d, 0, ls), txt(indent + '\n', styleAt(d, ls)), sub(d, ls)), a: ls + indent.length };
+            });
+
+            const cmdMoveLines = (dir) => edit((d, s) => {
+                const t = d.t;
+                const [ls, le] = lineRange(t, s);
+                const block = sub(d, ls, le);
+                if (dir < 0) {
+                    if (ls === 0) return null;
+                    const ps = lineStart(t, ls - 1);
+                    const prev = sub(d, ps, ls - 1), nl = sub(d, ls - 1, ls);
+                    const dd = prev.t.length + 1;
+                    return { d: cat(sub(d, 0, ps), block, nl, prev, sub(d, le)), a: s.a - dd, f: s.f - dd };
+                }
+                if (le >= t.length) return null;
+                const ne = lineEnd(t, le + 1);
+                const next = sub(d, le + 1, ne), nl = sub(d, le, le + 1);
+                const dd = next.t.length + 1;
+                return { d: cat(sub(d, 0, ls), next, nl, block, sub(d, ne)), a: s.a + dd, f: s.f + dd };
+            });
+
+            const cmdCopyLines = (dir) => edit((d, s) => {
+                const [ls, le] = lineRange(d.t, s);
+                const block = sub(d, ls, le);
+                const nl = txt('\n', block.s[block.s.length - 1] || '');
+                if (dir < 0) return { d: cat(sub(d, 0, ls), block, nl, sub(d, ls)), a: s.a, f: s.f };
+                const dd = block.t.length + 1;
+                return { d: cat(sub(d, 0, le), nl, block, sub(d, le)), a: s.a + dd, f: s.f + dd };
+            });
+
+            const cmdDeleteLines = () => edit((d, s) => {
+                const t = d.t;
+                const [ls, le] = lineRange(t, s);
+                let from = ls, to = le;
+                if (to < t.length) to++; else if (from > 0) from--;
+                const nd = cat(sub(d, 0, from), sub(d, to));
+                const col = s.f - lineStart(t, s.f);
+                const p = Math.min(lineStart(nd.t, from), nd.t.length);
+                return { d: nd, a: p + Math.min(col, lineEnd(nd.t, p) - p) };
+            });
+
+            const cmdSelectLine = () => {
+                fixUp();
+                const s = getSel(), t = readDoc().t;
+                const start = lineStart(t, s.start);
+                const e = lineEnd(t, s.end);
+                const end = Math.min(e + 1, t.length);
+                revealPos(end, t);
+                setSel(start, end, t);
+            };
+
+            const caretTop = (pos, t) => {
+                const [n, o] = domAt(pos, t);
+                const r = document.createRange();
+                try { r.setStart(n, o); r.collapse(true); } catch (e) { return null; }
+                const rect = r.getClientRects()[0];
+                return rect ? rect.top : null;
+            };
+            const cmdHome = (extend) => {
+                fixUp();
+                const s = getSel(), t = readDoc().t;
+                const ls = lineStart(t, s.f);
+                const first = ls + leadOf(t, ls).length;
+                if (first === ls) return false;                 // no indentation → normal Home
+                const a = caretTop(s.f, t), b = caretTop(ls, t);
+                if (a !== null && b !== null && Math.abs(a - b) > 4) return false; // on a wrapped row → normal Home
+                const target = s.f === first ? ls : first;
+                setSel(extend ? s.a : target, target, t);
+                return true;
+            };
+
+            const cmdBackspace = () => edit((d, s) => {
+                if (s.start !== s.end || s.start === 0) return null;
+                const t = d.t, p = s.start;
+                const before = t.slice(lineStart(t, p), p);
+                if (before.length > 1 && /^ +$/.test(before)) { // delete back to the previous tab stop
+                    const n = before.length - Math.floor((before.length - 1) / TAB) * TAB;
+                    return { d: cat(sub(d, 0, p - n), sub(d, p)), a: p - n };
+                }
+                if (PAIRS[t[p - 1]] && t[p] === PAIRS[t[p - 1]]) return { d: cat(sub(d, 0, p - 1), sub(d, p + 1)), a: p - 1 };
+                return null;
+            }, 'delete');
+
+            const cmdOpenBracket = (k) => edit((d, s) => {
+                const close = PAIRS[k];
+                const key = styleAt(d, s.start);
+                if (s.start !== s.end) {
+                    if (isImgSel(d.t, s)) return null;
+                    const nd = cat(sub(d, 0, s.start), txt(k, key), sub(d, s.start, s.end), txt(close, key), sub(d, s.end));
+                    return { d: nd, a: s.start + 1, f: s.end + 1 };
+                }
+                const next = d.t[s.start];
+                if (next !== undefined && !/[\s)\]}]/.test(next)) return null;
+                return { d: cat(sub(d, 0, s.start), txt(k + close, key), sub(d, s.start)), a: s.start + 1 };
+            }, 'type');
+
+            const cmdCloseBracket = (k) => {
+                fixUp();
+                const s = getSel(), t = readDoc().t;
+                if (s.start !== s.end || t[s.start] !== k) return false;
+                setSel(s.start + 1, s.start + 1, t);
+                return true;
+            };
+
+            const cmdSpaceOnImage = () => edit((d, s) => isImgSel(d.t, s)
+                ? insertAt(d, { ...s, end: s.start }, txt(' ', styleAt(d, s.start)), true)
+                : null, 'type');
+
+            const typeWithPending = (str) => edit((d, s) => insertAt(d, s, txt(str, pending ? pending.key : styleAt(d, s.start))), 'type');
+
+            // ---------- formatting ----------
+            const styledIdx = (d, s) => {
+                const all = [];
+                for (let i = s.start; i < s.end; i++) if (!isImgKey(d.t[i])) all.push(i);
+                const visible = all.filter(i => d.t[i] !== '\n');
+                return { all, visible: visible.length ? visible : all };
+            };
+            const setPending = (key, pos) => { pending = { key, pos }; updateToolbar(); };
+
+            const cmdToggle = (attr) => {
+                if (!enabled) return;
+                fixUp();
+                const s = getSel();
+                const d = readDoc();
+                if (s.start === s.end) {
+                    const o = parseKey(styleAt(d, s.start));
+                    if (o[attr]) delete o[attr]; else o[attr] = 1;
+                    setPending(keyOf(o), s.start);
+                    return;
+                }
+                edit((dd, ss) => {
+                    const { all, visible } = styledIdx(dd, ss);
+                    if (!all.length) return null;
+                    const on = !visible.every(i => parseKey(dd.s[i])[attr]);
+                    const ns = dd.s.slice();
+                    for (const i of all) { const o = parseKey(ns[i]); if (on) o[attr] = 1; else delete o[attr]; ns[i] = keyOf(o); }
+                    return { d: D(dd.t, ns), a: ss.a, f: ss.f };
+                }, 'format');
+            };
+
+            const stepSize = (cur, dir) => {
+                if (dir > 0) return SIZES.find(z => z > cur) ?? SIZES[SIZES.length - 1];
+                for (let i = SIZES.length - 1; i >= 0; i--) if (SIZES[i] < cur) return SIZES[i];
+                return SIZES[0];
+            };
+            const cmdFontSize = (dir) => {
+                if (!enabled) return;
+                fixUp();
+                const s = getSel();
+                const d = readDoc();
+                if (isImgSel(d.t, s)) { resizeImage(dir); return; }
+                const base = baseSize();
+                if (s.start === s.end) {
+                    const o = parseKey(styleAt(d, s.start));
+                    const z = stepSize(o.z || base, dir);
+                    if (z === base) delete o.z; else o.z = z;
+                    setPending(keyOf(o), s.start);
+                    return;
+                }
+                edit((dd, ss) => {
+                    const { all } = styledIdx(dd, ss);
+                    if (!all.length) return null;
+                    const ns = dd.s.slice();
+                    for (const i of all) {
+                        const o = parseKey(ns[i]);
+                        const z = stepSize(o.z || base, dir);
+                        if (z === base) delete o.z; else o.z = z;
+                        ns[i] = keyOf(o);
+                    }
+                    return { d: D(dd.t, ns), a: ss.a, f: ss.f };
+                }, 'format');
+            };
+
+            const cmdClearFormat = () => {
+                if (!enabled) return;
+                fixUp();
+                const s = getSel();
+                const d = readDoc();
+                if (isImgSel(d.t, s)) { resizeImage(0); return; }
+                if (s.start === s.end) { setPending('', s.start); return; }
+                edit((dd, ss) => {
+                    const ns = dd.s.slice();
+                    for (let i = ss.start; i < ss.end; i++) ns[i] = '';
+                    return { d: D(dd.t, ns), a: ss.a, f: ss.f };
+                }, 'format');
+            };
+
+            // ---------- image sizing ----------
+            const contentWidth = () => {
+                const cs = getComputedStyle(el);
+                return Math.max(MIN_IMG_W, el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight));
+            };
+            const imgWidthOf = (k) => {
+                const img = imgMap.get(k);
+                return imgW.get(k) || Math.round(img.getBoundingClientRect().width) || Math.min(img.naturalWidth || 300, contentWidth());
+            };
+            // dir: +1 bigger, -1 smaller, 0 back to original size
+            const resizeImage = (dir) => {
+                fixUp();
+                const s = getSel(), d = readDoc();
+                if (!isImgSel(d.t, s)) return false;
+                const k = d.t[s.start];
+                const img = imgMap.get(k);
+                const cur = imgWidthOf(k);
+                let next = 0;
+                if (dir > 0) next = Math.min(Math.round(cur * IMG_STEP), contentWidth());
+                else if (dir < 0) next = Math.max(Math.round(cur / IMG_STEP), MIN_IMG_W);
+                if ((imgW.get(k) || 0) === next) return true;
+                pushUndo('image', { d, w: new Map(imgW), a: s.a, f: s.f });
+                if (next) imgW.set(k, next); else imgW.delete(k);
+                applyImgWidth(img, k);
+                changed();
+                return true;
+            };
+
+            // ---------- clipboard / images ----------
+            const escHtml = (str) => str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const encodeRuns = (s) => {
+                if (!s.some(Boolean)) return '';
+                const out = [];
+                let i = 0;
+                while (i < s.length) {
+                    let j = i + 1;
+                    while (j < s.length && s[j] === s[i]) j++;
+                    out.push((j - i) + ':' + (s[i] || ''));
+                    i = j;
+                }
+                return out.join(';');
+            };
+            const decodeRuns = (str, len) => {
+                const s = [];
+                if (str) {
+                    for (const part of String(str).split(';')) {
+                        const c = part.indexOf(':');
+                        const n = parseInt(part.slice(0, c), 10) || 0;
+                        const k = part.slice(c + 1);
+                        for (let i = 0; i < n && s.length < len; i++) s.push(k);
+                    }
+                }
+                while (s.length < len) s.push('');
+                return s;
+            };
+            const serialize = (d) => {
+                const images = [], sizes = [];
+                let text = '';
+                for (const ch of d.t) {
+                    if (isImgKey(ch)) { images.push(imgMap.get(ch).getAttribute('src')); sizes.push(imgW.get(ch) || 0); text += OBJ; }
+                    else text += ch;
+                }
+                return { text, images, sizes, styles: encodeRuns(d.s) };
+            };
+            const toHtml = (d) => {
+                let html = '', i = 0;
+                while (i < d.t.length) {
+                    const ch = d.t[i];
+                    if (isImgKey(ch)) {
+                        const w = imgW.get(ch);
+                        html += `<img src="${imgMap.get(ch).getAttribute('src')}"${w ? ` width="${w}"` : ''}>`;
+                        i++;
+                        continue;
+                    }
+                    let j = i + 1;
+                    while (j < d.t.length && d.s[j] === d.s[i] && !isImgKey(d.t[j])) j++;
+                    const o = parseKey(d.s[i]);
+                    const css = [o.b && 'font-weight:700', o.i && 'font-style:italic', (o.u || o.s) && `text-decoration:${[o.u && 'underline', o.s && 'line-through'].filter(Boolean).join(' ')}`, o.z && `font-size:${o.z}px`].filter(Boolean).join(';');
+                    const body = escHtml(d.t.slice(i, j)).replace(/\n/g, '<br>');
+                    html += css ? `<span style="${css}">${body}</span>` : body;
+                    i = j;
+                }
+                return `<div style="white-space:pre-wrap">${html}</div>`;
+            };
+            // text uses OBJ for images; styles is a run string or null (null = use typing style)
+            const insertSerialized = (text, images = [], styles = null, sizes = []) => {
+                text = String(text).replace(/\r\n?/g, '\n');
+                const srcS = styles === null ? null : decodeRuns(styles, text.length);
+                return edit((d, s) => {
+                    const typing = styleAt(d, s.start);
+                    let t = '';
+                    const st = [];
+                    let i = 0, idx = 0;
+                    for (const ch of text) {
+                        const key = srcS ? (srcS[idx] || '') : typing;
+                        idx += ch.length;
+                        if (ch === OBJ) {
+                            const src = images[i], w = sizes[i];
+                            i++;
+                            if (!src) continue;
+                            const k = newKey();
+                            makeImg(src, k, w || 0);
+                            t += k; st.push('');
+                        } else if (ch.length === 1 && ch.charCodeAt(0) >= KEY_FIRST && ch.charCodeAt(0) <= KEY_LAST && imgMap.has(ch)) {
+                            continue; // never let pasted text collide with an image key
+                        } else {
+                            t += ch;
+                            for (let n = 0; n < ch.length; n++) st.push(key);
+                        }
+                    }
+                    if (!t) return null;
+                    return insertAt(d, s, D(t, st));
+                }, 'paste');
+            };
+
+            const readAsDataURL = (file) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
+            const loadImage = (src) => new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = src; });
+            const compressImage = async (file) => {
+                const original = await readAsDataURL(file);
+                if (file.type === 'image/gif' && original.length <= TARGET_IMG_CHARS) return original; // keep animation
+                const img = await loadImage(original);
+                let scale = Math.min(1, MAX_IMG_SIDE / Math.max(img.naturalWidth, img.naturalHeight));
+                let q = 0.85, out = original;
+                for (let attempt = 0; attempt < 6; attempt++) {
+                    const c = document.createElement('canvas');
+                    c.width = Math.max(1, Math.round(img.naturalWidth * scale));
+                    c.height = Math.max(1, Math.round(img.naturalHeight * scale));
+                    const ctx = c.getContext('2d');
+                    ctx.drawImage(img, 0, 0, c.width, c.height);
+                    out = c.toDataURL('image/webp', q);
+                    if (!out.startsWith('data:image/webp')) {
+                        ctx.globalCompositeOperation = 'destination-over';
+                        ctx.fillStyle = '#ffffff';
+                        ctx.fillRect(0, 0, c.width, c.height);
+                        out = c.toDataURL('image/jpeg', q);
+                    }
+                    if (out.length <= TARGET_IMG_CHARS) break;
+                    q = Math.max(0.5, q - 0.1);
+                    scale *= 0.8;
+                }
+                if (original.length <= out.length && original.length <= TARGET_IMG_CHARS && scale === 1) return original;
+                return out;
+            };
+            const insertImageFiles = async (files) => {
+                setSaveStatus('saving', 'Adding image…');
+                const srcs = [];
+                for (const f of files) { try { srcs.push(await compressImage(f)); } catch (e) { console.error('Image paste failed', e); } }
+                if (!srcs.length) { setSaveStatus('error', 'Could not read image'); return; }
+                insertSerialized(OBJ.repeat(srcs.length), srcs, '', []);
+            };
+
+            // ---------- status / toolbar / saving ----------
+            const updatePlaceholder = (t) => el.classList.toggle('is-empty', (t ?? readDoc().t).length === 0);
+            const setSaveStatus = (state, text) => {
+                if (!statusSave) return;
+                statusSave.textContent = text;
+                statusSave.dataset.state = state;
+            };
+            const updateToolbar = () => {
+                if (!el || !enabled) return;
+                const s = getSel(), d = readDoc();
+                const base = baseSize();
+                let o, size;
+                if (isImgSel(d.t, s)) {
+                    document.querySelectorAll('#note-toolbar [data-fmt]').forEach(b => b.classList.remove('is-active'));
+                    if (sizeDisplay) sizeDisplay.textContent = imgWidthOf(d.t[s.start]) + 'px';
+                    return;
+                }
+                if (s.start === s.end) { o = parseKey(styleAt(d, s.start)); size = o.z || base; }
+                else {
+                    const { visible } = styledIdx(d, s);
+                    const objs = visible.map(i => parseKey(d.s[i]));
+                    o = {};
+                    for (const a of ['b', 'i', 'u', 's']) o[a] = objs.length && objs.every(x => x[a]);
+                    const zs = new Set(objs.map(x => x.z || base));
+                    size = zs.size === 1 ? [...zs][0] : null;
+                }
+                document.querySelectorAll('#note-toolbar [data-fmt]').forEach(b => {
+                    const a = b.dataset.fmt;
+                    if (['b', 'i', 'u', 's'].includes(a)) b.classList.toggle('is-active', !!o[a]);
+                });
+                if (sizeDisplay) sizeDisplay.textContent = size === null ? '—' : String(size);
+            };
+            const updateStatusPos = () => {
+                if (!statusPos || !enabled) return;
+                const s = getSel(), t = readDoc().t;
+                if (isImgSel(t, s)) { statusPos.textContent = `Image selected · ${imgWidthOf(t[s.start])}px wide`; return; }
+                const ln = (t.slice(0, s.f).match(/\n/g) || []).length + 1;
+                const col = s.f - lineStart(t, s.f) + 1;
+                statusPos.textContent = `Ln ${ln}, Col ${col}` + (s.end > s.start ? ` (${s.end - s.start} selected)` : '');
+            };
+            const changed = () => {
+                rev++;
+                updatePlaceholder();
+                updateStatusPos();
+                updateToolbar();
+                setSaveStatus('dirty', 'Unsaved');
+                clearTimeout(saveTimer);
+                saveTimer = setTimeout(() => window.saveCurrentNote({ silent: true }), 1200);
+            };
+            const refreshImageSelection = () => {
+                const sel = window.getSelection();
+                const r = sel.rangeCount ? sel.getRangeAt(0) : null;
+                el.querySelectorAll('img.note-img').forEach(img => {
+                    img.classList.toggle('is-selected', !!(r && !r.collapsed && el.contains(r.commonAncestorContainer) && r.intersectsNode(img)));
+                });
+            };
+
+            // ---------- events ----------
+            const onKeyDown = (e) => {
+                if (!enabled || e.isComposing || composing) return;
+                const mod = e.ctrlKey || e.metaKey;
+                const k = e.key;
+                const lower = k.length === 1 ? k.toLowerCase() : k;
+                const stop = () => { e.preventDefault(); e.stopPropagation(); };
+
+                // history & saving
+                if (mod && !e.altKey && lower === 'z') { stop(); e.shiftKey ? redo() : undo(); return; }
+                if (mod && !e.altKey && lower === 'y') { stop(); redo(); return; }
+                if (mod && !e.altKey && lower === 's') { stop(); clearTimeout(saveTimer); window.saveCurrentNote(); return; }
+
+                // formatting (Word / Google Docs style)
+                if (mod && !e.altKey && !e.shiftKey && lower === 'b') { stop(); cmdToggle('b'); return; }
+                if (mod && !e.altKey && !e.shiftKey && lower === 'i') { stop(); cmdToggle('i'); return; }
+                if (mod && !e.altKey && !e.shiftKey && lower === 'u') { stop(); cmdToggle('u'); return; }
+                if ((mod && e.shiftKey && !e.altKey && lower === 'x') || (e.altKey && e.shiftKey && !mod && e.code === 'Digit5')) { stop(); cmdToggle('s'); return; }
+                if (mod && e.shiftKey && !e.altKey && e.code === 'Period') { stop(); cmdFontSize(1); return; }
+                if (mod && e.shiftKey && !e.altKey && e.code === 'Comma') { stop(); cmdFontSize(-1); return; }
+                if (mod && !e.altKey && !e.shiftKey && (e.code === 'Backslash' || e.code === 'Space')) { stop(); cmdClearFormat(); return; }
+
+                // code-editor commands (VS Code style)
+                if (k === 'Tab' && !mod && !e.altKey) { stop(); e.shiftKey ? cmdOutdent() : cmdTab(); return; }
+                if (mod && !e.altKey && e.code === 'BracketRight') { stop(); cmdIndent(); return; }
+                if (mod && !e.altKey && e.code === 'BracketLeft') { stop(); cmdOutdent(); return; }
+                if (e.altKey && !mod && (k === 'ArrowUp' || k === 'ArrowDown')) {
+                    stop();
+                    const dir = k === 'ArrowUp' ? -1 : 1;
+                    e.shiftKey ? cmdCopyLines(dir) : cmdMoveLines(dir);
+                    return;
+                }
+                if (mod && e.shiftKey && !e.altKey && lower === 'k') { stop(); cmdDeleteLines(); return; }
+                if (mod && !e.shiftKey && !e.altKey && lower === 'l') { stop(); cmdSelectLine(); return; }
+                if (k === 'Enter') { stop(); if (mod) cmdInsertLine(e.shiftKey ? -1 : 1); else cmdEnter(); return; }
+                if (k === 'Home' && !mod && !e.altKey) { if (cmdHome(e.shiftKey)) stop(); return; }
+                if (k === 'Backspace' && !mod && !e.altKey) { if (cmdBackspace()) stop(); return; }
+                if (k === ' ' && !mod && !e.altKey) { if (cmdSpaceOnImage()) stop(); return; }
+                if (!mod && !e.altKey && PAIRS[k]) { if (cmdOpenBracket(k)) stop(); return; }
+                if (!mod && !e.altKey && CLOSERS.has(k)) { if (cmdCloseBracket(k)) stop(); return; }
+            };
+
+            const onBeforeInput = (e) => {
+                if (!enabled) { e.preventDefault(); return; }
+                const type = e.inputType || '';
+                if (type === 'historyUndo') { e.preventDefault(); undo(); return; }
+                if (type === 'historyRedo') { e.preventDefault(); redo(); return; }
+                if (type === 'formatBold') { e.preventDefault(); cmdToggle('b'); return; }
+                if (type === 'formatItalic') { e.preventDefault(); cmdToggle('i'); return; }
+                if (type === 'formatUnderline') { e.preventDefault(); cmdToggle('u'); return; }
+                if (type.startsWith('format')) { e.preventDefault(); return; }
+                if (type === 'insertParagraph' || type === 'insertLineBreak') { e.preventDefault(); cmdEnter(); return; }
+                if (type === 'insertCompositionText') return;
+                if (type === 'insertText' && e.data) {
+                    const s = getSel();
+                    if (pending && s.start === pending.pos) { e.preventDefault(); typeWithPending(e.data); pending = null; return; }
+                    // If the browser would put the text in a run with the wrong formatting
+                    // (e.g. at the start of a new line), insert it ourselves with the right one.
+                    if (s.start === s.end) {
+                        const sel = window.getSelection();
+                        const node = sel.focusNode;
+                        let have = null;
+                        if (node && node.nodeType === 3) have = isRun(node.parentNode) ? (node.parentNode.dataset.s || '') : (node.parentNode === el ? '' : null);
+                        const want = styleAt(readDoc(), s.start);
+                        if (have === null || have !== want) { e.preventDefault(); typeWithPending(e.data); return; }
+                    }
+                }
+                pushUndo(type.startsWith('delete') ? 'delete' : 'type', snap);
+            };
+
+            const onCopy = (e, isCut) => {
+                if (!enabled) return;
+                fixUp();
+                const s = getSel();
+                if (s.start === s.end) return;
+                e.preventDefault();
+                const part = sub(readDoc(), s.start, s.end);
+                const ser = serialize(part);
+                e.clipboardData.setData('text/plain', ser.text.split(OBJ).join(''));
+                e.clipboardData.setData('text/html', toHtml(part));
+                e.clipboardData.setData('application/x-note-fragment', JSON.stringify(ser));
+                if (isCut) edit((d, sel) => ({ d: cat(sub(d, 0, sel.start), sub(d, sel.end)), a: sel.start }));
+            };
+
+            const onPaste = (e) => {
+                e.preventDefault();
+                if (!enabled) return;
+                const cd = e.clipboardData;
+                const fragRaw = cd.getData('application/x-note-fragment');
+                if (fragRaw) {
+                    try {
+                        const fr = JSON.parse(fragRaw);
+                        if (fr && typeof fr.text === 'string') { insertSerialized(fr.text, fr.images || [], fr.styles ?? '', fr.sizes || []); return; }
+                    } catch (err) { /* fall through */ }
+                }
+                const text = cd.getData('text/plain');
+                if (text) { insertSerialized(text.split(OBJ).join('')); return; }
+                const files = [...(cd.files || [])].filter(f => f.type.startsWith('image/'));
+                if (!files.length) {
+                    for (const item of (cd.items || [])) if (item.kind === 'file' && item.type.startsWith('image/')) { const f = item.getAsFile(); if (f) files.push(f); }
+                }
+                if (files.length) insertImageFiles(files);
+            };
+
+            const placeCaretAtPoint = (x, y) => {
+                let r = null;
+                if (document.caretRangeFromPoint) r = document.caretRangeFromPoint(x, y);
+                else if (document.caretPositionFromPoint) {
+                    const p = document.caretPositionFromPoint(x, y);
+                    if (p) { r = document.createRange(); r.setStart(p.offsetNode, p.offset); r.collapse(true); }
+                }
+                if (r && el.contains(r.startContainer)) { const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r); }
+            };
+
+            const onDrop = (e) => {
+                e.preventDefault();
+                if (!enabled) return;
+                placeCaretAtPoint(e.clientX, e.clientY);
+                const files = [...(e.dataTransfer.files || [])].filter(f => f.type.startsWith('image/'));
+                if (files.length) { insertImageFiles(files); return; }
+                const text = e.dataTransfer.getData('text/plain');
+                if (text) insertSerialized(text.split(OBJ).join(''));
+            };
+
+            const applyFont = () => {
+                let mono = true;
+                try { mono = localStorage.getItem(FONT_KEY) !== '0'; } catch (e) { /* ignore */ }
+                el.classList.toggle('mono', mono);
+                const btn = document.getElementById('note-font-toggle');
+                if (btn) btn.textContent = mono ? 'Monospace' : 'Sans';
+                updateToolbar();
+            };
+
+            const init = () => {
+                el = document.getElementById('current-note-content');
+                wrap = document.getElementById('note-editor-wrap');
+                statusPos = document.getElementById('note-status-pos');
+                statusSave = document.getElementById('note-save-status');
+                sizeDisplay = document.getElementById('note-size-display');
+                if (!el) return;
+                el.addEventListener('keydown', onKeyDown);
+                el.addEventListener('beforeinput', onBeforeInput);
+                el.addEventListener('input', (e) => { if (e.isComposing || composing) return; fixUp(); changed(); });
+                el.addEventListener('compositionstart', () => { composing = true; pushUndo('op', snap); });
+                el.addEventListener('compositionend', () => { composing = false; fixUp(); changed(); });
+                el.addEventListener('copy', (e) => onCopy(e, false));
+                el.addEventListener('cut', (e) => onCopy(e, true));
+                el.addEventListener('paste', onPaste);
+                el.addEventListener('dragstart', (e) => e.preventDefault());
+                el.addEventListener('dragover', (e) => { e.preventDefault(); });
+                el.addEventListener('drop', onDrop);
+                el.addEventListener('click', (e) => {
+                    if (e.target.nodeName === 'IMG' && el.contains(e.target)) {
+                        const r = document.createRange();
+                        r.selectNode(e.target);
+                        const sel = window.getSelection();
+                        sel.removeAllRanges();
+                        sel.addRange(r);
+                    }
+                });
+                document.addEventListener('selectionchange', () => {
+                    if (!el) return;
+                    const sel = window.getSelection();
+                    if (!(sel.rangeCount && el.contains(sel.anchorNode))) return;
+                    if (pending) { const s = getSel(); if (s.start !== s.end || s.f !== pending.pos) pending = null; }
+                    updateStatusPos();
+                    updateToolbar();
+                    refreshImageSelection();
+                });
+
+                // Toolbar: mousedown is cancelled so the editor keeps its selection
+                document.querySelectorAll('#note-toolbar [data-fmt]').forEach(btn => {
+                    btn.addEventListener('mousedown', (e) => e.preventDefault());
+                    btn.addEventListener('click', () => {
+                        const a = btn.dataset.fmt;
+                        if (['b', 'i', 'u', 's'].includes(a)) cmdToggle(a);
+                        else if (a === 'bigger') cmdFontSize(1);
+                        else if (a === 'smaller') cmdFontSize(-1);
+                        else if (a === 'clear') cmdClearFormat();
+                    });
+                });
+
+                document.getElementById('note-font-toggle')?.addEventListener('click', () => {
+                    try { localStorage.setItem(FONT_KEY, el.classList.contains('mono') ? '0' : '1'); } catch (e) { /* ignore */ }
+                    applyFont();
+                    el.focus();
+                });
+                const keysBtn = document.getElementById('note-keys-btn');
+                const keysPanel = document.getElementById('note-keys-panel');
+                keysBtn?.addEventListener('click', (e) => { e.stopPropagation(); keysPanel.classList.toggle('hidden'); });
+                document.addEventListener('click', (e) => { if (keysPanel && !keysPanel.contains(e.target) && !keysBtn.contains(e.target)) keysPanel.classList.add('hidden'); });
+
+                applyFont();
+                setEnabled(false);
+            };
+
+            const load = (content = '', images = [], styles = '', imageSizes = []) => {
+                if (!el) return;
+                clearTimeout(saveTimer);
+                imgMap = new Map();
+                imgW = new Map();
+                nextKey = KEY_FIRST;
+                pending = null;
+                undoStack = []; redoStack = []; lastRecord = { t: 0, kind: '' };
+                const src = String(content || '');
+                const srcS = decodeRuns(styles || '', src.length);
+                let i = 0, t = '';
+                const s = [];
+                for (let idx = 0; idx < src.length; idx++) {
+                    const ch = src[idx];
+                    if (ch === OBJ) {
+                        const img = images[i], w = imageSizes[i];
+                        i++;
+                        if (img) { const k = newKey(); makeImg(img, k, w || 0); t += k; s.push(''); }
+                    } else { t += ch; s.push(srcS[idx] || ''); }
+                }
+                render(D(t, s));
+                el.scrollTop = 0;
+                rev = 0; savedRev = 0;
+                setSaveStatus('saved', 'Saved');
+                if (statusPos) statusPos.textContent = 'Ln 1, Col 1';
+            };
+
+            const getValue = () => {
+                fixUp();
+                const ser = serialize(readDoc());
+                const bytes = new TextEncoder().encode(ser.text + ser.styles).length + ser.images.reduce((n, x) => n + x.length + 24, 0) + 2048;
+                return { content: ser.text, images: ser.images, imageSizes: ser.sizes, styles: ser.styles, bytes };
+            };
+
+            const setEnabled = (on) => {
+                enabled = !!on;
+                if (!el) return;
+                el.contentEditable = enabled ? 'true' : 'false';
+                wrap?.classList.toggle('is-disabled', !enabled);
+            };
+
+            if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+            else init();
+
+            return {
+                load,
+                getValue,
+                setEnabled,
+                focus: () => { if (el && enabled) { el.focus(); setSel(0, 0); updateToolbar(); } },
+                clear: () => { load('', []); setEnabled(false); },
+                isDirty: () => rev !== savedRev,
+                rev: () => rev,
+                markSaved: (r) => { savedRev = r; if (r === rev) setSaveStatus('saved', 'Saved'); },
+                markFailed: (msg) => {
+                    savedRev = -1;
+                    setSaveStatus('error', msg || 'Save failed – retrying…');
+                    clearTimeout(saveTimer);
+                    saveTimer = setTimeout(() => window.saveCurrentNote({ silent: true }), 5000);
+                },
+                setSaveStatus,
+                cancelAutosave: () => clearTimeout(saveTimer)
+            };
+        })();
 
         const TIMETABLE = {
             Monday: [
@@ -2717,15 +4229,16 @@
             });
 
             document.getElementById('close-notes-app-btn').addEventListener('click', async () => {
-                await window.saveCurrentNote(); 
+                if (await window.saveCurrentNote() === false) return;
                 document.getElementById('notes-app-modal').classList.add('opacity-0', 'pointer-events-none');
             });
 
             // Click outside the Notes modal panel to save & close
             document.getElementById('notes-app-modal').addEventListener('click', async (e) => {
                 if (e.target === e.currentTarget) {
-                    await window.saveCurrentNote();
-                    e.currentTarget.classList.add('opacity-0', 'pointer-events-none');
+                    const modal = e.currentTarget;
+                    if (await window.saveCurrentNote() === false) return;
+                    modal.classList.add('opacity-0', 'pointer-events-none');
                 }
             });
 
@@ -2879,7 +4392,7 @@
                 let html = `<div class="mb-6 p-5 bg-gray-800 rounded-xl border border-gray-700 shadow-inner"><h4 class="text-2xl font-bold text-red-500 mb-1">${nextF1Session.name}</h4><p class="text-white/70 flex items-center mb-2"><span data-lucide="map-pin" class="w-4 h-4 mr-1"></span> ${nextF1Session.location}</p><div class="flex items-center mt-3 pt-3 border-t border-gray-700"><span data-lucide="clock" class="w-5 h-5 mr-2 text-gray-400"></span> <span class="text-lg font-semibold text-white">${startDate.toLocaleString([], {weekday: 'long', month: 'short', day: 'numeric', hour: '2-digit', minute:'2-digit'})}</span><span class="ml-auto text-sm font-bold px-3 py-1 rounded-md ${isLive ? 'bg-red-600 text-white animate-pulse' : 'bg-gray-900 text-gray-400'}">${isLive ? '● LIVE NOW' : 'UPCOMING'}</span></div></div>`;
                 
                 if (isLive || (diffMins >= 0 && diffMins <= 30)) {
-                    html += `<h5 class="text-lg font-bold mb-3 text-white border-b border-gray-700 pb-2 flex items-center"><span data-lucide="activity" class="w-5 h-5 mr-2 text-green-400"></span> Live Action Hub</h5><div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4"><a href="https://streamed.pk/" target="_blank" class="flex flex-col items-center justify-center p-6 bg-gradient-to-br from-red-600 to-red-900 rounded-xl border border-red-500 hover:scale-105 hover:shadow-[0_0_20px_rgba(220,38,38,0.5)] transition-all group"><span data-lucide="play-circle" class="w-10 h-10 text-white mb-2 group-hover:animate-pulse"></span><span class="text-white font-bold text-lg">Watch Live Stream</span><span class="text-red-200 text-xs mt-1">streamed.pk</span></a><a href="https://f1-dash.com/dashboard/track-map" target="_blank" class="flex flex-col items-center justify-center p-6 bg-gradient-to-br from-gray-700 to-gray-900 rounded-xl border border-gray-500 hover:scale-105 hover:shadow-[0_0_20px_rgba(156,163,175,0.5)] transition-all group"><span data-lucide="map" class="w-10 h-10 text-white mb-2 group-hover:text-blue-400 transition-colors"></span><span class="text-white font-bold text-lg">Live Track Map</span><span class="text-gray-400 text-xs mt-1">f1-dash.com</span></a></div>`;
+                    html += `<h5 class="text-lg font-bold mb-3 text-white border-b border-gray-700 pb-2 flex items-center"><span data-lucide="activity" class="w-5 h-5 mr-2 text-green-400"></span> Live Action Hub</h5><div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4"><a href="https://strmfree.pk/player/racing/skyf1" target="_blank" class="flex flex-col items-center justify-center p-6 bg-gradient-to-br from-red-600 to-red-900 rounded-xl border border-red-500 hover:scale-105 hover:shadow-[0_0_20px_rgba(220,38,38,0.5)] transition-all group"><span data-lucide="play-circle" class="w-10 h-10 text-white mb-2 group-hover:animate-pulse"></span><span class="text-white font-bold text-lg">Watch Live Stream</span><span class="text-red-200 text-xs mt-1">Stream Free</span></a><a href="https://f1-dash.com/dashboard/track-map" target="_blank" class="flex flex-col items-center justify-center p-6 bg-gradient-to-br from-gray-700 to-gray-900 rounded-xl border border-gray-500 hover:scale-105 hover:shadow-[0_0_20px_rgba(156,163,175,0.5)] transition-all group"><span data-lucide="map" class="w-10 h-10 text-white mb-2 group-hover:text-blue-400 transition-colors"></span><span class="text-white font-bold text-lg">Live Track Map</span><span class="text-gray-400 text-xs mt-1">f1-dash.com</span></a></div>`;
                 } else {
                     html += `<div class="text-center p-6 bg-gray-800/50 rounded-xl border border-gray-700/50 border-dashed"><span data-lucide="timer" class="w-10 h-10 text-gray-500 mx-auto mb-2"></span><p class="text-gray-400 text-md">Live stream and track map links will appear here <span class="text-white font-semibold">30 minutes</span> before the session starts.</p></div>`;
                 }
@@ -2906,6 +4419,217 @@
 
         document.addEventListener('DOMContentLoaded', initF1Logic);
     </script>
+    <style>
+        /* ====== CHRISTMAS THEME ====== */
+        /* Toggled by the tree button in the quick menu; html.christmas switches everything on. */
+
+        /* Desktop stagger for the later menu items (the JS below re-staggers by visible order) */
+        #radial-menu-wrapper.active .radial-item-6 { transition-delay: 0.30s; }
+        #radial-menu-wrapper.active .radial-item-7 { transition-delay: 0.35s; }
+
+        /* Layers that only exist while the theme is on */
+        #xmas-glow, #xmas-snow, #xmas-lights, #xmas-countdown-wrap { display: none; }
+        html.christmas #xmas-glow, html.christmas #xmas-snow, html.christmas #xmas-lights { display: block; }
+        html.christmas #xmas-countdown-wrap { display: flex; justify-content: center; width: 100%; }
+        #xmas-countdown { display: inline-flex; }
+
+        /* On desktop the page is centred vertically, so the pill floats above the middle
+           column without taking up any height; nothing else moves when the theme turns on.
+           (height 0 + -2rem cancels the space-y-8 gap the next item would get.) */
+        @media (min-width: 1024px) {
+            #xmas-countdown-wrap { position: relative; height: 0; margin-bottom: -2rem; }
+            /* In Personal mode the greeting already has that gap (the hidden school widget sits before it) */
+            body.personal-mode #xmas-countdown-wrap { margin-bottom: 0; }
+            #xmas-countdown { position: absolute; bottom: .9rem; left: 50%; transform: translateX(-50%); }
+        }
+
+        /* Warm red / green glow over the background photo */
+        #xmas-glow {
+            position: fixed; inset: 0; z-index: -1; pointer-events: none;
+            background:
+                radial-gradient(900px 600px at 0% 100%, rgba(220, 38, 38, 0.22), transparent 65%),
+                radial-gradient(900px 600px at 100% 100%, rgba(22, 163, 74, 0.20), transparent 65%),
+                radial-gradient(700px 360px at 50% 0%, rgba(253, 224, 71, 0.10), transparent 70%);
+        }
+        /* Falling snow sits behind the glass panels, so it blurs through them */
+        #xmas-snow { position: fixed; inset: 0; z-index: -1; pointer-events: none; width: 100%; height: 100%; }
+
+        /* String of fairy lights along the top (behind the panels, so it never covers anything) */
+        #xmas-lights {
+            position: fixed; top: 0; left: 0; right: 0; height: 52px;
+            z-index: -1; pointer-events: none; overflow: visible;
+        }
+        #xmas-lights svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+        .xmas-bulb {
+            position: absolute; width: 11px; height: 17px; margin-left: -5.5px;
+            transform-origin: 50% 0; pointer-events: none;
+        }
+        .xmas-bulb::before { /* socket */
+            content: ''; position: absolute; left: 2.5px; top: 0; width: 6px; height: 5px;
+            border-radius: 1.5px; background: #1f3b2a; box-shadow: inset 0 -1px 0 rgba(0,0,0,.35);
+        }
+        .xmas-bulb::after { /* glass */
+            content: ''; position: absolute; left: 0; top: 4px; width: 11px; height: 13px;
+            border-radius: 50% 50% 50% 50% / 42% 42% 58% 58%;
+            background: radial-gradient(circle at 35% 30%, rgba(255,255,255,.85), var(--bulb) 38%, var(--bulb-deep) 100%);
+            box-shadow: 0 0 10px 2px var(--bulb-glow), 0 0 22px 6px var(--bulb-glow);
+            animation: xmas-twinkle var(--tw-dur, 2.4s) ease-in-out infinite;
+            animation-delay: var(--tw-delay, 0s);
+        }
+        .xmas-bulb.red    { --bulb: #ff4d4d; --bulb-deep: #b91c1c; --bulb-glow: rgba(255, 77, 77, .55); }
+        .xmas-bulb.green  { --bulb: #4ade80; --bulb-deep: #15803d; --bulb-glow: rgba(74, 222, 128, .5); }
+        .xmas-bulb.gold   { --bulb: #fde047; --bulb-deep: #ca8a04; --bulb-glow: rgba(253, 224, 71, .55); }
+        .xmas-bulb.blue   { --bulb: #7dd3fc; --bulb-deep: #0369a1; --bulb-glow: rgba(125, 211, 252, .5); }
+        .xmas-bulb.pink   { --bulb: #f9a8d4; --bulb-deep: #be185d; --bulb-glow: rgba(249, 168, 212, .5); }
+        @keyframes xmas-twinkle {
+            0%, 100% { opacity: 1; filter: brightness(1.1); }
+            45% { opacity: .35; filter: brightness(.6); box-shadow: 0 0 3px 0 var(--bulb-glow); }
+            55% { opacity: .35; filter: brightness(.6); box-shadow: 0 0 3px 0 var(--bulb-glow); }
+        }
+
+        /* Snow lying on top of the glass panels (background-image only, so the panel colour stays) */
+        html.christmas body > .scroll-container > .grid > div[class*="bg-white/10"],
+        html.christmas #bookmark-container,
+        html.christmas #next-lesson-widget {
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 24' preserveAspectRatio='none'%3E%3Cpath d='M0 0H400V9C388 12 380 8 368 11S346 17 332 12 310 6 296 10 272 18 256 13 236 7 220 11 196 19 180 14 160 8 146 12 122 17 108 12 90 7 74 11 52 18 38 13 18 8 0 12Z' fill='%23dbe7f5' fill-opacity='.22'/%3E%3Cpath d='M0 0H400V6C390 8 378 5 366 8S344 13 330 9 308 4 294 7 270 14 254 10 234 4 218 8 194 15 178 11 158 5 144 9 120 13 106 9 88 4 72 8 50 14 36 10 16 5 0 9Z' fill='%23ffffff' fill-opacity='.9'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: top center;
+            background-size: 100% 18px;
+        }
+        html.christmas body > .scroll-container > .grid > div[class*="bg-white/10"] {
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), inset 0 0 0 1px rgba(255, 236, 200, 0.12);
+        }
+
+        /* Christmas countdown pill at the top of the centre column */
+        #xmas-countdown {
+            align-items: center; gap: .5rem;
+            padding: .45rem 1rem .45rem .8rem; border-radius: 999px;
+            font-size: .8rem; font-weight: 700; letter-spacing: .02em; color: #fff;
+            background: linear-gradient(rgba(15, 23, 42, .55), rgba(15, 23, 42, .55)) padding-box,
+                        linear-gradient(90deg, #ef4444, #fde047, #22c55e) border-box;
+            border: 1.5px solid transparent;
+            -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, .35);
+            white-space: nowrap;
+        }
+        #xmas-countdown .xmas-cd-num { color: #fde68a; font-variant-numeric: tabular-nums; }
+
+        /* Santa hat on the quick-menu button */
+        html.christmas #toggle-quick-menu-btn::before {
+            content: ''; position: absolute; top: -15px; left: -9px; width: 32px; height: 26px;
+            transform: rotate(-22deg); pointer-events: none; z-index: 2;
+            background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 52'%3E%3Cpath d='M8 40C10 22 22 6 40 6c9 0 15 6 17 14l-5 3c-3-6-7-9-12-8-8 2-12 13-14 25Z' fill='%23dc2626'/%3E%3Cpath d='M40 6c9 0 15 6 17 14l-5 3c-3-6-7-9-12-8' fill='%23991b1b' fill-opacity='.45'/%3E%3Crect x='3' y='37' width='38' height='11' rx='5.5' fill='%23f8fafc'/%3E%3Ccircle cx='55' cy='24' r='6' fill='%23f8fafc'/%3E%3C/svg%3E") center / contain no-repeat;
+            filter: drop-shadow(0 2px 3px rgba(0, 0, 0, .45));
+        }
+
+        /* The tree button itself */
+        #menu-toggle-christmas svg { color: #4ade80; }
+        html.christmas #menu-toggle-christmas {
+            background-image: linear-gradient(135deg, rgba(185, 28, 28, .9), rgba(21, 128, 61, .9));
+            border-color: rgba(253, 224, 71, .75) !important;
+            box-shadow: 0 0 16px rgba(253, 224, 71, .4);
+        }
+        html.christmas #menu-toggle-christmas svg { color: #fff; }
+
+        /* A festive sticker on each assignment card */
+        html.christmas .assignment-item { position: relative; }
+        html.christmas .assignment-item[data-xmas-icon]::after {
+            content: attr(data-xmas-icon);
+            position: absolute; right: 10px; bottom: 6px;
+            font-size: 18px; line-height: 1; pointer-events: none;
+            filter: drop-shadow(0 2px 3px rgba(0, 0, 0, .4));
+        }
+
+        /* ---------- Pop-ups (every #...-modal) ---------- */
+        /* Panel: cranberry -> pine gradient, gold edge, snow along the top */
+        html.christmas [id$="-modal"] > div:first-child {
+            background-color: #2a0a10 !important;
+            background-image:
+                url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 24' preserveAspectRatio='none'%3E%3Cpath d='M0 0H400V9C388 12 380 8 368 11S346 17 332 12 310 6 296 10 272 18 256 13 236 7 220 11 196 19 180 14 160 8 146 12 122 17 108 12 90 7 74 11 52 18 38 13 18 8 0 12Z' fill='%23dbe7f5' fill-opacity='.22'/%3E%3Cpath d='M0 0H400V6C390 8 378 5 366 8S344 13 330 9 308 4 294 7 270 14 254 10 234 4 218 8 194 15 178 11 158 5 144 9 120 13 106 9 88 4 72 8 50 14 36 10 16 5 0 9Z' fill='%23ffffff' fill-opacity='.9'/%3E%3C/svg%3E"),
+                radial-gradient(120% 70% at 100% 0%, rgba(253, 224, 71, .10), transparent 60%),
+                linear-gradient(160deg, #5a1019 0%, #3a0b12 45%, #16271c 100%) !important;
+            background-repeat: no-repeat !important;
+            background-size: 100% 16px, 100% 100%, 100% 100% !important;
+            background-position: top center !important;
+            border-color: rgba(253, 224, 71, .45) !important;
+            box-shadow: 0 30px 80px rgba(0, 0, 0, .55), 0 0 0 1px rgba(253, 224, 71, .12), 0 0 40px rgba(220, 38, 38, .25) !important;
+            color-scheme: dark;
+        }
+        /* Inner surfaces become dark glass so the red shows through */
+        html.christmas [id$="-modal"] .bg-gray-700 { background-color: rgba(0, 0, 0, .28) !important; }
+        html.christmas [id$="-modal"] .bg-gray-800,
+        html.christmas [id$="-modal"] .bg-gray-900,
+        html.christmas [id$="-modal"] .bg-gray-800\/50,
+        html.christmas [id$="-modal"] .bg-gray-900\/50 { background-color: rgba(0, 0, 0, .22) !important; }
+        html.christmas [id$="-modal"] .bg-gray-800\/80,
+        html.christmas [id$="-modal"] .bg-gray-900\/90 { background-color: rgba(0, 0, 0, .25) !important; }
+        html.christmas [id$="-modal"] .bg-gray-900\/40 { background-color: rgba(0, 0, 0, .38) !important; } /* other-month days */
+        html.christmas [id$="-modal"] .hover\:bg-gray-800:hover { background-color: rgba(255, 255, 255, .07) !important; }
+        html.christmas [id$="-modal"] .bg-gray-600 { background-color: rgba(255, 255, 255, .12) !important; }
+        html.christmas [id$="-modal"] .hover\:bg-gray-500:hover,
+        html.christmas [id$="-modal"] .hover\:bg-gray-600:hover,
+        html.christmas [id$="-modal"] .hover\:bg-gray-700:hover { background-color: rgba(255, 255, 255, .18) !important; }
+        html.christmas [id$="-modal"] .border-gray-600,
+        html.christmas [id$="-modal"] .border-gray-700,
+        html.christmas [id$="-modal"] .border-gray-800 { border-color: rgba(255, 255, 255, .14) !important; }
+        html.christmas [id$="-modal"] .border-gray-600\/50 { border-color: rgba(255, 255, 255, .10) !important; }
+        html.christmas [id$="-modal"] .divide-gray-700 > * + * { border-color: rgba(255, 255, 255, .12) !important; }
+        /* Calendar "today" ring: blue -> gold */
+        html.christmas [id$="-modal"] .ring-blue-500 { --tw-ring-color: #fcd34d !important; }
+        html.christmas [id$="-modal"] .bg-blue-900\/10 { background-color: rgba(253, 224, 71, .08) !important; }
+
+        /* Fields: red glow on focus, light date/time icons */
+        html.christmas [id$="-modal"] input:focus,
+        html.christmas [id$="-modal"] textarea:focus,
+        html.christmas [id$="-modal"] select:focus {
+            border-color: #f87171 !important;
+            box-shadow: 0 0 0 3px rgba(248, 113, 113, .25) !important;
+            outline: none;
+        }
+        html.christmas [id$="-modal"] input::placeholder,
+        html.christmas [id$="-modal"] textarea::placeholder { color: rgba(255, 228, 230, .45) !important; }
+        html.christmas [id$="-modal"] input[type="checkbox"],
+        html.christmas [id$="-modal"] input[type="radio"] { accent-color: #22c55e; }
+        html.christmas [id$="-modal"] option { background: #3a0b12; color: #fff; }
+
+        /* Buttons: blue primaries turn evergreen; accents turn gold */
+        html.christmas [id$="-modal"] .bg-blue-500,
+        html.christmas [id$="-modal"] .bg-blue-600 {
+            background-color: #16a34a !important;
+            box-shadow: 0 4px 14px rgba(22, 163, 74, .35);
+        }
+        html.christmas [id$="-modal"] .hover\:bg-blue-500:hover,
+        html.christmas [id$="-modal"] .hover\:bg-blue-600:hover { background-color: #15803d !important; }
+        html.christmas [id$="-modal"] .text-blue-400,
+        html.christmas [id$="-modal"] .text-blue-300 { color: #fcd34d !important; }
+        html.christmas [id$="-modal"] .bg-red-600,
+        html.christmas [id$="-modal"] .bg-red-600\/80 { background-color: #b91c1c !important; border-color: rgba(255, 255, 255, .25) !important; }
+
+        /* Headings get a little sparkle of gold */
+        html.christmas [id$="-modal"] h2 { text-shadow: 0 0 18px rgba(253, 224, 71, .25); }
+
+        /* Scrollbars inside pop-ups */
+        html.christmas [id$="-modal"] ::-webkit-scrollbar-thumb { background: rgba(253, 224, 71, .35); }
+
+        /* Small touches */
+        html.christmas .bookmark-icon:hover {
+            border-color: rgba(253, 224, 71, .85) !important;
+            box-shadow: 0 0 18px rgba(253, 224, 71, .3);
+        }
+        html.christmas #search-input:focus { border-color: #ef4444 !important; box-shadow: 0 0 0 4px rgba(239, 68, 68, .2), 0 10px 30px rgba(0, 0, 0, .3); }
+        html.christmas .pm-greeting-text {
+            background: linear-gradient(90deg, #fca5a5, #fde68a 50%, #86efac);
+            -webkit-background-clip: text; background-clip: text; color: transparent !important;
+        }
+
+        @media (max-width: 1023px) {
+            #xmas-countdown { margin-top: 1.75rem; }
+            #radial-menu-wrapper.active .radial-item-7 { transition-delay: 0.35s; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .xmas-bulb::after { animation: none; }
+        }
+    </style>
 </head>
 <body class="bg-gray-900">
 
@@ -3431,11 +5155,19 @@
                 <div class="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-emerald-600"></div>
             </div>
         </a>
+
+        <button id="menu-toggle-christmas" class="radial-item radial-item-7 relative group rounded-xl bg-white/10 backdrop-blur-md border border-white/20 shadow-lg hover:bg-white/20 transition-colors flex items-center justify-center">
+            <span data-lucide="tree-pine" class="w-6 h-6 drop-shadow-md"></span>
+            <div class="absolute left-full ml-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-red-600 text-white text-xs font-bold rounded-lg shadow-xl opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity z-50">
+                <span id="menu-toggle-christmas-label">Christmas</span>
+                <div class="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-red-600"></div>
+            </div>
+        </button>
     </div>
 
-    <div id="notes-app-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition-opacity duration-300 z-[70]">
+        <div id="notes-app-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition-opacity duration-300 z-[70]">
         <div class="bg-gray-900 w-full max-w-6xl h-[85vh] rounded-2xl shadow-2xl border border-gray-700 flex overflow-hidden relative transform transition-all duration-300">
-            
+
             <button id="close-notes-app-btn" class="absolute top-4 right-4 z-20 p-2 rounded-lg bg-gray-800 border border-gray-600 hover:bg-red-600 hover:border-red-500 text-white transition-colors" title="Save & Close">
                 <span data-lucide="x" class="w-5 h-5"></span>
             </button>
@@ -3443,10 +5175,12 @@
             <div class="w-72 bg-gray-800/80 flex flex-col border-r border-gray-700 h-full flex-shrink-0 relative z-10">
                 <div class="p-5 border-b border-gray-700 flex justify-between items-center bg-gray-800">
                     <h3 class="text-lg font-bold text-white flex items-center"><span data-lucide="book" class="w-5 h-5 mr-2 text-green-400"></span> My Notes</h3>
-                    <button onclick="window.createNewNote()" class="w-8 h-8 flex items-center justify-center rounded-lg bg-green-600 hover:bg-green-500 text-white transition-colors shadow-md"><span data-lucide="plus" class="w-5 h-5"></span></button>
+                    <div class="flex items-center gap-2">
+                        <button onclick="window.openNoteFolderModal()" title="New folder" class="w-8 h-8 flex items-center justify-center rounded-lg bg-gray-700 hover:bg-gray-600 text-white transition-colors shadow-md"><span data-lucide="folder-plus" class="w-4 h-4"></span></button>
+                        <button onclick="window.createNewNote()" title="New note" class="w-8 h-8 flex items-center justify-center rounded-lg bg-green-600 hover:bg-green-500 text-white transition-colors shadow-md"><span data-lucide="plus" class="w-5 h-5"></span></button>
+                    </div>
                 </div>
-                <div id="notes-list-container" class="flex-1 overflow-y-auto custom-scroll p-4 space-y-1">
-                </div>
+                <div id="notes-list-container" class="flex-1 overflow-y-auto custom-scroll p-3"></div>
             </div>
 
             <div class="flex-1 bg-gray-900/90 flex flex-col relative z-0">
@@ -3455,10 +5189,72 @@
                     <p class="text-lg font-medium">Select a note or create a new one</p>
                 </div>
 
-                <textarea id="current-note-content" disabled class="w-full h-full p-10 pt-16 bg-transparent text-white resize-none outline-none text-base leading-relaxed custom-scroll disabled:opacity-0 transition-opacity" placeholder="Start typing..."></textarea>
+                <div id="note-editor-wrap" class="flex-1 flex flex-col min-h-0 min-w-0 transition-opacity is-disabled">
+                    <div id="note-toolbar" class="flex items-center gap-1 pl-6 pr-20 py-3 border-b border-gray-700/60 select-none">
+                        <button type="button" data-fmt="b" class="note-tb-btn" title="Bold (Ctrl+B)"><span data-lucide="bold" class="w-4 h-4"></span></button>
+                        <button type="button" data-fmt="i" class="note-tb-btn" title="Italic (Ctrl+I)"><span data-lucide="italic" class="w-4 h-4"></span></button>
+                        <button type="button" data-fmt="u" class="note-tb-btn" title="Underline (Ctrl+U)"><span data-lucide="underline" class="w-4 h-4"></span></button>
+                        <button type="button" data-fmt="s" class="note-tb-btn" title="Strikethrough (Ctrl+Shift+X)"><span data-lucide="strikethrough" class="w-4 h-4"></span></button>
+                        <span class="w-px h-5 bg-gray-700 mx-2"></span>
+                        <button type="button" data-fmt="smaller" class="note-tb-btn" title="Smaller text / image (Ctrl+Shift+&lt;)"><span data-lucide="a-arrow-down" class="w-4 h-4"></span></button>
+                        <span id="note-size-display" class="min-w-[3.25rem] text-center text-xs tabular-nums text-white/70" title="Font size (or image width)">16</span>
+                        <button type="button" data-fmt="bigger" class="note-tb-btn" title="Bigger text / image (Ctrl+Shift+&gt;)"><span data-lucide="a-arrow-up" class="w-4 h-4"></span></button>
+                        <span class="w-px h-5 bg-gray-700 mx-2"></span>
+                        <button type="button" data-fmt="clear" class="note-tb-btn" title="Clear formatting / original image size (Ctrl+\)"><span data-lucide="remove-formatting" class="w-4 h-4"></span></button>
+                    </div>
+                    <div id="current-note-content" class="note-editor flex-1 min-h-0 min-w-0 overflow-y-auto custom-scroll p-10 pt-6 text-white text-base leading-relaxed outline-none" contenteditable="false" spellcheck="true" data-placeholder="Start typing... (paste images with Ctrl+V)"></div>
+                    <div class="note-statusbar relative flex items-center gap-4 px-4 py-1.5 border-t border-gray-700/80 bg-gray-800/70 text-[11px] text-white/50 select-none">
+                        <span id="note-status-pos">Ln 1, Col 1</span>
+                        <span>Spaces: 4</span>
+                        <button type="button" id="note-font-toggle" class="hover:text-white transition-colors" title="Toggle monospace font">Monospace</button>
+                        <button type="button" id="note-keys-btn" class="flex items-center gap-1 hover:text-white transition-colors" title="Keyboard shortcuts"><span data-lucide="keyboard" class="w-3.5 h-3.5"></span> Shortcuts</button>
+                        <span id="note-save-status" class="ml-auto" data-state="saved">Saved</span>
+                        <div id="note-keys-panel" class="hidden absolute bottom-full left-4 mb-2 w-[22rem] p-4 rounded-xl bg-gray-800 border border-gray-700 shadow-2xl text-xs text-white/80 z-20">
+                            <p class="font-semibold text-white mb-2">Editor shortcuts</p>
+                            <div class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5">
+                                <kbd>Ctrl+B / I / U</kbd><span>Bold / italic / underline</span>
+                                <kbd>Ctrl+Shift+X</kbd><span>Strikethrough</span>
+                                <kbd>Ctrl+Shift+&gt; / &lt;</kbd><span>Bigger / smaller text or image</span>
+                                <kbd>Ctrl+\ or Ctrl+Space</kbd><span>Clear formatting / reset image</span>
+                                <kbd>Tab</kbd><span>Indent (selected lines)</span>
+                                <kbd>Shift+Tab</kbd><span>Outdent</span>
+                                <kbd>Ctrl+] / Ctrl+[</kbd><span>Indent / outdent line</span>
+                                <kbd>Alt+&uarr;/&darr;</kbd><span>Move line(s) up / down</span>
+                                <kbd>Shift+Alt+&uarr;/&darr;</kbd><span>Copy line(s) up / down</span>
+                                <kbd>Ctrl+Shift+K</kbd><span>Delete line</span>
+                                <kbd>Ctrl+Enter</kbd><span>New line below</span>
+                                <kbd>Ctrl+Shift+Enter</kbd><span>New line above</span>
+                                <kbd>Ctrl+L</kbd><span>Select line</span>
+                                <kbd>Home</kbd><span>Jump to first character</span>
+                                <kbd>Ctrl+Z / Ctrl+Y</kbd><span>Undo / redo</span>
+                                <kbd>Ctrl+S</kbd><span>Save now (also autosaves)</span>
+                                <kbd>Ctrl+V</kbd><span>Paste text or images</span>
+                            </div>
+                            <p class="mt-3 text-white/50">Click an image to select it, then press Enter, Space or Tab to move it down or right, Shift+Tab to move it back left, Ctrl+Shift+&gt; / &lt; to resize it and Backspace to delete it.</p>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
+
+    <div id="note-folder-modal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition-opacity duration-300 z-[80]">
+        <div class="bg-gray-800 p-6 rounded-2xl shadow-2xl w-full max-w-sm border border-gray-700">
+            <h3 id="note-folder-modal-title" class="text-xl font-bold text-white mb-4">New Folder</h3>
+            <input type="text" id="note-folder-name" placeholder="Folder name" class="w-full p-3 rounded-xl bg-gray-700 text-white placeholder-gray-400 border border-gray-600 focus:border-blue-500 outline-none transition-colors">
+            <label class="block text-white/70 text-xs font-semibold uppercase tracking-wider mt-4 mb-2">Colour</label>
+            <div id="note-folder-color-picker" class="flex gap-2 flex-wrap"></div>
+            <div class="flex justify-between items-center mt-6">
+                <button id="note-folder-delete-btn" class="px-4 py-2 rounded-xl bg-red-600 text-white hover:bg-red-700 font-semibold text-sm hidden">Delete</button>
+                <div class="flex gap-2 ml-auto">
+                    <button id="note-folder-cancel-btn" class="px-4 py-2 rounded-xl bg-gray-600 text-white hover:bg-gray-500 text-sm">Cancel</button>
+                    <button id="note-folder-save-btn" class="px-4 py-2 rounded-xl bg-blue-500 text-white hover:bg-blue-600 font-semibold text-sm">Save</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="note-move-menu" class="hidden fixed z-[90] w-56 max-h-72 overflow-y-auto custom-scroll p-1.5 rounded-xl bg-gray-800/95 backdrop-blur-md border border-gray-600 shadow-2xl"></div>
 
 
     <div id="calendar-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition-opacity duration-300 z-50">
@@ -3523,7 +5319,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 09/11/2026 - 20:13</div>
+    <div id="version-timestamp">Last Update 30/10/2026 - 18:48</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
@@ -6496,6 +8292,41 @@
     </script>
 
 <style>
+    /* ===== Notes: favourites + folders ===== */
+    .note-row .note-star { opacity: 0; color: rgba(255,255,255,.45); transition: opacity .15s, color .15s; }
+    .note-row:hover .note-star { opacity: 1; }
+    .note-row .note-star:hover { color: #fde047; }
+    .note-row .note-star.is-fav { opacity: 1; color: #facc15; }
+    .note-row .note-star.is-fav svg { fill: currentColor; }
+
+    /* Code-style note editor */
+    #note-editor-wrap.is-disabled { opacity: 0; pointer-events: none; }
+    .note-editor { position: relative; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; -moz-tab-size: 4; caret-color: #60a5fa; cursor: text; }
+    .note-editor.mono { font-family: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', Consolas, 'Courier New', ui-monospace, monospace; font-size: 0.9rem; line-height: 1.7; }
+    .note-editor.is-empty::before { content: attr(data-placeholder); position: absolute; color: rgba(255,255,255,.3); pointer-events: none; }
+    .note-editor ::selection { background: rgba(59,130,246,.45); }
+    .note-editor .note-img { display: inline-block; max-width: 100%; height: auto; vertical-align: bottom; border-radius: 6px; margin: 2px 0; cursor: default; }
+    .note-editor .note-img.is-selected { outline: 2px solid #3b82f6; outline-offset: 2px; }
+    #note-save-status[data-state="dirty"], #note-save-status[data-state="saving"] { color: #fbbf24; }
+    #note-save-status[data-state="error"] { color: #f87171; }
+    .note-tb-btn { width: 2rem; height: 2rem; display: inline-flex; align-items: center; justify-content: center; border-radius: .5rem; color: rgba(255,255,255,.65); transition: background-color .15s, color .15s; }
+    .note-tb-btn:hover { background: rgba(255,255,255,.08); color: #fff; }
+    .note-tb-btn.is-active { background: rgba(59,130,246,.25); color: #93c5fd; }
+    #note-keys-panel kbd { font-family: ui-monospace, Consolas, monospace; font-size: 10px; padding: 1px 6px; border-radius: 4px; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.12); white-space: nowrap; justify-self: start; }
+
+    .note-folder-header { transition: filter .15s; }
+    .note-folder-header:hover { filter: brightness(1.25); }
+    .note-drop-over { outline: 2px dashed rgba(96,165,250,.85); outline-offset: 2px; border-radius: .5rem; }
+
+    .note-folder-anim { animation: noteFolderOpen .22s ease-out; transform-origin: top; }
+    @keyframes noteFolderOpen { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+
+    .note-color-custom { background: conic-gradient(#f87171, #fbbf24, #34d399, #22d3ee, #60a5fa, #a78bfa, #f472b6, #f87171); position: relative; overflow: hidden; display: inline-block; }
+    .note-color-custom input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+
+    @media (hover: none), (pointer: coarse) {
+        .note-actions, .note-row .note-star { opacity: 1 !important; }
+    }
     /* ===================== Mobile / touch layer ===================== */
     /* Only the page-level container. .scroll-container is also reused on inner lists. */
     body > .scroll-container { height: 100vh; height: 100dvh; }
@@ -7180,6 +9011,267 @@
             document.addEventListener('visibilitychange', maybePull);
         });
     })();
+</script>
+<script>
+/* ====== CHRISTMAS THEME + menu stagger ====== */
+(function () {
+    const KEY = 'christmasTheme';
+    const root = document.documentElement;
+    const isOn = () => root.classList.contains('christmas');
+    const ICONS = ['🎄', '🎁', '⛄', '❄️', '🦌', '🔔', '🍪', '⭐', '🧦', '🎅', '🍬', '🕯️'];
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    // ---------- Quick menu: stagger items by their visible order ----------
+    // Items reveal bottom-to-top in the order you see them, skipping hidden
+    // (school-only / personal-only) ones, so nothing pops in out of turn.
+    const staggerMenu = () => {
+        const wrap = document.getElementById('radial-menu-wrapper');
+        if (!wrap) return;
+        const apply = () => {
+            const open = wrap.classList.contains('active');
+            let i = 0;
+            wrap.querySelectorAll('.radial-item').forEach(el => {
+                const visible = getComputedStyle(el).display !== 'none';
+                el.style.transitionDelay = open && visible ? `${(++i) * 0.05}s` : '';
+            });
+        };
+        new MutationObserver(apply).observe(wrap, { attributes: true, attributeFilter: ['class'] });
+        apply();
+    };
+
+    // ---------- Layers ----------
+    let glow, canvas, lights, countdown, countdownWrap;
+    const ensureLayers = () => {
+        if (!glow) {
+            glow = document.createElement('div'); glow.id = 'xmas-glow'; glow.setAttribute('aria-hidden', 'true');
+            canvas = document.createElement('canvas'); canvas.id = 'xmas-snow'; canvas.setAttribute('aria-hidden', 'true');
+            lights = document.createElement('div'); lights.id = 'xmas-lights'; lights.setAttribute('aria-hidden', 'true');
+            const bg = document.getElementById('background-container');
+            if (bg) bg.after(glow, canvas); else document.body.prepend(glow, canvas);
+            document.body.appendChild(lights);
+        }
+        if (!countdown) {
+            countdownWrap = document.createElement('div');
+            countdownWrap.id = 'xmas-countdown-wrap';
+            countdown = document.createElement('div');
+            countdown.id = 'xmas-countdown';
+            countdownWrap.appendChild(countdown);
+        }
+    };
+    // The pill is only in the page while the theme is on: even hidden, it would
+    // change the spacing of the middle column (space-y-8) and nudge the layout.
+    const placeCountdown = (on) => {
+        if (!countdownWrap) return;
+        const centre = document.querySelector('body > .scroll-container > .grid > .lg\\:col-span-3');
+        if (on && centre && countdownWrap.parentNode !== centre) centre.prepend(countdownWrap);
+        if (!on && countdownWrap.parentNode) countdownWrap.remove();
+    };
+
+    // ---------- Fairy lights ----------
+    const COLORS = ['red', 'gold', 'green', 'blue', 'pink'];
+    const buildLights = () => {
+        if (!lights) return;
+        const w = window.innerWidth;
+        const span = w < 640 ? 110 : 150;          // distance between hooks
+        const sag = w < 640 ? 14 : 18;             // how far the wire droops
+        const top = 4;
+        const n = Math.max(2, Math.round(w / span));
+        const seg = w / n;
+        let d = `M 0 ${top}`;
+        for (let i = 0; i < n; i++) {
+            const x0 = i * seg, x1 = (i + 1) * seg;
+            d += ` Q ${x0 + seg / 2} ${top + sag * 2} ${x1} ${top}`;
+        }
+        let html = `<svg viewBox="0 0 ${w} 52" preserveAspectRatio="none"><path d="${d}" fill="none" stroke="#1a2e22" stroke-width="2" stroke-linecap="round"/><path d="${d}" fill="none" stroke="rgba(255,255,255,.12)" stroke-width="0.6" transform="translate(0,-0.8)"/></svg>`;
+        const perSeg = w < 640 ? 2 : 3;
+        let k = 0;
+        for (let i = 0; i < n; i++) {
+            const x0 = i * seg, cx = x0 + seg / 2, x1 = x0 + seg;
+            for (let j = 1; j <= perSeg; j++) {
+                const t = j / (perSeg + 1);
+                // point + tangent on the quadratic curve
+                const x = (1 - t) * (1 - t) * x0 + 2 * (1 - t) * t * cx + t * t * x1;
+                const y = (1 - t) * (1 - t) * top + 2 * (1 - t) * t * (top + sag * 2) + t * t * top;
+                const dy = 2 * (1 - t) * (sag * 2) + 2 * t * (-sag * 2);
+                const dx = 2 * (1 - t) * (cx - x0) + 2 * t * (x1 - cx);
+                const angle = Math.atan2(dy, dx) * 180 / Math.PI * 0.6;
+                const color = COLORS[k % COLORS.length];
+                const delay = ((k * 0.37) % 2.4).toFixed(2);
+                const dur = (2 + (k % 5) * 0.35).toFixed(2);
+                html += `<span class="xmas-bulb ${color}" style="left:${x.toFixed(1)}px;top:${(y - 1).toFixed(1)}px;transform:rotate(${angle.toFixed(1)}deg);--tw-delay:${delay}s;--tw-dur:${dur}s"></span>`;
+                k++;
+            }
+        }
+        lights.innerHTML = html;
+    };
+
+    // ---------- Snow ----------
+    let flakes = [], raf = null, last = 0, ctx = null, cw = 0, ch = 0;
+    const sizeCanvas = () => {
+        if (!canvas) return;
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        cw = window.innerWidth; ch = window.innerHeight;
+        canvas.width = Math.round(cw * dpr); canvas.height = Math.round(ch * dpr);
+        ctx = canvas.getContext('2d');
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        const target = Math.min(220, Math.round((cw * ch) / 8500));
+        while (flakes.length < target) flakes.push(newFlake(true));
+        flakes.length = target;
+    };
+    const newFlake = (anywhere) => {
+        const r = Math.random() * 2.1 + 0.7;
+        return {
+            x: Math.random() * (cw || window.innerWidth),
+            y: anywhere ? Math.random() * (ch || window.innerHeight) : -10,
+            r,
+            vy: 18 + r * 16 + Math.random() * 14,   // px per second, bigger = faster
+            sway: Math.random() * 18 + 6,
+            phase: Math.random() * Math.PI * 2,
+            freq: Math.random() * 0.8 + 0.4,
+            a: Math.random() * 0.45 + 0.5
+        };
+    };
+    const drawFlakes = () => {
+        ctx.clearRect(0, 0, cw, ch);
+        for (const f of flakes) {
+            const x = f.x + Math.sin(f.phase) * f.sway;
+            ctx.beginPath();
+            ctx.arc(x, f.y, f.r, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(255,255,255,${f.a})`;
+            ctx.fill();
+        }
+    };
+    const tick = (now) => {
+        const dt = Math.min(0.05, (now - (last || now)) / 1000); last = now;
+        for (let i = 0; i < flakes.length; i++) {
+            const f = flakes[i];
+            f.y += f.vy * dt;
+            f.phase += f.freq * dt;
+            if (f.y - f.r > ch) flakes[i] = newFlake(false);
+        }
+        drawFlakes();
+        raf = requestAnimationFrame(tick);
+    };
+    const startSnow = () => {
+        sizeCanvas();
+        if (reduceMotion) { drawFlakes(); return; }
+        if (!raf) { last = 0; raf = requestAnimationFrame(tick); }
+    };
+    const stopSnow = () => {
+        if (raf) cancelAnimationFrame(raf);
+        raf = null;
+        if (ctx) ctx.clearRect(0, 0, cw, ch);
+    };
+
+    // ---------- Countdown ----------
+    const updateCountdown = () => {
+        if (!countdown) return;
+        const now = new Date();
+        const y = now.getFullYear(), m = now.getMonth(), d = now.getDate();
+        let html;
+        if (m === 11 && d === 24) html = '🎅 <span>Christmas Eve!</span>';
+        else if (m === 11 && d === 25) html = '🎁 <span>Merry Christmas!</span>';
+        else if (m === 11 && d >= 26 && d <= 30) html = '✨ <span>Happy holidays!</span>';
+        else if ((m === 11 && d === 31) || (m === 0 && d === 1)) html = '🎆 <span>Happy New Year!</span>';
+        else {
+            const xmasYear = (m === 11 && d > 25) ? y + 1 : y;
+            const today = Date.UTC(y, m, d), xmas = Date.UTC(xmasYear, 11, 25);
+            const days = Math.round((xmas - today) / 86400000);
+            html = `🎄 <span><span class="xmas-cd-num">${days}</span> ${days === 1 ? 'day' : 'days'} until Christmas</span>`;
+        }
+        countdown.innerHTML = html;
+    };
+
+    // ---------- Assignment stickers (stable per assignment) ----------
+    const hash = (s) => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return Math.abs(h); };
+    const decorateAssignments = () => {
+        document.querySelectorAll('.assignment-item').forEach(el => {
+            if (isOn()) el.dataset.xmasIcon = ICONS[hash(el.id || el.textContent) % ICONS.length];
+            else delete el.dataset.xmasIcon;
+        });
+    };
+
+    // ---------- Menu button label ----------
+    const updateButton = () => {
+        const label = document.getElementById('menu-toggle-christmas-label');
+        if (label) label.textContent = isOn() ? 'Turn off Christmas' : 'Christmas';
+    };
+
+    // ---------- On / off ----------
+    let cdTimer = null;
+    const applyLocally = (on) => {
+        root.classList.toggle('christmas', on);
+        try { localStorage.setItem(KEY, on ? '1' : '0'); } catch (e) {}
+        if (!document.body) return;
+        ensureLayers();
+        placeCountdown(on);
+        if (on) {
+            buildLights(); startSnow(); updateCountdown();
+            if (!cdTimer) cdTimer = setInterval(updateCountdown, 60 * 1000);
+        } else {
+            stopSnow();
+            if (cdTimer) { clearInterval(cdTimer); cdTimer = null; }
+        }
+        decorateAssignments();
+        updateButton();
+    };
+
+    // ---------- Sync across devices (same Firestore doc pattern as Halloween) ----------
+    let applyingRemote = false;
+    const settingsDoc = (h) => h.doc(h.db, h.getCollectionPath('settings'), 'christmas');
+    const pushRemote = async (on) => {
+        const h = window.firestoreHelpers;
+        if (!h || !h.ready()) return;
+        try { await h.setDoc(settingsDoc(h), { on: !!on, updatedAt: new Date().toISOString() }); }
+        catch (e) { console.warn('Christmas sync (write) failed:', e); }
+    };
+    const subscribeRemote = () => {
+        const h = window.firestoreHelpers;
+        if (!h || !h.ready()) { setTimeout(subscribeRemote, 500); return; }
+        try {
+            h.onSnapshot(settingsDoc(h), (snap) => {
+                if (!snap.exists()) return;
+                const on = snap.data().on === true;
+                if (isOn() === on) return;
+                applyingRemote = true;
+                applyLocally(on);
+                applyingRemote = false;
+            });
+        } catch (e) { console.warn('Christmas sync (listen) failed:', e); }
+    };
+
+    window.toggleChristmas = () => {
+        const next = !isOn();
+        applyLocally(next);
+        if (!applyingRemote) pushRemote(next);
+    };
+
+    // ---------- Wire up ----------
+    const wire = () => {
+        staggerMenu();
+        const btn = document.getElementById('menu-toggle-christmas');
+        if (btn) btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (typeof window.closeRadialMenu === 'function') window.closeRadialMenu();
+            window.toggleChristmas();
+        });
+        const list = document.getElementById('assignment-list');
+        if (list) new MutationObserver(() => { if (isOn()) decorateAssignments(); }).observe(list, { childList: true });
+
+        let resizeT = null;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeT);
+            resizeT = setTimeout(() => { if (isOn()) { buildLights(); sizeCanvas(); if (reduceMotion) drawFlakes(); } }, 150);
+        });
+
+        applyLocally(isOn());
+        if (window.lucide) lucide.createIcons();
+        subscribeRemote();
+    };
+
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wire);
+    else wire();
+})();
 </script>
 </body>
 </html>
