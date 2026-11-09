@@ -663,7 +663,7 @@
         
     import { initializeApp } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js";
     import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-auth.js";
-    import { getFirestore, doc, addDoc, deleteDoc, setDoc, onSnapshot, collection, setLogLevel } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore.js";
+    import { getFirestore, doc, addDoc, deleteDoc, setDoc, onSnapshot, collection, setLogLevel, writeBatch } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore.js";
 
     const STATIC_OVERRIDE_USER_ID = 'zNllEXqmHpaqNZffrgOhyPrSfBB3';
     const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
@@ -915,20 +915,24 @@
         addBookmark: async (name, url, icon) => {
             if (!db || !userId) return;
             try {
-                await addDoc(collection(db, getCollectionPath('bookmarks')), { 
-                    name, url, icon, order: window.bookmarks ? window.bookmarks.length : 0 
-                });
+                // Always append after the current last bookmark
+                const list = window.bookmarks || [];
+                const nextOrder = list.reduce((max, b) => Math.max(max, Number(b.order) || 0), -1) + 1;
+                await addDoc(collection(db, getCollectionPath('bookmarks')), { name, url, icon, order: nextOrder });
             } catch (e) { console.error(e); }
         },
         deleteBookmark: async (id) => {
             if (!db || !userId) return;
             try { await deleteDoc(doc(db, getCollectionPath('bookmarks'), id)); } catch (e) { console.error(e); }
         },
-        reorderBookmarks: async (newBookmarkArray) => {
-            if (!db || !userId) return;
+        // updates = [{ id, order }] — only the bookmarks that actually moved
+        reorderBookmarks: async (updates) => {
+            if (!db || !userId || !updates || !updates.length) return;
             try {
-                const promises = newBookmarkArray.map((bm, index) => setDoc(doc(db, getCollectionPath('bookmarks'), bm.id), { order: index }, { merge: true }));
-                await Promise.all(promises);
+                const batch = writeBatch(db);
+                updates.forEach(({ id, order }) =>
+                    batch.set(doc(db, getCollectionPath('bookmarks'), id), { order }, { merge: true }));
+                await batch.commit();
             } catch (e) { console.error("Reorder failed", e); }
         },
         addBackground: async (imagesArray) => {
@@ -1764,48 +1768,349 @@
             lucide.createIcons(); 
         };
 
-        let draggedItem = null;
-        window.handleDragStart = (e, id) => {
-            draggedItem = bookmarks.find(b => b.id === id);
-            e.dataTransfer.effectAllowed = 'move';
-            setTimeout(() => document.getElementById(`bookmark-wrap-${id}`)?.classList.add('dragging'), 0);
+                // ---------- Bookmarks: render + pointer-based drag & drop ----------
+        let bookmarkDrag = null;            // active drag (null when idle)
+        let pendingBookmarkRender = null;   // Firestore snapshot that arrived mid-drag
+        let scrollBookmarksToEnd = false;   // set when a bookmark is added
+
+                // ---------- Bookmark icons: try several sources, fall back to a letter tile ----------
+        const BM_ICON_CACHE_KEY = 'bmIconCache_v1';
+        const BM_ICON_RETRY_MS = 7 * 86400000; // sites with no icon get re-checked weekly
+        let bmIconCache = {};
+        try { bmIconCache = JSON.parse(localStorage.getItem(BM_ICON_CACHE_KEY) || '{}') || {}; } catch (e) {}
+        const saveIconCache = () => { try { localStorage.setItem(BM_ICON_CACHE_KEY, JSON.stringify(bmIconCache)); } catch (e) {} };
+        const bmIconJobs = new Map(); // host -> in-flight lookup, so each site is only resolved once
+
+        const escAttr = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+
+        const getUrlParts = (url) => {
+            try {
+                const u = new URL(url.startsWith('http') ? url : `https://${url}`);
+                const host = u.hostname.replace(/^www\./, '');
+                const labels = host.split('.');
+                const isIp = /^\d+$/.test(labels[labels.length - 1]);
+                const root = labels.length > 2 && !isIp ? labels.slice(-2).join('.') : host;
+                return { origin: u.origin, host, root };
+            } catch (e) { return null; }
         };
-        window.handleDragEnd = (e, id) => { document.getElementById(`bookmark-wrap-${id}`)?.classList.remove('dragging'); document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over')); draggedItem = null; };
-        window.handleDragEnter = (e, targetId) => { e.preventDefault(); if (draggedItem && draggedItem.id !== targetId) document.getElementById(`bookmark-wrap-${targetId}`)?.classList.add('drag-over'); };
-        window.handleDragLeave = (e, targetId) => document.getElementById(`bookmark-wrap-${targetId}`)?.classList.remove('drag-over');
-        window.handleDragOver = (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; };
-        window.handleDrop = async (e, targetId) => {
-            e.preventDefault();
-            document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
-            if (!draggedItem || draggedItem.id === targetId) return;
-            const oldIndex = bookmarks.findIndex(b => b.id === draggedItem.id);
-            const newIndex = bookmarks.findIndex(b => b.id === targetId);
-            if (oldIndex === -1 || newIndex === -1) return;
-            bookmarks.splice(newIndex, 0, bookmarks.splice(oldIndex, 1)[0]);
-            bookmarks.forEach((bm, index) => bm.order = index);
-            window.renderBookmarks(bookmarks);
-            await window.db.reorderBookmarks(bookmarks);
+
+        // trustSmall: a 16px result from this source is a real favicon, not a "not found" placeholder
+        const iconCandidates = ({ origin, host, root }) => {
+            const list = [
+                { src: `https://www.google.com/s2/favicons?domain=${host}&sz=128`, trustSmall: false },
+                { src: `${origin}/apple-touch-icon.png`, trustSmall: true },
+                { src: `${origin}/favicon.ico`, trustSmall: true },
+                { src: `https://icons.duckduckgo.com/ip3/${host}.ico`, trustSmall: false },
+            ];
+            if (root !== host) list.push(
+                { src: `https://www.google.com/s2/favicons?domain=${root}&sz=128`, trustSmall: false },
+                { src: `https://${root}/favicon.ico`, trustSmall: true },
+                { src: `https://icons.duckduckgo.com/ip3/${root}.ico`, trustSmall: false },
+            );
+            return list;
+        };
+
+        const probeImage = (src, timeout = 5000) => new Promise(resolve => {
+            const img = new Image();
+            const t = setTimeout(() => { img.src = ''; resolve(null); }, timeout);
+            img.onload = () => { clearTimeout(t); resolve(img.naturalWidth ? { w: img.naturalWidth } : null); };
+            img.onerror = () => { clearTimeout(t); resolve(null); };
+            img.referrerPolicy = 'no-referrer';
+            img.src = src;
+        });
+
+        const resolveBookmarkIcon = (parts) => {
+            if (bmIconJobs.has(parts.host)) return bmIconJobs.get(parts.host);
+            const job = (async () => {
+                const cands = iconCandidates(parts);
+                const results = await Promise.all(cands.map(c => probeImage(c.src)));
+                // 1st choice: any decent-sized icon, in priority order. 2nd: a small icon from the site itself.
+                const pick = cands.find((c, i) => results[i] && results[i].w >= 32)
+                          || cands.find((c, i) => results[i] && c.trustSmall);
+                const src = pick ? pick.src : null;
+                bmIconCache[parts.host] = { src, at: Date.now() };
+                saveIconCache();
+                return src;
+            })();
+            bmIconJobs.set(parts.host, job);
+            job.finally(() => bmIconJobs.delete(parts.host));
+            return job;
+        };
+
+        const LETTER_COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#ef4444', '#6366f1'];
+        const letterTile = (name) => {
+            const clean = String(name || '').replace(/[^\p{L}\p{N}]/gu, '');
+            const letter = (clean[0] || '?').toUpperCase();
+            let h = 0;
+            for (const c of String(name || '')) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+            return `<span class="bm-letter-icon" style="background:${LETTER_COLORS[h % LETTER_COLORS.length]}">${escAttr(letter)}</span>`;
+        };
+
+        const iconImgHTML = (src, host, name, fade = false) =>
+            `<img src="${escAttr(src)}" class="bookmark-favicon${fade ? ' bm-icon-fade' : ''}" draggable="false" referrerpolicy="no-referrer" alt=""
+                  data-host="${escAttr(host)}" data-name="${escAttr(name)}" onerror="window.bmIconFailed(this)">`;
+
+        const bookmarkIconHTML = (b) => {
+            const parts = getUrlParts(b.url);
+            const cached = parts && bmIconCache[parts.host];
+            if (cached && cached.src) return iconImgHTML(cached.src, parts.host, b.name);
+            return `<span class="bm-icon-slot" data-host="${escAttr(parts ? parts.host : '')}">${letterTile(b.name)}</span>`;
+        };
+
+        // A cached icon that stops loading: drop it, show the letter, and look again next render
+        window.bmIconFailed = (img) => {
+            delete bmIconCache[img.dataset.host];
+            saveIconCache();
+            img.outerHTML = `<span class="bm-icon-slot" data-host="${escAttr(img.dataset.host)}">${letterTile(img.dataset.name)}</span>`;
+        };
+
+        const hydrateBookmarkIcons = (container) => {
+            bookmarks.forEach(b => {
+                const parts = getUrlParts(b.url);
+                if (!parts) return;
+                const cached = bmIconCache[parts.host];
+                if (cached && (cached.src || Date.now() - cached.at < BM_ICON_RETRY_MS)) return;
+                resolveBookmarkIcon(parts).then(src => {
+                    if (!src) return;
+                    container.querySelectorAll(`.bm-icon-slot[data-host="${CSS.escape(parts.host)}"]`)
+                        .forEach(slot => { slot.outerHTML = iconImgHTML(src, parts.host, b.name, true); });
+                });
+            });
+        };
+
+        const bookmarkHTML = (b) => {
+            const domain = getBaseDomain(b.url);
+            const iconContent = bookmarkIconHTML(b);
+            return `
+            <div id="bookmark-wrap-${b.id}" data-id="${b.id}" class="bookmark-item-wrap relative">
+                <a href="${b.url}" draggable="false" class="bookmark-icon flex flex-col items-center justify-center w-16 h-16 sm:w-20 sm:h-20 bg-white/10 border border-white/20 rounded-2xl hover:border-blue-400 select-none">
+                    ${iconContent}<span class="text-xs text-white/80 mt-1 truncate max-w-full pointer-events-none">${b.name}</span>
+                </a>
+                <button onclick="window.db.deleteBookmark('${b.id}')" class="delete-btn absolute top-[-5px] right-[-5px] w-6 h-6 flex items-center justify-center bg-white/20 text-white rounded-full p-0.5 shadow-md hover:bg-white/40"><span data-lucide="x" class="w-3 h-3"></span></button>
+            </div>`;
         };
 
         window.renderBookmarks = (newBookmarks) => {
-            bookmarks = newBookmarks.sort((a, b) => (a.order || 0) - (b.order || 0));
-            document.getElementById('bookmark-container').innerHTML = bookmarks.map(b => {
-                const domain = getBaseDomain(b.url);
-                const iconContent = domain ? `<img src="https://s2.googleusercontent.com/s2/favicons?domain=${domain}&sz=64" class="bookmark-favicon" onerror="this.outerHTML='<span data-lucide=${b.icon || 'link'} class=\\'w-6 h-6 text-white\\'></span>'"/>` : `<span data-lucide="${b.icon || 'link'}" class="w-6 h-6 text-white"></span>`;
-                return `
-                <div id="bookmark-wrap-${b.id}" class="bookmark-item-wrap relative" draggable="true" ondragstart="window.handleDragStart(event, '${b.id}')" ondragend="window.handleDragEnd(event, '${b.id}')" ondragenter="window.handleDragEnter(event, '${b.id}')" ondragleave="window.handleDragLeave(event, '${b.id}')" ondragover="window.handleDragOver(event)" ondrop="window.handleDrop(event, '${b.id}')">
-                    <a href="${b.url}" class="bookmark-icon flex flex-col items-center justify-center w-16 h-16 sm:w-20 sm:h-20 bg-white/10 border border-white/20 rounded-2xl hover:border-blue-400 select-none">
-                        ${iconContent}<span class="text-xs text-white/80 mt-1 truncate max-w-full pointer-events-none">${b.name}</span>
-                    </a>
-                    <button onclick="window.db.deleteBookmark('${b.id}')" class="delete-btn absolute top-[-5px] right-[-5px] w-6 h-6 flex items-center justify-center bg-white/20 text-white rounded-full p-0.5 shadow-md hover:bg-white/40"><span data-lucide="x" class="w-3 h-3"></span></button>
-                </div>`;
-            }).join('') + `
+            // Never rebuild the grid under the user's finger: apply it once the drop finishes
+            if (bookmarkDrag) { pendingBookmarkRender = newBookmarks; return; }
+
+            bookmarks = [...newBookmarks].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+            window.bookmarks = bookmarks;
+
+            const container = document.getElementById('bookmark-container');
+            container.innerHTML = bookmarks.map(bookmarkHTML).join('') + `
                 <button id="open-bookmark-modal-btn" class="flex flex-col items-center justify-center w-16 h-16 sm:w-20 sm:h-20 bg-white/5 border border-white/10 rounded-2xl text-white/50 hover:text-white hover:border-blue-500 transition-all duration-300">
                     <span data-lucide="plus" class="w-8 h-8"></span><span class="text-xs mt-1">Add</span>
                 </button>`;
-            if(document.getElementById('open-bookmark-modal-btn')) document.getElementById('open-bookmark-modal-btn').addEventListener('click', openBookmarkModal);
             lucide.createIcons();
+            hydrateBookmarkIcons(container);
+
+            if (scrollBookmarksToEnd) {
+                scrollBookmarksToEnd = false;
+                container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+            }
         };
+
+        const initBookmarkDrag = () => {
+            const container = document.getElementById('bookmark-container');
+            if (!container) return;
+
+            const LONG_PRESS_MS = 220;   // touch: hold this long to pick a bookmark up
+            const MOUSE_THRESHOLD = 6;   // mouse: move this far before a drag starts
+            const TOUCH_SLOP = 10;       // touch: moving more than this before the hold = scrolling
+            const EDGE = 40;             // auto-scroll zone at the top/bottom of the grid
+            const MAX_SPEED = 14;        // auto-scroll px per frame
+
+            let press = null;
+            let lastDragEnd = 0;
+            const anims = new Map();     // element -> running slide animation
+
+            const cancelPress = () => { if (press) clearTimeout(press.timer); press = null; };
+
+            // FLIP: measure, move in the DOM, then animate everything from old to new position
+            const animateReorder = (mutate) => {
+                const els = [...container.children];
+                const before = new Map(els.map(el => [el, el.getBoundingClientRect()]));
+                mutate();
+                els.forEach(el => {
+                    anims.get(el)?.cancel();
+                    const a = before.get(el);
+                    const b = el.getBoundingClientRect();
+                    const dx = a.left - b.left, dy = a.top - b.top;
+                    if (!dx && !dy) return;
+                    const anim = el.animate(
+                        [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'translate(0, 0)' }],
+                        { duration: 200, easing: 'cubic-bezier(.2,.8,.2,1)' }
+                    );
+                    anims.set(el, anim);
+                    const done = () => { if (anims.get(el) === anim) anims.delete(el); };
+                    anim.onfinish = done;
+                    anim.oncancel = done;
+                });
+            };
+
+            const updateTarget = () => {
+                const d = bookmarkDrag;
+                if (!d || d.ending) return;
+                const el = document.elementFromPoint(d.x, d.y);
+                if (!el || !container.contains(el)) return;
+
+                // Hovering the "Add" tile = drop at the very end
+                const addBtn = document.getElementById('open-bookmark-modal-btn');
+                if (addBtn && addBtn.contains(el)) {
+                    if (addBtn.previousElementSibling !== d.wrap) animateReorder(() => container.insertBefore(d.wrap, addBtn));
+                    return;
+                }
+
+                const target = el.closest('.bookmark-item-wrap');
+                // Skip tiles that are still sliding, otherwise two tiles can swap back and forth
+                if (!target || target === d.wrap || anims.has(target)) return;
+
+                const items = [...container.querySelectorAll('.bookmark-item-wrap')];
+                const from = items.indexOf(d.wrap);
+                const to = items.indexOf(target);
+                animateReorder(() => container.insertBefore(d.wrap, from < to ? target.nextSibling : target));
+            };
+
+            const autoScroll = () => {
+                const d = bookmarkDrag;
+                if (!d) return;
+                const r = container.getBoundingClientRect();
+                let ratio = 0;
+                if (d.y < r.top + EDGE) ratio = -Math.min(1, (r.top + EDGE - d.y) / EDGE);
+                else if (d.y > r.bottom - EDGE) ratio = Math.min(1, (d.y - (r.bottom - EDGE)) / EDGE);
+                if (ratio) container.scrollTop += Math.sign(ratio) * ratio * ratio * MAX_SPEED; // eases in near the edge
+                d.raf = requestAnimationFrame(autoScroll);
+            };
+
+            const moveDrag = (x, y) => {
+                const d = bookmarkDrag;
+                d.x = x; d.y = y;
+                d.ghost.style.transform =
+                    `translate3d(${x - d.offsetX - d.originX}px, ${y - d.offsetY - d.originY}px, 0) scale(1.08) rotate(-2deg)`;
+                updateTarget();
+            };
+
+            const startDrag = () => {
+                const { wrap, pointerId, x, y, type } = press;
+                cancelPress();
+
+                const r = wrap.getBoundingClientRect();
+                const ghost = wrap.cloneNode(true);
+                ghost.removeAttribute('id');
+                ghost.classList.add('bm-drag-ghost');
+                Object.assign(ghost.style, {
+                    left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px`
+                });
+                document.body.appendChild(ghost);
+
+                wrap.classList.add('bm-drag-placeholder');
+                container.classList.add('bm-dragging');
+                document.body.classList.add('bm-drag-active');
+                if (type === 'mouse') { try { container.setPointerCapture(pointerId); } catch (e) {} }
+                else navigator.vibrate?.(15);
+
+                bookmarkDrag = {
+                    wrap, ghost, pointerId, x, y, ending: false, raf: 0,
+                    offsetX: x - r.left, offsetY: y - r.top, originX: r.left, originY: r.top
+                };
+                moveDrag(x, y);
+                bookmarkDrag.raf = requestAnimationFrame(autoScroll);
+            };
+
+            const finishDrag = () => {
+                const d = bookmarkDrag;
+                d.ending = true;
+                cancelAnimationFrame(d.raf);
+                lastDragEnd = performance.now();
+
+                // Read the new order straight from the DOM and only save what changed
+                const updates = [];
+                [...container.querySelectorAll('.bookmark-item-wrap')].forEach((el, index) => {
+                    const bm = bookmarks.find(b => b.id === el.dataset.id);
+                    if (bm && bm.order !== index) { bm.order = index; updates.push({ id: bm.id, order: index }); }
+                });
+                bookmarks.sort((a, b) => a.order - b.order);
+
+                // Glide the floating tile into its slot, then clean up
+                const slot = d.wrap.getBoundingClientRect();
+                const settle = d.ghost.animate(
+                    [{ transform: d.ghost.style.transform },
+                     { transform: `translate3d(${slot.left - d.originX}px, ${slot.top - d.originY}px, 0) scale(1)` }],
+                    { duration: 170, easing: 'cubic-bezier(.2,.8,.2,1)', fill: 'forwards' }
+                );
+                settle.onfinish = () => {
+                    d.ghost.remove();
+                    d.wrap.classList.remove('bm-drag-placeholder');
+                    container.classList.remove('bm-dragging');
+                    document.body.classList.remove('bm-drag-active');
+                    bookmarkDrag = null;
+
+                    if (pendingBookmarkRender) {
+                        const latest = pendingBookmarkRender.map(b => {
+                            const u = updates.find(x => x.id === b.id);
+                            return u ? { ...b, order: u.order } : b;
+                        });
+                        pendingBookmarkRender = null;
+                        window.renderBookmarks(latest);
+                    }
+                };
+
+                if (updates.length) window.db.reorderBookmarks?.(updates);
+            };
+
+            // Kill the browser's native "dragging an image/link" behaviour
+            container.addEventListener('dragstart', (e) => e.preventDefault());
+
+            container.addEventListener('pointerdown', (e) => {
+                if (bookmarkDrag || (e.pointerType === 'mouse' && e.button !== 0)) return;
+                const wrap = e.target.closest('.bookmark-item-wrap');
+                if (!wrap || e.target.closest('.delete-btn')) return;
+                cancelPress();
+                press = {
+                    wrap, pointerId: e.pointerId, type: e.pointerType,
+                    startX: e.clientX, startY: e.clientY, x: e.clientX, y: e.clientY, timer: 0
+                };
+                if (e.pointerType !== 'mouse') {
+                    press.timer = setTimeout(() => { if (press) startDrag(); }, LONG_PRESS_MS);
+                }
+            });
+
+            window.addEventListener('pointermove', (e) => {
+                if (bookmarkDrag) {
+                    if (e.pointerId === bookmarkDrag.pointerId && !bookmarkDrag.ending) moveDrag(e.clientX, e.clientY);
+                    return;
+                }
+                if (!press || e.pointerId !== press.pointerId) return;
+                press.x = e.clientX; press.y = e.clientY;
+                const dist = Math.hypot(press.x - press.startX, press.y - press.startY);
+                if (press.type === 'mouse') { if (dist > MOUSE_THRESHOLD) startDrag(); }
+                else if (dist > TOUCH_SLOP) cancelPress(); // finger moved before the hold = normal scroll
+            });
+
+            const endPointer = (e) => {
+                if (press && e.pointerId === press.pointerId) cancelPress();
+                if (bookmarkDrag && e.pointerId === bookmarkDrag.pointerId && !bookmarkDrag.ending) finishDrag();
+            };
+            window.addEventListener('pointerup', endPointer);
+            window.addEventListener('pointercancel', endPointer);
+
+            // Wheel / auto-scroll moves content under a still pointer, so re-check the target
+            container.addEventListener('scroll', () => { if (bookmarkDrag) updateTarget(); }, { passive: true });
+
+            // While dragging on touch: block page scroll and the long-press menu
+            document.addEventListener('touchmove', (e) => { if (bookmarkDrag) e.preventDefault(); }, { passive: false });
+            container.addEventListener('contextmenu', (e) => {
+                if (bookmarkDrag || (press && press.type !== 'mouse')) e.preventDefault();
+            });
+
+            // A drop shouldn't also open the link
+            container.addEventListener('click', (e) => {
+                if (performance.now() - lastDragEnd < 350) { e.preventDefault(); e.stopPropagation(); }
+            }, true);
+        };
+
+        document.addEventListener('DOMContentLoaded', initBookmarkDrag);
 
         let currentMapSelection = 'school'; 
         window.renderMapLocations = (locations) => {
@@ -2132,6 +2437,7 @@
             const nameInput = document.getElementById('bookmark-name'); const urlInput = document.getElementById('bookmark-url');
             if (!nameInput.value.trim() || !urlInput.value.trim()) return;
             const url = urlInput.value.trim().startsWith('http') ? urlInput.value.trim() : `https://${urlInput.value.trim()}`;
+            scrollBookmarksToEnd = true;
             await window.db.addBookmark(nameInput.value.trim(), url, 'link'); nameInput.value = ''; urlInput.value = ''; closeBookmarkModal();
         };
 
@@ -3217,18 +3523,70 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 30/10/2026 - 18:48</div>
+    <div id="version-timestamp">Last Update 09/11/2026 - 20:13</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
         .custom-scroll::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.05); border-radius: 4px; }
         .custom-scroll::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.2); border-radius: 4px; }
         .custom-scroll::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.4); }
+
+        .bm-icon-slot { display: inline-flex; }
+        .bm-letter-icon {
+            width: 26px;
+            height: 26px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 13px;
+            font-weight: 800;
+            color: #fff;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+        }
+        .bm-icon-fade { animation: bmIconIn 0.25s ease-out; }
+        @keyframes bmIconIn {
+            from { opacity: 0; transform: scale(0.7); }
+            to   { opacity: 1; transform: none; }
+        }
     
-        .bookmark-item-wrap { transition: transform 0.2s cubic-bezier(0.2, 0, 0.2, 1), opacity 0.2s; cursor: pointer !important; touch-action: none; }
-        .bookmark-icon { cursor: pointer !important; }
-        .dragging { opacity: 0.01; }
-        .drag-over .bookmark-icon { transform: scale(1.1); border-color: #3b82f6; box-shadow: 0 0 15px rgba(59, 130, 246, 0.5); }
+        /* ===== Bookmark drag & drop ===== */
+        #bookmark-container .bookmark-item-wrap {
+            -webkit-user-select: none;
+            user-select: none;
+            -webkit-touch-callout: none;   /* no iOS link preview on long-press */
+            touch-action: manipulation;
+            cursor: pointer;
+        }
+        #bookmark-container a, #bookmark-container img { -webkit-user-drag: none; }
+        #bookmark-container.bm-dragging .bookmark-icon:hover { transform: none; box-shadow: none; }
+        #bookmark-container.bm-dragging .delete-btn { opacity: 0 !important; pointer-events: none; }
+
+        /* The empty slot where the bookmark will land */
+        .bm-drag-placeholder {
+            border-radius: 1rem;
+            outline: 2px dashed rgba(96, 165, 250, 0.7);
+            outline-offset: -2px;
+            background: rgba(59, 130, 246, 0.12);
+        }
+        .bm-drag-placeholder > * { opacity: 0; }
+
+        /* The tile that follows the cursor / finger */
+        .bm-drag-ghost {
+            position: fixed;
+            margin: 0;
+            z-index: 9999;
+            pointer-events: none;
+            will-change: transform;
+        }
+        .bm-drag-ghost .bookmark-icon {
+            background: rgba(30, 41, 59, 0.9);
+            border-color: #60a5fa;
+            box-shadow: 0 20px 35px -12px rgba(0, 0, 0, 0.7), 0 0 0 3px rgba(96, 165, 250, 0.35);
+            backdrop-filter: blur(8px);
+        }
+        .bm-drag-ghost .delete-btn { display: none; }
+        body.bm-drag-active, body.bm-drag-active * { cursor: grabbing !important; }
         
         textarea, .custom-scroll { scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.3) transparent; }
         textarea::-webkit-scrollbar, .custom-scroll::-webkit-scrollbar { width: 6px; }
