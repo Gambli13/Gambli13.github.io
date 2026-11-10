@@ -4419,432 +4419,6 @@
 
         document.addEventListener('DOMContentLoaded', initF1Logic);
     </script>
-
-    <style>
-        /* ===== Account chip (Google sign-in) ===== */
-        #auth-chip {
-            position: fixed; top: 1rem; right: 1rem; z-index: 35;
-            display: flex; align-items: center; gap: .6rem;
-            padding: .4rem .45rem .4rem .75rem; border-radius: 999px;
-            background: rgba(15, 23, 42, .55); border: 1px solid rgba(255, 255, 255, .15);
-            -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
-            box-shadow: 0 6px 20px rgba(0, 0, 0, .35);
-            color: #fff; font-size: .75rem; max-width: calc(100vw - 2rem);
-        }
-        #auth-chip .auth-note { color: rgba(255,255,255,.7); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        #auth-chip .auth-avatar { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
-        #auth-chip .auth-initial { width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: #3b82f6; font-weight: 700; flex-shrink: 0; }
-        #auth-chip button { display: inline-flex; align-items: center; gap: .45rem; border-radius: 999px; font-weight: 600; transition: background-color .15s, color .15s; }
-        #auth-chip .auth-signin { background: #fff; color: #1f2937; padding: .4rem .85rem; }
-        #auth-chip .auth-signin:hover { background: #e5e7eb; }
-        #auth-chip .auth-signout { color: rgba(255,255,255,.7); padding: .35rem; }
-        #auth-chip .auth-signout:hover { color: #fff; background: rgba(255,255,255,.12); }
-        @media (max-width: 1023px) {
-            #auth-chip { top: auto; bottom: calc(1rem + env(safe-area-inset-bottom)); }
-            #auth-chip .auth-note { display: none; }
-        }
-    </style>
-
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js";
-        import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-auth.js";
-        import { getFirestore, doc, addDoc, deleteDoc, setDoc, onSnapshot, collection, setLogLevel, writeBatch, waitForPendingWrites } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore.js";
-
-        // ===== Access control =====
-        // Only this Google account can see or save dashboard data. This code decides what the page
-        // shows; the Firestore security rules are what actually keep the data private.
-        const OWNER_EMAIL = 'pacmisawsome@gmail.com';
-        // Your existing data already lives under this ID. Signing in as OWNER_EMAIL reads and writes
-        // the same place, so nothing is moved, copied or deleted.
-        const OWNER_DATA_ID = 'zNllEXqmHpaqNZffrgOhyPrSfBB3';
-        // Set while you're signed in on this device; local caches are only used while it's set.
-        const SIGNED_IN_FLAG = 'dashSignedIn';
-        // Local copies of private data, wiped on sign-out.
-        const PRIVATE_CACHE_KEYS = [
-            'personalEvents', 'hardcodedEventOverrides2026', 'personalEventsCloudMigrated_v1', 'hardcodedOverridesCloudMigrated_v1',
-            'mockNotes', 'mockNoteFolders', 'notesOpenFolders', 'bmIconCache_v1',
-            'gcalToken', 'gcalConnected', 'gcalSyncedMap_v1', 'gcalSyncedMap_v2', 'gcalPullState_v2'
-        ];
-
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const configSource = typeof __firebase_config !== 'undefined' ? __firebase_config : LOCAL_FIREBASE_CONFIG_JSON;
-        const firebaseConfig = JSON.parse(configSource);
-
-        let db = null, auth = null, userId = null;
-        let listenersStarted = false, guestStarted = false, leaving = false;
-
-        setLogLevel('debug');
-
-        const getCollectionPath = (collectionName) => `/artifacts/${appId}/users/${userId}/${collectionName}_index`;
-        const isCloud = () => Boolean(db && userId);
-        window.dashIsSignedIn = isCloud;
-
-        const privateCacheOn = () => { try { return localStorage.getItem(SIGNED_IN_FLAG) === '1'; } catch (e) { return false; } };
-        const wipePrivateCache = () => { try { [SIGNED_IN_FLAG, ...PRIVATE_CACHE_KEYS].forEach(k => localStorage.removeItem(k)); } catch (e) {} };
-
-        // Bridges used by the Personal-mode calendar and the Christmas theme (same API as before)
-        window.pmCloud = {
-            ready: isCloud,
-            saveEvent: (ev) => setDoc(doc(db, getCollectionPath('personal_events'), ev.id), JSON.parse(JSON.stringify(ev))),
-            deleteEvent: (id) => deleteDoc(doc(db, getCollectionPath('personal_events'), id)),
-            saveOverride: (id, data) => setDoc(doc(db, getCollectionPath('hardcoded_overrides'), id), JSON.parse(JSON.stringify(data)))
-        };
-        window.firestoreHelpers = {
-            ready: isCloud,
-            get db() { return db; },
-            doc, setDoc, onSnapshot, getCollectionPath
-        };
-
-        const createDeadlineDate = (dateString, timeString) => {
-            if (!dateString) return null;
-            const time = timeString || '23:59';
-            const [year, month, day] = dateString.split('-').map(Number);
-            const [hours, minutes] = time.split(':').map(Number);
-            const deadlineDate = new Date(year, month - 1, day, hours, minutes);
-            return isNaN(deadlineDate.getTime()) ? null : deadlineDate;
-        };
-        const parseDeadlineISO = (isoString) => {
-            if (!isoString) return null;
-            try { const date = new Date(isoString); return isNaN(date) ? null : date; } catch (e) { return null; }
-        };
-        const getEffectiveDeadline = (assignment) => {
-            let earliest = assignment.deadline || new Date(8640000000000000);
-            const active = (assignment.subtasks || []).filter(t => !t.done && t.deadline);
-            if (active.length) {
-                active.sort((a, b) => new Date(a.deadline) - new Date(b.deadline));
-                const sub = new Date(active[0].deadline);
-                if (sub < earliest) earliest = sub;
-            }
-            return earliest;
-        };
-
-        // ===== One handler per collection, fed by Firestore (signed in) or the in-memory store (signed out) =====
-        const HANDLERS = {
-            assignments: (docs) => {
-                const list = docs.map(({ id, data }) => ({ id, ...data, deadline: parseDeadlineISO(data.deadline) }));
-                list.sort((a, b) => (getEffectiveDeadline(a) - getEffectiveDeadline(b)) || (a.title || '').localeCompare(b.title || ''));
-                window.renderAssignments(list);
-                window.renderCalendar();
-            },
-            bookmarks: (docs) => {
-                const list = docs.map(({ id, data }) => ({ id, ...data }));
-                list.sort((a, b) => (a.order || 0) - (b.order || 0));
-                window.renderBookmarks(list);
-            },
-            backgrounds: (docs) => {
-                const list = docs.map(({ id, data }) => ({
-                    id,
-                    base64: data.base64,
-                    images: data.images || (data.base64 ? [data.base64] : []),
-                    uploadedAt: data.uploadedAt || new Date(0).toISOString(),
-                    lastActivatedAt: data.lastActivatedAt || data.uploadedAt || new Date(0).toISOString()
-                }));
-                const activeId = list.length
-                    ? list.reduce((latest, cur) => cur.lastActivatedAt > latest.lastActivatedAt ? cur : latest).id
-                    : null;
-                list.sort((a, b) => a.uploadedAt.localeCompare(b.uploadedAt));
-                window.setUserBackgrounds(list, activeId);
-                window.renderBackgroundGallery(list);
-            },
-            finished_assignments: (docs) => {
-                const list = docs.map(({ id, data }) => ({
-                    ...data, deadline: parseDeadlineISO(data.deadline),
-                    completedAt: data.completedAt ? new Date(data.completedAt) : new Date(), id
-                }));
-                list.sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
-                window.renderFinishedAssignments(list);
-            },
-            personal_events: (docs) => {
-                if (typeof window.pmApplyCloudEvents === 'function') window.pmApplyCloudEvents(docs.map(({ id, data }) => ({ ...data, id })));
-            },
-            hardcoded_overrides: (docs) => {
-                const overrides = {};
-                docs.forEach(({ id, data }) => { overrides[id] = data; });
-                if (typeof window.pmApplyCloudOverrides === 'function') window.pmApplyCloudOverrides(overrides);
-            },
-            map_locations: (docs) => window.renderMapLocations(docs.map(({ id, data }) => ({ id, ...data }))),
-            notes: (docs) => {
-                const list = docs.map(({ id, data }) => ({ id, ...data }));
-                list.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
-                window.userNotes = list;
-                window.renderNotesSidebar();
-            },
-            note_folders: (docs) => {
-                const list = docs.map(({ id, data }) => ({ ...data, id }));
-                list.sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
-                window.noteFolders = list;
-                window.renderNotesSidebar();
-            }
-        };
-
-        // ===== Signed-out store: memory only, gone on refresh =====
-        const guestData = {};
-        const guestCol = (name) => guestData[name] || (guestData[name] = new Map());
-        const guestEmit = (name) => HANDLERS[name]?.([...guestCol(name)].map(([id, data]) => ({ id, data: { ...data } })));
-        let guestSeq = 0;
-
-        const ref = (name, id) => doc(db, getCollectionPath(name), id);
-        const store = {
-            add: async (name, data) => {
-                if (isCloud()) return (await addDoc(collection(db, getCollectionPath(name)), data)).id;
-                const id = `guest_${Date.now().toString(36)}_${guestSeq++}`;
-                guestCol(name).set(id, { ...data });
-                guestEmit(name);
-                return id;
-            },
-            merge: async (name, id, data) => {
-                if (isCloud()) return setDoc(ref(name, id), data, { merge: true });
-                const col = guestCol(name);
-                col.set(id, { ...(col.get(id) || {}), ...data });
-                guestEmit(name);
-            },
-            remove: async (name, id) => {
-                if (isCloud()) return deleteDoc(ref(name, id));
-                guestCol(name).delete(id);
-                guestEmit(name);
-            },
-            mergeMany: async (name, items) => {
-                if (isCloud()) {
-                    const batch = writeBatch(db);
-                    items.forEach(({ id, ...data }) => batch.set(ref(name, id), data, { merge: true }));
-                    return batch.commit();
-                }
-                const col = guestCol(name);
-                items.forEach(({ id, ...data }) => col.set(id, { ...(col.get(id) || {}), ...data }));
-                guestEmit(name);
-            }
-        };
-
-        const startCloudListeners = () => {
-            if (listenersStarted) return;
-            listenersStarted = true;
-            Object.entries(HANDLERS).forEach(([name, handle]) => {
-                onSnapshot(collection(db, getCollectionPath(name)),
-                    (snap) => handle(snap.docs.map(d => ({ id: d.id, data: d.data() }))),
-                    (err) => console.error(`Listener for ${name} failed:`, err));
-            });
-        };
-
-        // Calendar events and feast notes are kept in memory by the Personal-mode script itself while signed out
-        const GUEST_COLLECTIONS = ['assignments', 'finished_assignments', 'bookmarks', 'backgrounds', 'map_locations', 'notes', 'note_folders'];
-        const startGuestMode = () => {
-            if (guestStarted) return;
-            guestStarted = true;
-            GUEST_COLLECTIONS.forEach(guestEmit);
-        };
-
-        window.db = {
-            addAssignment: async (title, dateString, timeString) => {
-                if (!dateString) return;
-                try {
-                    const deadlineDate = createDeadlineDate(dateString, timeString);
-                    await store.add('assignments', { title, deadline: deadlineDate.toISOString(), createdAt: new Date().toISOString(), notes: '' });
-                } catch (e) { console.error(e); }
-            },
-            updateAssignment: async (id, title, dateString, timeString, notes, subtasks) => {
-                try {
-                    const deadlineDate = createDeadlineDate(dateString, timeString);
-                    await store.merge('assignments', id, {
-                        title, deadline: deadlineDate ? deadlineDate.toISOString() : null, notes: notes || '', subtasks: subtasks || []
-                    });
-                } catch (e) { console.error(e); }
-            },
-            deleteAssignment: async (id) => { try { await store.remove('assignments', id); } catch (e) { console.error(e); } },
-            addFinishedAssignment: async (assignmentData) => {
-                try {
-                    // Keep 'id' out of the stored document so it can't overwrite the real document ID
-                    const { id: _assignmentId, ...dataToStore } = assignmentData;
-                    await store.add('finished_assignments', {
-                        ...dataToStore,
-                        deadline: assignmentData.deadline instanceof Date ? assignmentData.deadline.toISOString() : assignmentData.deadline,
-                        completedAt: new Date().toISOString()
-                    });
-                } catch (e) { console.error(e); }
-            },
-            deleteFinishedAssignment: async (id) => {
-                try {
-                    await store.remove('finished_assignments', id);
-                    window.renderFinishedAssignments((window.finishedAssignments || []).filter(a => a.id !== id));
-                } catch (e) { console.error(e); }
-            },
-            restoreAssignment: async (id) => {
-                try {
-                    const finishedDoc = (window.finishedAssignments || []).find(a => a.id === id);
-                    if (!finishedDoc) { console.warn('Could not find finished assignment', id); return; }
-                    const { completedAt, id: _id, ...restData } = finishedDoc;
-                    await store.add('assignments', {
-                        title: restData.title,
-                        deadline: restData.deadline instanceof Date ? restData.deadline.toISOString() : (restData.deadline || null),
-                        notes: restData.notes || '',
-                        subtasks: restData.subtasks || [],
-                        createdAt: restData.createdAt || new Date().toISOString()
-                    });
-                    await store.remove('finished_assignments', id);
-                    window.renderFinishedAssignments((window.finishedAssignments || []).filter(a => a.id !== id));
-                } catch (e) { console.error(e); }
-            },
-            addBookmark: async (name, url, icon) => {
-                try {
-                    const list = window.bookmarks || [];
-                    const nextOrder = list.reduce((max, b) => Math.max(max, Number(b.order) || 0), -1) + 1;
-                    await store.add('bookmarks', { name, url, icon, order: nextOrder });
-                } catch (e) { console.error(e); }
-            },
-            deleteBookmark: async (id) => { try { await store.remove('bookmarks', id); } catch (e) { console.error(e); } },
-            // updates = [{ id, order }], only the bookmarks that actually moved
-            reorderBookmarks: async (updates) => {
-                if (!updates || !updates.length) return;
-                try { await store.mergeMany('bookmarks', updates); } catch (e) { console.error('Reorder failed', e); }
-            },
-            addBackground: async (imagesArray) => {
-                try {
-                    const now = new Date().toISOString();
-                    const payload = { uploadedAt: now, lastActivatedAt: now };
-                    if (Array.isArray(imagesArray)) payload.images = imagesArray; else payload.base64 = imagesArray;
-                    return await store.add('backgrounds', payload);
-                } catch (e) {
-                    alert("Failed to upload. The images might be too large."); return null;
-                }
-            },
-            deleteBackground: async (id) => { try { await store.remove('backgrounds', id); } catch (e) { console.error(e); } },
-            updateBackgroundImages: async (id, newImagesArray) => {
-                try { await store.merge('backgrounds', id, { images: newImagesArray }); } catch (e) { console.error(e); }
-            },
-            activateBackground: async (id) => {
-                try { await store.merge('backgrounds', id, { lastActivatedAt: new Date().toISOString() }); } catch (e) { console.error(e); }
-            },
-            addMapLocation: async (name, start, end) => {
-                try { await store.add('map_locations', { name, start, address: end, createdAt: new Date().toISOString() }); } catch (e) { console.error(e); }
-            },
-            updateMapLocation: async (id, name, start, end) => {
-                try { await store.merge('map_locations', id, { name, start, address: end }); } catch (e) { console.error(e); }
-            },
-            deleteMapLocation: async (id) => { try { await store.remove('map_locations', id); } catch (e) { console.error(e); } },
-            addNote: async (title, content, extra = {}) => {
-                try { return await store.add('notes', { title, content, updatedAt: new Date().toISOString(), ...extra }); }
-                catch (e) { console.error(e); return null; }
-            },
-            updateNote: async (id, title, content) => {
-                try { await store.merge('notes', id, { title, content, updatedAt: new Date().toISOString() }); } catch (e) { console.error(e); }
-            },
-            deleteNote: async (id) => { try { await store.remove('notes', id); } catch (e) { console.error(e); } },
-            patchNote: async (id, fields) => {
-                try { await store.merge('notes', id, fields); return true; } catch (e) { console.error(e); return false; }
-            },
-            addNoteFolder: async (name, color) => {
-                try { return await store.add('note_folders', { name, color, createdAt: new Date().toISOString() }); }
-                catch (e) { console.error(e); return null; }
-            },
-            updateNoteFolder: async (id, fields) => { try { await store.merge('note_folders', id, fields); } catch (e) { console.error(e); } },
-            deleteNoteFolder: async (id) => { try { await store.remove('note_folders', id); } catch (e) { console.error(e); } }
-        };
-
-        // ===== Account chip =====
-        const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-        const GOOGLE_G = `<svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>`;
-
-        const renderAuthChip = (state, user) => {
-            let chip = document.getElementById('auth-chip');
-            if (!chip) { chip = document.createElement('div'); chip.id = 'auth-chip'; document.body.appendChild(chip); }
-            const signOutBtn = `<button type="button" class="auth-signout" data-act="signout" title="Sign out"><span data-lucide="log-out" class="w-4 h-4"></span></button>`;
-            if (state === 'owner') {
-                const avatar = user.photoURL
-                    ? `<img class="auth-avatar" src="${esc(user.photoURL)}" referrerpolicy="no-referrer" alt="">`
-                    : `<span class="auth-initial">${esc((user.email || '?')[0].toUpperCase())}</span>`;
-                chip.innerHTML = `${avatar}<span class="auth-note">${esc(user.email)}</span>${signOutBtn}`;
-            } else if (state === 'denied') {
-                chip.innerHTML = `<span class="auth-note" title="Only ${esc(OWNER_EMAIL)} can see this dashboard's data">${esc(user.email)} has no access</span>${signOutBtn}`;
-            } else {
-                chip.innerHTML = `<span class="auth-note">Not signed in · changes aren't saved</span><button type="button" class="auth-signin" data-act="signin">${GOOGLE_G}Sign in</button>`;
-            }
-            chip.onclick = (e) => {
-                const b = e.target.closest('button[data-act]');
-                if (!b) return;
-                if (b.dataset.act === 'signin') window.dashSignIn(); else window.dashSignOut();
-            };
-            const idLine = document.getElementById('user-id-display');
-            if (idLine) idLine.textContent = '';
-            if (window.lucide) window.lucide.createIcons();
-        };
-
-        // ===== Sign in / out =====
-        const provider = new GoogleAuthProvider();
-        provider.setCustomParameters({ prompt: 'select_account', login_hint: OWNER_EMAIL });
-        const isOwnerUser = (u) => Boolean(u && !u.isAnonymous && u.emailVerified && (u.email || '').toLowerCase() === OWNER_EMAIL);
-
-        window.dashSignIn = async () => {
-            if (!auth) return;
-            try {
-                const cred = await signInWithPopup(auth, provider);
-                if (isOwnerUser(cred.user)) localStorage.setItem(SIGNED_IN_FLAG, '1');
-                leaving = true;
-                location.reload(); // start clean: anything typed while signed out is dropped
-            } catch (e) {
-                const code = (e && e.code) || '';
-                if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') return;
-                if (code === 'auth/popup-blocked') { signInWithRedirect(auth, provider); return; }
-                if (code === 'auth/operation-not-supported-in-this-environment') {
-                    alert('Google sign-in only works when the dashboard is opened from https://gambli13.github.io, not from a local file.');
-                    return;
-                }
-                if (code === 'auth/unauthorized-domain') {
-                    alert(`Sign-in isn't allowed from ${location.hostname} yet. Add it in Firebase Console → Authentication → Settings → Authorized domains.`);
-                    return;
-                }
-                console.error(e);
-                alert('Sign-in failed: ' + (e.message || code));
-            }
-        };
-
-        window.dashSignOut = async () => {
-            leaving = true;
-            // Save an open note and let pending writes reach Firestore before leaving
-            try { if (typeof window.saveCurrentNote === 'function') await window.saveCurrentNote({ silent: true }); } catch (e) {}
-            if (db) { try { await Promise.race([waitForPendingWrites(db), new Promise(r => setTimeout(r, 3000))]); } catch (e) {} }
-            wipePrivateCache();
-            try { if (auth) await signOut(auth); } catch (e) { console.error(e); }
-            location.reload();
-        };
-
-        const initFirebase = () => {
-            try {
-                // A named app keeps this sign-in separate from the anonymous sign-in on the other pages
-                const app = initializeApp(firebaseConfig, 'locked-dashboard');
-                db = getFirestore(app);
-                auth = getAuth(app);
-            } catch (error) {
-                console.error('Firebase failed to start, running signed-out:', error);
-                renderAuthChip('guest');
-                startGuestMode();
-                return;
-            }
-
-            getRedirectResult(auth).catch(() => {});
-
-            onAuthStateChanged(auth, (user) => {
-                if (leaving) return;
-                if (isOwnerUser(user)) {
-                    userId = OWNER_DATA_ID;
-                    try { localStorage.setItem(SIGNED_IN_FLAG, '1'); } catch (e) {}
-                    renderAuthChip('owner', user);
-                    startCloudListeners();
-                    return;
-                }
-                // Was signed in (here or in another tab) and isn't any more: wipe local copies and start blank
-                if (privateCacheOn() || userId) {
-                    leaving = true;
-                    wipePrivateCache();
-                    location.reload();
-                    return;
-                }
-                userId = null;
-                renderAuthChip(user && !user.isAnonymous ? 'denied' : 'guest', user);
-                startGuestMode();
-            });
-        };
-
-        initFirebase();
-    </script>
     <style>
         /* ====== CHRISTMAS THEME ====== */
         /* Toggled by the tree button in the quick menu; html.christmas switches everything on. */
@@ -5745,7 +5319,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 10/11/2026 - 17:47</div>
+    <div id="version-timestamp">Last Update 09/11/2026 - 20:18</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
@@ -5827,7 +5401,6 @@
             const PM_KEY = 'personalMode';
             const PM_EVENTS_KEY = 'personalEvents';
             const HARDCODED_OVERRIDES_KEY = 'hardcodedEventOverrides2026';
-            const privateCacheOn = () => { try { return localStorage.getItem('dashSignedIn') === '1'; } catch (e) { return false; } };
             // Girlfriend's return date — Dec 5 (year auto-picked so it always looks ahead)
             const RETURN_MONTH = 11; // Dec (0-indexed)
             const RETURN_DAY = 5;
@@ -7325,7 +6898,6 @@
 
             const loadHardcodedEventOverrides = () => {
                 try {
-                    if (!privateCacheOn()) return;
                     const raw = localStorage.getItem(HARDCODED_OVERRIDES_KEY);
                     hardcodedEventOverrides = raw ? JSON.parse(raw) : {};
                     if (!hardcodedEventOverrides || Array.isArray(hardcodedEventOverrides) || typeof hardcodedEventOverrides !== 'object') {
@@ -7338,7 +6910,6 @@
 
             const saveHardcodedEventOverrides = () => {
                 try {
-                    if (!privateCacheOn()) return;
                     localStorage.setItem(HARDCODED_OVERRIDES_KEY, JSON.stringify(hardcodedEventOverrides));
                 } catch (e) {
                     console.warn('Failed to save hardcoded 2026 event notes', e);
@@ -7378,7 +6949,6 @@
             // -------- Personal events storage --------
             const loadPersonalEvents = () => {
                 try {
-                    if (!privateCacheOn()) return;
                     const raw = localStorage.getItem(PM_EVENTS_KEY);
                     personalEvents = raw ? JSON.parse(raw) : [];
                     if (!Array.isArray(personalEvents)) personalEvents = [];
@@ -7387,7 +6957,6 @@
                 }
             };
             const savePersonalEvents = () => {
-                if (!privateCacheOn()) return;
                 try { localStorage.setItem(PM_EVENTS_KEY, JSON.stringify(personalEvents)); }
                 catch (e) { console.warn('Failed to save personal events', e); }
             };
@@ -8975,7 +8544,6 @@
         const SYNC_PERSONAL_FEASTS = true;
         const PULL_EVERY_MS = 2 * 60 * 1000;
         const PULL_DAYS_BACK = 30; // first import only
-        const signedIn = () => typeof window.dashIsSignedIn === 'function' && window.dashIsSignedIn();
 
         const CONNECTED_KEY = 'gcalConnected';
         const TOKEN_KEY = 'gcalToken';
@@ -9279,7 +8847,6 @@
         };
 
         const runSync = async () => {
-            if (!signedIn()) return;
             if (!isConnected()) { setStatus('off'); return; }
             if (!personalLoaded || (SYNC_ASSIGNMENTS && !assignmentsLoaded)) return;
             if (!hasToken()) { setStatus('needs-auth'); return; }
@@ -9350,7 +8917,7 @@
         };
 
         const runPull = async () => {
-            if (!signedIn() || !isConnected() || !hasToken() || !personalLoaded) return;
+            if (!isConnected() || !hasToken() || !personalLoaded) return;
             if (!window.pmCloud || !window.pmCloud.ready()) return;
             if (busy) { pullAgain = true; return; }
 
@@ -9417,7 +8984,6 @@
             setStatus(isConnected() ? (hasToken() ? 'ok' : 'needs-auth') : 'off');
 
             document.getElementById('gcal-sync-btn')?.addEventListener('click', async () => {
-                if (!signedIn()) { window.dashSignIn?.(); return; }
                 try {
                     if (!hasToken()) await requestToken();
                     const synced = loadSynced();
@@ -9434,7 +9000,7 @@
 
             // Renew an expired token on a real tap (a popup needs a user gesture)
             document.addEventListener('click', (e) => {
-                if (!signedIn() || !isConnected() || hasToken() || pending) return;
+                if (!isConnected() || hasToken() || pending) return;
                 if (e.target.closest('#pm-event-save-btn, #pm-event-delete-btn, #add-assignment-btn, #save-assignment-btn, #delete-from-detail-btn, .delete-btn')) {
                     requestToken().then(() => { runPull(); scheduleSync(); }).catch(() => setStatus('needs-auth'));
                 }
