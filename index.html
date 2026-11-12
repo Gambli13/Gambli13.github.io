@@ -667,7 +667,7 @@
         
     import { initializeApp } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js";
     import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-auth.js";
-    import { getFirestore, doc, addDoc, deleteDoc, setDoc, onSnapshot, collection, setLogLevel, writeBatch } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore.js";
+    import { getFirestore, doc, addDoc, deleteDoc, setDoc, onSnapshot, collection, setLogLevel, writeBatch, Bytes, deleteField } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore.js";
 
     const STATIC_OVERRIDE_USER_ID = 'zNllEXqmHpaqNZffrgOhyPrSfBB3';
     const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
@@ -850,14 +850,20 @@
         });
 
         // 6. Notes Listener
+        let notesSnapSeq = 0;
         onSnapshot(collection(db, getCollectionPath('notes')), (snapshot) => {
             const loadedNotes = [];
             snapshot.forEach(doc => loadedNotes.push({ id: doc.id, ...doc.data() }));
             loadedNotes.sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
-            window.userNotes = loadedNotes;
-            window.renderNotesSidebar();
+            const seq = ++notesSnapSeq;
+            Promise.resolve(window.prepareLockedNotes ? window.prepareLockedNotes(loadedNotes) : null)
+                .catch(e => console.error(e))
+                .then(() => {
+                    if (seq !== notesSnapSeq) return;   // a newer snapshot already won
+                    window.userNotes = loadedNotes;
+                    window.renderNotesSidebar();
+                });
         });
-
         // 6b. Note folders listener
         onSnapshot(collection(db, getCollectionPath('note_folders')), (snapshot) => {
             const folders = [];
@@ -1059,9 +1065,31 @@
         deleteNoteFolder: async (id) => {
             if (!db || !userId) return;
             try { await deleteDoc(doc(db, getCollectionPath('note_folders'), id)); } catch (e) { console.error(e); }
+        },
+        removeNoteFolderLock: async (id) => {
+            if (!db || !userId) return false;
+            try { await setDoc(doc(db, getCollectionPath('note_folders'), id), { lock: deleteField() }, { merge: true }); return true; } catch (e) { console.error(e); return false; }
+        },
+        // Stores only ciphertext and strips every readable field from the note doc
+        writeNoteEncrypted: async (id, enc, extra = {}) => {
+            if (!db || !userId) return false;
+            try {
+                await setDoc(doc(db, getCollectionPath('notes'), id), {
+                    ...extra,
+                    enc: { v: 1, iv: enc.iv, data: Bytes.fromUint8Array(enc.bytes) },
+                    title: deleteField(), content: deleteField(), images: deleteField(), imageSizes: deleteField(), styles: deleteField()
+                }, { merge: true });
+                return true;
+            } catch (e) { console.error(e); return false; }
+        },
+        writeNoteDecrypted: async (id, payload, extra = {}) => {
+            if (!db || !userId) return false;
+            try {
+                await setDoc(doc(db, getCollectionPath('notes'), id), { ...payload, ...extra, enc: deleteField() }, { merge: true });
+                return true;
+            } catch (e) { console.error(e); return false; }
         }
     };
-
     initFirebase();
 </script>
 
@@ -1539,6 +1567,208 @@
         const findNote = (id) => (window.userNotes || []).find(n => n.id === id) || null;
         const folderById = (id) => id ? ((window.noteFolders || []).find(f => f.id === id) || null) : null;
 
+                // ================= Locked folders =================
+        // Encryption happens in the browser (AES-256-GCM), so Firestore only ever stores ciphertext.
+        // Each locked folder has a random data key. The password never leaves the device: PBKDF2
+        // turns it into a wrapping key that encrypts the data key, and only the salt + wrapped key
+        // live on the folder doc. Notes inside are stored as { enc: { iv, data } } with their
+        // title / content / images / styles removed.
+        const NOTE_SECRET_FIELDS = ['title', 'content', 'images', 'imageSizes', 'styles'];
+        const NOTE_LOCK_ITER = 600000;
+        const NOTE_LOCK_IDLE_MS = 10 * 60 * 1000;   // re-lock after 10 minutes with no clicks/keys
+        const unlockedFolders = new Map();          // folderId -> { key, raw }  (memory only, gone on reload)
+        const noteDecCache = new Map();             // noteId -> { iv, payload }
+        const noteWriteChains = new Map();          // noteId -> Promise, keeps each note's writes in order
+
+        const NoteCrypto = (() => {
+            const te = new TextEncoder(), td = new TextDecoder();
+            const KEY_AAD = te.encode('note-folder-key');
+            const b64 = (u8) => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
+            const unb64 = (s) => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+            const rand = (n) => crypto.getRandomValues(new Uint8Array(n));
+            const toBytes = (v) => v instanceof Uint8Array ? v : (v && typeof v.toUint8Array === 'function') ? v.toUint8Array() : unb64(String(v || ''));
+            const wrappingKey = async (password, salt, iterations) => {
+                const base = await crypto.subtle.importKey('raw', te.encode(password), 'PBKDF2', false, ['deriveKey']);
+                return crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+            };
+            const dataKey = (raw) => crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
+            const wrap = async (raw, password) => {
+                const salt = rand(16), iv = rand(12);
+                const kek = await wrappingKey(password, salt, NOTE_LOCK_ITER);
+                const wrapped = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: KEY_AAD }, kek, raw));
+                return { v: 1, iter: NOTE_LOCK_ITER, salt: b64(salt), iv: b64(iv), wrapped: b64(wrapped) };
+            };
+            return {
+                create: async (password) => {
+                    const raw = rand(32);
+                    return { meta: await wrap(raw, password), raw, key: await dataKey(raw) };
+                },
+                // Throws when the password is wrong (the GCM tag check fails)
+                open: async (meta, password) => {
+                    const kek = await wrappingKey(password, unb64(meta.salt), meta.iter || NOTE_LOCK_ITER);
+                    const raw = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(meta.iv), additionalData: KEY_AAD }, kek, unb64(meta.wrapped)));
+                    return { raw, key: await dataKey(raw) };
+                },
+                // Changing the password re-wraps the same data key, so notes don't need re-encrypting
+                rewrap: (raw, password) => wrap(raw, password),
+                encrypt: async (key, noteId, payload) => {
+                    const iv = rand(12);
+                    const bytes = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: te.encode(noteId) }, key, te.encode(JSON.stringify(payload))));
+                    return { iv: b64(iv), bytes };
+                },
+                decrypt: async (key, noteId, enc) => {
+                    const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(enc.iv), additionalData: te.encode(noteId) }, key, toBytes(enc.data));
+                    return JSON.parse(td.decode(plain));
+                }
+            };
+        })();
+
+        const folderIsLocked = (fid) => !!fid && (!!folderById(fid)?.lock || unlockedFolders.has(fid));
+        const folderIsSealed = (fid) => folderIsLocked(fid) && !unlockedFolders.has(fid);
+        const noteIsHidden = (n) => (n.enc && !n.decrypted) || (!!n.folderId && folderIsSealed(n.folderId));
+        const pickSecret = (o) => ({ title: o.title || 'New Note', content: o.content || '', images: o.images || [], imageSizes: o.imageSizes || [], styles: o.styles || '' });
+        const lockSupported = () => !!(window.db && window.db.writeNoteEncrypted && window.crypto && window.crypto.subtle);
+        const queueNoteWrite = (id, fn) => {
+            const next = (noteWriteChains.get(id) || Promise.resolve()).catch(() => {}).then(fn);
+            noteWriteChains.set(id, next);
+            return next;
+        };
+        const closeNoteEditor = () => {
+            currentNoteId = null;
+            window.noteEditor.cancelAutosave();
+            window.noteEditor.clear();
+            document.getElementById('note-empty-state')?.classList.remove('hidden');
+        };
+
+        // Called by the Firestore notes listener before every render
+        window.prepareLockedNotes = async (notes) => {
+            await Promise.all(notes.map(async (n) => {
+                if (!n.enc) return;
+                const u = unlockedFolders.get(n.folderId);
+                if (!u) return;
+                const cached = noteDecCache.get(n.id);
+                try {
+                    const payload = (cached && cached.iv === n.enc.iv) ? cached.payload : await NoteCrypto.decrypt(u.key, n.id, n.enc);
+                    noteDecCache.set(n.id, { iv: n.enc.iv, payload });
+                    Object.assign(n, payload);
+                    n.decrypted = true;
+                } catch (e) { console.warn('Could not decrypt note', n.id, e); }
+            }));
+        };
+
+        // Every note content/title write goes through here, so notes in locked folders are always encrypted
+        window.persistNote = (id, fields) => {
+            const note = findNote(id);
+            if (!note) return Promise.resolve(false);
+            Object.assign(note, fields);
+            const fid = note.folderId || null;
+            if (fid && folderIsLocked(fid)) {
+                const u = unlockedFolders.get(fid);
+                if (!u) return Promise.resolve(false);
+                const payload = pickSecret(note);
+                const extra = {};
+                for (const k in fields) if (!NOTE_SECRET_FIELDS.includes(k)) extra[k] = fields[k];
+                return queueNoteWrite(id, async () => {
+                    const enc = await NoteCrypto.encrypt(u.key, id, payload);
+                    noteDecCache.set(id, { iv: enc.iv, payload });
+                    return window.db.writeNoteEncrypted(id, enc, extra);
+                });
+            }
+            return queueNoteWrite(id, () => window.db.patchNote(id, fields));
+        };
+
+        const unlockFolderWith = async (fid, password) => {
+            const folder = folderById(fid);
+            if (!folder?.lock) return true;
+            unlockedFolders.set(fid, await NoteCrypto.open(folder.lock, password));   // throws on a wrong password
+            noteLockLastActivity = Date.now();
+            await window.prepareLockedNotes(window.userNotes || []);
+            // Encrypt anything in this folder that is still plain text (e.g. saved before it was locked)
+            (window.userNotes || []).filter(n => n.folderId === fid && !n.enc).forEach(n => window.persistNote(n.id, {}));
+            window.renderNotesSidebar();
+            return true;
+        };
+
+        const lockFolderNow = async (fid) => {
+            if (!unlockedFolders.has(fid)) return;
+            const cur = findNote(currentNoteId);
+            if (cur && cur.folderId === fid) {
+                await window.saveCurrentNote({ silent: true });
+                closeNoteEditor();
+            }
+            unlockedFolders.delete(fid);
+            (window.userNotes || []).forEach(n => {
+                if (n.folderId !== fid) return;
+                noteDecCache.delete(n.id);
+                if (n.enc) { NOTE_SECRET_FIELDS.forEach(k => delete n[k]); n.decrypted = false; }
+            });
+            window.renderNotesSidebar();
+        };
+        window.lockNoteFolder = lockFolderNow;
+        window.lockAllNoteFolders = () => Promise.all([...unlockedFolders.keys()].map(lockFolderNow));
+
+        // Auto re-lock after a stretch of inactivity
+        let noteLockLastActivity = Date.now();
+        ['pointerdown', 'keydown', 'wheel'].forEach(ev => document.addEventListener(ev, () => { noteLockLastActivity = Date.now(); }, { passive: true, capture: true }));
+        setInterval(() => {
+            if (unlockedFolders.size && Date.now() - noteLockLastActivity > NOTE_LOCK_IDLE_MS) window.lockAllNoteFolders();
+        }, 30000);
+
+        // ---- Password prompt ----
+        let unlockResolver = null, unlockPromptFolderId = null;
+        window.promptUnlockFolder = (fid) => {
+            if (!folderIsSealed(fid)) return Promise.resolve(true);
+            const modal = document.getElementById('note-unlock-modal');
+            const folder = folderById(fid);
+            if (!modal || !folder) return Promise.resolve(false);
+            closeNoteMoveMenu();
+            if (unlockResolver) unlockResolver(false);
+            unlockPromptFolderId = fid;
+            document.getElementById('note-unlock-sub').textContent = `"${folder.name}" is locked. Enter its password to open it.`;
+            const input = document.getElementById('note-unlock-pw');
+            input.value = '';
+            document.getElementById('note-unlock-error').classList.add('hidden');
+            modal.classList.remove('opacity-0', 'pointer-events-none');
+            setTimeout(() => input.focus(), 60);
+            return new Promise(res => { unlockResolver = res; });
+        };
+        const finishUnlockPrompt = (ok) => {
+            document.getElementById('note-unlock-modal')?.classList.add('opacity-0', 'pointer-events-none');
+            const pw = document.getElementById('note-unlock-pw');
+            if (pw) pw.value = '';
+            const r = unlockResolver;
+            unlockResolver = null;
+            unlockPromptFolderId = null;
+            if (r) r(ok);
+        };
+        const submitUnlockPrompt = async () => {
+            const input = document.getElementById('note-unlock-pw');
+            const btn = document.getElementById('note-unlock-submit');
+            const err = document.getElementById('note-unlock-error');
+            if (!input.value || !unlockPromptFolderId) { input.focus(); return; }
+            btn.disabled = true;
+            btn.textContent = 'Unlocking…';
+            err.classList.add('hidden');
+            try {
+                await unlockFolderWith(unlockPromptFolderId, input.value);
+                finishUnlockPrompt(true);
+            } catch (e) {
+                err.textContent = 'Wrong password';
+                err.classList.remove('hidden');
+                input.select();
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Unlock';
+            }
+        };
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('note-unlock-form')?.addEventListener('submit', (e) => { e.preventDefault(); submitUnlockPrompt(); });
+            document.getElementById('note-unlock-cancel')?.addEventListener('click', () => finishUnlockPrompt(false));
+            document.getElementById('note-unlock-modal')?.addEventListener('click', (e) => { if (e.target === e.currentTarget) finishUnlockPrompt(false); });
+            document.getElementById('note-unlock-pw')?.addEventListener('keydown', (e) => { if (e.key === 'Escape') finishUnlockPrompt(false); });
+        });
+        // ================= /Locked folders =================
+
         // ---- Drag a note onto a folder (or onto "Notes" to un-file it) ----
         const NOTE_DRAG_TYPE = 'application/x-note-id';
         const makeNoteDropTarget = (el, folderId) => {
@@ -1616,8 +1846,10 @@
             return row;
         };
 
-        const buildFolderBlock = (folder, notesIn) => {
-            const isOpen = openNoteFolders.has(folder.id);
+                const buildFolderBlock = (folder, notesIn) => {
+            const locked = folderIsLocked(folder.id);
+            const sealed = locked && !unlockedFolders.has(folder.id);
+            const isOpen = !sealed && openNoteFolders.has(folder.id);
             const current = findNote(currentNoteId);
             const editingHere = current && current.folderId === folder.id;
 
@@ -1630,26 +1862,41 @@
             header.style.borderLeft = `3px solid ${folder.color}`;
             header.innerHTML = `
                 <div class="flex items-start min-w-0 flex-1">
-                    <span class="inline-flex mt-0.5 mr-2 flex-shrink-0" style="color:${folder.color}"><span data-lucide="${isOpen ? 'folder-open' : 'folder'}" class="w-4 h-4"></span></span>
+                    <span class="inline-flex mt-0.5 mr-2 flex-shrink-0" style="color:${folder.color}"><span data-lucide="${sealed ? 'folder-lock' : (isOpen ? 'folder-open' : 'folder')}" class="w-4 h-4"></span></span>
                     <div class="flex flex-col min-w-0">
-                        <span class="text-sm font-semibold text-white truncate">${noteEsc(folder.name)} <span class="text-white/40 font-normal text-xs ml-0.5">${notesIn.length}</span></span>
+                        <span class="text-sm font-semibold text-white truncate">${noteEsc(folder.name)}${sealed ? '' : ` <span class="text-white/40 font-normal text-xs ml-0.5">${notesIn.length}</span>`}${locked && !sealed ? `<span class="inline-flex align-middle ml-1.5 text-amber-300/80" title="Unlocked until you lock it or reload"><span data-lucide="lock-open" class="w-3 h-3"></span></span>` : ''}</span>
                         ${editingHere ? `<span class="text-[11px] text-white/45 truncate flex items-center"><span data-lucide="pencil-line" class="w-3 h-3 mr-1 flex-shrink-0"></span><span class="truncate">${noteEsc(current.title)}</span></span>` : ''}
                     </div>
                 </div>
                 <div class="flex items-center flex-shrink-0">
                     <div class="note-actions flex space-x-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button data-act="add" class="p-1.5 text-green-400 hover:text-green-300 rounded hover:bg-white/10 transition-colors" title="New note in this folder"><span data-lucide="plus" class="w-3.5 h-3.5"></span></button>
-                        <button data-act="edit" class="p-1.5 text-white/60 hover:text-white rounded hover:bg-white/10 transition-colors" title="Rename / colour / delete folder"><span data-lucide="settings-2" class="w-3.5 h-3.5"></span></button>
+                        ${sealed ? '' : `<button data-act="add" class="p-1.5 text-green-400 hover:text-green-300 rounded hover:bg-white/10 transition-colors" title="New note in this folder"><span data-lucide="plus" class="w-3.5 h-3.5"></span></button>`}
+                        ${locked && !sealed ? `<button data-act="lock" class="p-1.5 text-amber-300 hover:text-amber-200 rounded hover:bg-white/10 transition-colors" title="Lock now"><span data-lucide="lock" class="w-3.5 h-3.5"></span></button>` : ''}
+                        <button data-act="edit" class="p-1.5 text-white/60 hover:text-white rounded hover:bg-white/10 transition-colors" title="Rename / colour / lock / delete folder"><span data-lucide="settings-2" class="w-3.5 h-3.5"></span></button>
                     </div>
-                    <span data-lucide="chevron-down" class="w-4 h-4 text-white/50 ml-1 transition-transform ${isOpen ? 'rotate-180' : ''}"></span>
+                    ${sealed
+                        ? `<span data-lucide="lock" class="w-4 h-4 text-amber-300/80 ml-1"></span>`
+                        : `<span data-lucide="chevron-down" class="w-4 h-4 text-white/50 ml-1 transition-transform ${isOpen ? 'rotate-180' : ''}"></span>`}
                 </div>`;
 
-            header.addEventListener('click', (e) => {
+            header.addEventListener('click', async (e) => {
                 const btn = e.target.closest('button[data-act]');
                 if (btn) {
                     e.stopPropagation();
-                    if (btn.dataset.act === 'add') window.createNewNote(folder.id);
+                    const act = btn.dataset.act;
+                    if (act === 'lock') { lockFolderNow(folder.id); return; }
+                    if (!(await window.promptUnlockFolder(folder.id))) return;
+                    if (act === 'add') window.createNewNote(folder.id);
                     else window.openNoteFolderModal(folder.id);
+                    return;
+                }
+                if (folderIsSealed(folder.id)) {
+                    if (await window.promptUnlockFolder(folder.id)) {
+                        openNoteFolders.add(folder.id);
+                        justOpenedFolderId = folder.id;
+                        saveOpenFolders();
+                        window.renderNotesSidebar();
+                    }
                     return;
                 }
                 window.toggleNoteFolder(folder.id);
@@ -1678,6 +1925,7 @@
             const notes = window.userNotes || [];
             const folders = window.noteFolders || [];
             const folderIds = new Set(folders.map(f => f.id));
+            const visible = notes.filter(n => !noteIsHidden(n));   // locked notes never reach the DOM
             list.innerHTML = '';
 
             // Favourites
@@ -1726,9 +1974,31 @@
 
         window.moveNoteToFolder = async (id, folderId) => {
             const note = findNote(id);
-            if (!note || (note.folderId || null) === (folderId || null)) return;
-            if (folderId) { openNoteFolders.add(folderId); saveOpenFolders(); }
-            await window.db.patchNote(id, { folderId: folderId || null });
+            const target = folderId || null;
+            if (!note || (note.folderId || null) === target || noteIsHidden(note)) return;
+            if (target && !(await window.promptUnlockFolder(target))) return;
+            const fromLocked = folderIsLocked(note.folderId);
+            const toLocked = folderIsLocked(target);
+            if (fromLocked && !toLocked && !confirm(`Move "${note.title}" out of the locked folder?\nIt will be stored unencrypted again.`)) return;
+            if (currentNoteId === id && await window.saveCurrentNote() === false) return;
+            if (target) { openNoteFolders.add(target); saveOpenFolders(); }
+            note.folderId = target;
+
+            if (!toLocked && !note.enc) {            // plain -> plain
+                await queueNoteWrite(id, () => window.db.patchNote(id, { folderId: target }));
+                return;
+            }
+            const payload = pickSecret(note);
+            const key = toLocked ? unlockedFolders.get(target).key : null;
+            await queueNoteWrite(id, async () => {
+                if (key) {                            // into a locked folder (re-encrypted with its key)
+                    const enc = await NoteCrypto.encrypt(key, id, payload);
+                    noteDecCache.set(id, { iv: enc.iv, payload });
+                    return window.db.writeNoteEncrypted(id, enc, { folderId: target });
+                }
+                noteDecCache.delete(id);              // out of a locked folder
+                return window.db.writeNoteDecrypted(id, payload, { folderId: target });
+            });
         };
 
         // ---- "Move to folder" popover (works on touch where drag & drop doesn't) ----
@@ -1798,17 +2068,47 @@
             });
         };
 
+                const updateFolderLockUi = () => {
+            const wasLocked = folderIsLocked(editingFolderId);
+            const on = document.getElementById('note-folder-lock-toggle').checked;
+            const hint = document.getElementById('note-folder-lock-hint');
+            document.getElementById('note-folder-lock-fields').classList.toggle('hidden', !on);
+            document.getElementById('note-folder-pw').placeholder = wasLocked ? 'New password (leave blank to keep)' : 'Password';
+            document.getElementById('note-folder-pw2').placeholder = wasLocked ? 'Confirm new password' : 'Confirm password';
+            const warn = (on && !wasLocked) || (!on && wasLocked);
+            hint.textContent = on
+                ? (wasLocked ? 'Locked. Fill these in only to change the password.' : "Notes get encrypted before they reach Firebase. There's no reset: forget the password and the notes are gone.")
+                : (wasLocked ? "Saving will decrypt this folder's notes and remove the password." : 'Hide this folder behind a password.');
+            hint.classList.toggle('text-amber-300/90', warn);
+            hint.classList.toggle('text-white/45', !warn);
+            document.getElementById('note-folder-lock-error').classList.add('hidden');
+        };
+        const folderLockError = (msg) => {
+            const el = document.getElementById('note-folder-lock-error');
+            el.textContent = msg;
+            el.classList.remove('hidden');
+        };
+
         window.openNoteFolderModal = (folderId = null, pendingNoteId = null) => {
             const modal = document.getElementById('note-folder-modal');
             if (!modal) return;
             closeNoteMoveMenu();
             const folder = folderById(folderId);
+            if (folder && folderIsSealed(folder.id)) {
+                window.promptUnlockFolder(folder.id).then(ok => { if (ok) window.openNoteFolderModal(folder.id, pendingNoteId); });
+                return;
+            }
             editingFolderId = folder ? folder.id : null;
             folderPendingNoteId = pendingNoteId;
             folderPickedColor = folder?.color || NOTE_FOLDER_COLORS[(window.noteFolders || []).length % NOTE_FOLDER_COLORS.length];
             document.getElementById('note-folder-modal-title').textContent = folder ? 'Edit Folder' : 'New Folder';
             document.getElementById('note-folder-name').value = folder ? folder.name : '';
             document.getElementById('note-folder-delete-btn').classList.toggle('hidden', !folder);
+            document.getElementById('note-folder-lock-section').classList.toggle('hidden', !lockSupported());
+            document.getElementById('note-folder-lock-toggle').checked = folderIsLocked(editingFolderId);
+            document.getElementById('note-folder-pw').value = '';
+            document.getElementById('note-folder-pw2').value = '';
+            updateFolderLockUi();
             renderFolderSwatches();
             modal.classList.remove('opacity-0', 'pointer-events-none');
             setTimeout(() => document.getElementById('note-folder-name').focus(), 60);
@@ -1816,6 +2116,7 @@
 
         const closeNoteFolderModal = () => {
             document.getElementById('note-folder-modal')?.classList.add('opacity-0', 'pointer-events-none');
+            ['note-folder-pw', 'note-folder-pw2'].forEach(i => { const el = document.getElementById(i); if (el) el.value = ''; });
         };
 
         const saveNoteFolder = async () => {
@@ -1823,18 +2124,70 @@
             const name = input.value.trim();
             if (!name) { input.focus(); return; }
             const id = editingFolderId, color = folderPickedColor, pendingNote = folderPendingNoteId;
-            closeNoteFolderModal();
-            if (id) {
-                await window.db.updateNoteFolder(id, { name, color });
-            } else {
-                const newId = await window.db.addNoteFolder(name, color);
-                if (newId) {
-                    openNoteFolders.add(newId);
-                    justOpenedFolderId = newId;
+            const wasLocked = folderIsLocked(id);
+            const wantLock = lockSupported() && document.getElementById('note-folder-lock-toggle').checked;
+            const pw = document.getElementById('note-folder-pw').value;
+            const pw2 = document.getElementById('note-folder-pw2').value;
+
+            if (wantLock && (!wasLocked || pw || pw2)) {
+                if (pw.length < 6) return folderLockError('Use at least 6 characters.');
+                if (pw !== pw2) return folderLockError("Passwords don't match.");
+            }
+            if (wasLocked && !wantLock) {
+                if ((window.userNotes || []).some(n => n.folderId === id && n.enc && !n.decrypted))
+                    return folderLockError("Some notes couldn't be decrypted, so the lock can't be removed.");
+                if (!confirm(`Remove the password from "${name}"?\nIts notes will be stored unencrypted again.`)) return;
+            }
+
+            const saveBtn = document.getElementById('note-folder-save-btn');
+            saveBtn.disabled = true;
+            try {
+                let fid = id;
+                if (fid) {
+                    await window.db.updateNoteFolder(fid, { name, color });
+                } else {
+                    fid = await window.db.addNoteFolder(name, color);
+                    if (!fid) return;
+                    openNoteFolders.add(fid);
+                    justOpenedFolderId = fid;
                     saveOpenFolders();
-                    if (pendingNote) await window.moveNoteToFolder(pendingNote, newId);
-                    window.renderNotesSidebar();
                 }
+                const openInHere = () => currentNoteId && findNote(currentNoteId)?.folderId === fid;
+
+                if (wantLock && !wasLocked) {
+                    // Lock: store the wrapped key first, then encrypt every note already in the folder
+                    saveBtn.textContent = 'Encrypting…';
+                    if (openInHere()) await window.saveCurrentNote();
+                    const created = await NoteCrypto.create(pw);
+                    await window.db.updateNoteFolder(fid, { lock: created.meta });
+                    unlockedFolders.set(fid, { raw: created.raw, key: created.key });
+                    await Promise.all((window.userNotes || []).filter(n => n.folderId === fid).map(n => window.persistNote(n.id, {})));
+                } else if (wantLock && wasLocked && pw) {
+                    // Change password: re-wrap the same data key
+                    const u = unlockedFolders.get(fid);
+                    if (u) await window.db.updateNoteFolder(fid, { lock: await NoteCrypto.rewrap(u.raw, pw) });
+                } else if (!wantLock && wasLocked) {
+                    // Remove lock: decrypt the notes back to plain text, then drop the key
+                    saveBtn.textContent = 'Decrypting…';
+                    if (openInHere()) await window.saveCurrentNote();
+                    const inside = (window.userNotes || []).filter(n => n.folderId === fid);
+                    await Promise.all(inside.map(n => queueNoteWrite(n.id, () => n.enc ? window.db.writeNoteDecrypted(n.id, pickSecret(n), {}) : true)));
+                    await window.db.removeNoteFolderLock(fid);
+                    unlockedFolders.delete(fid);
+                    inside.forEach(n => noteDecCache.delete(n.id));
+                    const local = folderById(fid);
+                    if (local) delete local.lock;
+                }
+
+                closeNoteFolderModal();
+                if (pendingNote) await window.moveNoteToFolder(pendingNote, fid);
+                window.renderNotesSidebar();
+            } catch (e) {
+                console.error(e);
+                folderLockError('Something went wrong, check the console.');
+            } finally {
+                saveBtn.disabled = false;
+                saveBtn.textContent = 'Save';
             }
         };
 
@@ -1843,10 +2196,20 @@
             const id = editingFolderId;
             const folder = folderById(id);
             const inside = (window.userNotes || []).filter(n => n.folderId === id);
-            const msg = `Delete folder "${folder ? folder.name : ''}"?` + (inside.length ? `\nIts ${inside.length} note(s) will be moved to Notes.` : '');
+            const locked = folderIsLocked(id);
+            const msg = locked
+                ? `Delete locked folder "${folder ? folder.name : ''}"` + (inside.length ? ` and its ${inside.length} note(s)?\nThis can't be undone. (Remove the lock first if you want to keep the notes.)` : '?')
+                : `Delete folder "${folder ? folder.name : ''}"?` + (inside.length ? `\nIts ${inside.length} note(s) will be moved to Notes.` : '');
             if (!confirm(msg)) return;
             closeNoteFolderModal();
-            await Promise.all(inside.map(n => window.db.patchNote(n.id, { folderId: null })));
+            if (locked) {
+                if (inside.some(n => n.id === currentNoteId)) closeNoteEditor();
+                await Promise.all(inside.map(n => window.db.deleteNote(n.id)));
+                unlockedFolders.delete(id);
+                inside.forEach(n => noteDecCache.delete(n.id));
+            } else {
+                await Promise.all(inside.map(n => window.db.patchNote(n.id, { folderId: null })));
+            }
             await window.db.deleteNoteFolder(id);
             openNoteFolders.delete(id);
             saveOpenFolders();
@@ -1857,10 +2220,11 @@
             document.getElementById('note-folder-cancel-btn')?.addEventListener('click', closeNoteFolderModal);
             document.getElementById('note-folder-delete-btn')?.addEventListener('click', deleteNoteFolderFromModal);
             document.getElementById('note-folder-modal')?.addEventListener('click', (e) => { if (e.target === e.currentTarget) closeNoteFolderModal(); });
-            document.getElementById('note-folder-name')?.addEventListener('keydown', (e) => {
+            ['note-folder-name', 'note-folder-pw', 'note-folder-pw2'].forEach(i => document.getElementById(i)?.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') { e.preventDefault(); saveNoteFolder(); }
                 if (e.key === 'Escape') closeNoteFolderModal();
-            });
+            }));
+            document.getElementById('note-folder-lock-toggle')?.addEventListener('change', updateFolderLockUi);
             document.getElementById('notes-list-container')?.addEventListener('scroll', closeNoteMoveMenu);
             document.getElementById('close-notes-app-btn')?.addEventListener('click', closeNoteMoveMenu);
         });
@@ -1915,6 +2279,8 @@
         };
 
         window.openNote = async (id) => {
+            const target = findNote(id);
+            if (target && noteIsHidden(target)) return;
             if (await window.saveCurrentNote() === false) return;
             currentNoteId = id;
             const note = findNote(id);
@@ -1948,8 +2314,7 @@
             const fields = { content, images, imageSizes, styles, updatedAt: new Date().toISOString() };
             Object.assign(note, fields);
             ed.markSaved(rev);
-            Promise.resolve()
-                .then(() => window.db.patchNote(id, fields))
+                Promise.resolve(window.persistNote(id, fields))
                 .then(ok => { if (ok === false && currentNoteId === id) ed.markFailed(); })
                 .catch(err => { console.error(err); if (currentNoteId === id) ed.markFailed(); });
             return true;
@@ -1958,6 +2323,7 @@
         window.createNewNote = async (folderId = null) => {
             if (await window.saveCurrentNote() === false) return;
             const id = await window.db.addNote('New Note', '', folderId ? { folderId } : {});
+            if (id && folderIsLocked(folderId)) await window.persistNote(id, {});   // encrypt straight away
             if (folderId) { openNoteFolders.add(folderId); saveOpenFolders(); }
             if (id) await window.openNote(id);
         };
@@ -5244,6 +5610,18 @@
             <input type="text" id="note-folder-name" placeholder="Folder name" class="w-full p-3 rounded-xl bg-gray-700 text-white placeholder-gray-400 border border-gray-600 focus:border-blue-500 outline-none transition-colors">
             <label class="block text-white/70 text-xs font-semibold uppercase tracking-wider mt-4 mb-2">Colour</label>
             <div id="note-folder-color-picker" class="flex gap-2 flex-wrap"></div>
+            <div id="note-folder-lock-section" class="mt-5 pt-4 border-t border-gray-700">
+                <label class="flex items-center justify-between cursor-pointer select-none">
+                    <span class="flex items-center text-sm font-semibold text-white"><span data-lucide="lock" class="w-4 h-4 mr-2 text-amber-300"></span>Lock with password</span>
+                    <input type="checkbox" id="note-folder-lock-toggle" class="w-4 h-4 accent-amber-400 cursor-pointer">
+                </label>
+                <p id="note-folder-lock-hint" class="text-[11px] text-white/45 mt-1.5 leading-snug"></p>
+                <div id="note-folder-lock-fields" class="hidden mt-3 space-y-2">
+                    <input type="password" id="note-folder-pw" autocomplete="new-password" placeholder="Password" class="w-full p-2.5 rounded-xl bg-gray-700 text-white text-sm placeholder-gray-400 border border-gray-600 focus:border-amber-400 outline-none transition-colors">
+                    <input type="password" id="note-folder-pw2" autocomplete="new-password" placeholder="Confirm password" class="w-full p-2.5 rounded-xl bg-gray-700 text-white text-sm placeholder-gray-400 border border-gray-600 focus:border-amber-400 outline-none transition-colors">
+                </div>
+                <p id="note-folder-lock-error" class="hidden text-xs text-red-400 mt-2"></p>
+            </div>
             <div class="flex justify-between items-center mt-6">
                 <button id="note-folder-delete-btn" class="px-4 py-2 rounded-xl bg-red-600 text-white hover:bg-red-700 font-semibold text-sm hidden">Delete</button>
                 <div class="flex gap-2 ml-auto">
@@ -5254,6 +5632,19 @@
         </div>
     </div>
 
+
+    <div id="note-unlock-modal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition-opacity duration-300 z-[85]">
+        <form id="note-unlock-form" autocomplete="off" class="bg-gray-800 p-6 rounded-2xl shadow-2xl w-full max-w-sm border border-gray-700">
+            <h3 class="text-xl font-bold text-white mb-1 flex items-center"><span data-lucide="lock" class="w-5 h-5 mr-2 text-amber-300"></span>Locked folder</h3>
+            <p id="note-unlock-sub" class="text-xs text-white/50 mb-4"></p>
+            <input type="password" id="note-unlock-pw" autocomplete="current-password" placeholder="Password" class="w-full p-3 rounded-xl bg-gray-700 text-white placeholder-gray-400 border border-gray-600 focus:border-amber-400 outline-none transition-colors">
+            <p id="note-unlock-error" class="hidden text-xs text-red-400 mt-2"></p>
+            <div class="flex justify-end gap-2 mt-5">
+                <button type="button" id="note-unlock-cancel" class="px-4 py-2 rounded-xl bg-gray-600 text-white hover:bg-gray-500 text-sm">Cancel</button>
+                <button type="submit" id="note-unlock-submit" class="px-4 py-2 rounded-xl bg-amber-500 text-gray-900 hover:bg-amber-400 font-semibold text-sm disabled:opacity-60">Unlock</button>
+            </div>
+        </form>
+    </div>
     <div id="note-move-menu" class="hidden fixed z-[90] w-56 max-h-72 overflow-y-auto custom-scroll p-1.5 rounded-xl bg-gray-800/95 backdrop-blur-md border border-gray-600 shadow-2xl"></div>
 
 
@@ -5319,7 +5710,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 09/11/2026 - 20:18</div>
+    <div id="version-timestamp">Last Update 13/11/2026 - 00:10</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
@@ -8323,6 +8714,17 @@
 
     .note-color-custom { background: conic-gradient(#f87171, #fbbf24, #34d399, #22d3ee, #60a5fa, #a78bfa, #f472b6, #f87171); position: relative; overflow: hidden; display: inline-block; }
     .note-color-custom input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+
+
+        /* Mouse devices: the hidden buttons no longer reserve space, so the name gets the full width until hover */
+    @media (hover: hover) and (pointer: fine) {
+        .note-row .note-actions,
+        .note-row .note-star:not(.is-fav),
+        .note-folder-header .note-actions { display: none; }
+        .note-row:hover .note-actions,
+        .note-folder-header:hover .note-actions { display: flex; }
+        .note-row:hover .note-star { display: inline-block; }
+    }
 
     @media (hover: none), (pointer: coarse) {
         .note-actions, .note-row .note-star { opacity: 1 !important; }
