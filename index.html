@@ -2236,7 +2236,7 @@
             const row = el?.closest('.note-row');
             const input = row?.querySelector('.note-title-input');
             const note = findNote(id);
-            if (!input || !note) return;
+            if (!input || !note || noteIsHidden(note)) return;
 
             row.draggable = false;
             input.readOnly = false;
@@ -2251,10 +2251,20 @@
                 done = true;
                 input.readOnly = true;
                 input.classList.add('pointer-events-none');
-                const newTitle = input.value.trim() || 'New Note';
-                if (note.title !== newTitle) {
-                    // Only patch the title so unsaved editor content is never overwritten
-                    await window.db.patchNote(id, { title: newTitle, updatedAt: new Date().toISOString() });
+                const oldTitle = note.title;
+                const newTitle = input.value.trim() || oldTitle || 'New Note';
+                if (oldTitle !== newTitle) {
+                    // Go through persistNote so titles in locked folders are re-encrypted
+                    // (a plain patch gets overwritten by the cached decrypted title on the next snapshot).
+                    // Only the title + updatedAt change, so unsaved editor content is never overwritten.
+                    input.value = newTitle;
+                    const ok = await window.persistNote(id, { title: newTitle, updatedAt: new Date().toISOString() });
+                    if (ok === false) {
+                        note.title = oldTitle;
+                        input.value = oldTitle;
+                        alert("Couldn't rename the note. Please try again.");
+                    }
+                    window.renderNotesSidebar();
                 } else {
                     input.value = newTitle;
                 }
@@ -5710,7 +5720,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 13/11/2026 - 00:10</div>
+    <div id="version-timestamp">Last Update 19/11/2026 - 15:41</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
