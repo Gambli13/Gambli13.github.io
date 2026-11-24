@@ -24,6 +24,7 @@
             console.warn("Lucide failed to load - icons disabled, dashboard still works.");
         }
     </script>
+    <script src="note-share.js"></script>
     <style>
         /* Hide scrollbar for Chrome, Safari and Opera */
         .no-scrollbar::-webkit-scrollbar {
@@ -667,7 +668,7 @@
         
     import { initializeApp } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js";
     import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-auth.js";
-    import { getFirestore, doc, addDoc, deleteDoc, setDoc, onSnapshot, collection, setLogLevel, writeBatch, Bytes, deleteField } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore.js";
+    import { getFirestore, doc, addDoc, deleteDoc, setDoc, onSnapshot, collection, setLogLevel, writeBatch, Bytes, deleteField, getDoc, getDocs, updateDoc, runTransaction, query, where, serverTimestamp } from "https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore.js";
 
     const STATIC_OVERRIDE_USER_ID = 'zNllEXqmHpaqNZffrgOhyPrSfBB3';
     const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
@@ -703,6 +704,8 @@
             const app = initializeApp(firebaseConfig);
             db = getFirestore(app);
             auth = getAuth(app);
+            // Bridge for note sharing (note-share.js is a classic script)
+            window.noteShareFs = { db, auth, doc, collection, getDoc, getDocs, setDoc, updateDoc, deleteDoc, onSnapshot, runTransaction, serverTimestamp, writeBatch, query, where, deleteField };
             
             if (initialAuthToken) {
                 await signInWithCustomToken(auth, initialAuthToken).catch(e => signInAnonymously(auth));
@@ -716,6 +719,11 @@
                 console.log("Firebase Auth Ready. User ID:", userId);
                 setupDataListeners();
                 document.getElementById('user-id-display').textContent = `Static User ID: ${userId}`;
+                if (window.NoteShare && !window.__noteShareStarted) {
+                    window.__noteShareStarted = true;
+                    window.NoteShare.init(window.noteShareFs);
+                    window.dispatchEvent(new Event('noteshare-ready'));
+                }
             });
 
         } catch (error) {
@@ -1809,7 +1817,9 @@
 
             row.innerHTML = `
                 <div class="flex-1 flex items-start overflow-hidden pr-2 min-w-0">
-                    <span data-lucide="file-text" class="w-4 h-4 mr-2 mt-0.5 text-white/50 flex-shrink-0"></span>
+                    ${note.share && note.share.liveId
+                        ? '<span data-lucide="users" class="w-4 h-4 mr-2 mt-0.5 text-emerald-300 flex-shrink-0" title="Shared"></span>'
+                        : '<span data-lucide="file-text" class="w-4 h-4 mr-2 mt-0.5 text-white/50 flex-shrink-0"></span>'}
                     <div class="flex flex-col w-full overflow-hidden min-w-0">
                         <input type="text" value="${noteEsc(note.title)}" readonly
                                class="note-title-input bg-transparent outline-none text-white text-sm w-full truncate pointer-events-none border-b border-transparent focus:border-blue-500 transition-colors">
@@ -3197,6 +3207,7 @@
                 setSaveStatus('dirty', 'Unsaved');
                 clearTimeout(saveTimer);
                 saveTimer = setTimeout(() => window.saveCurrentNote({ silent: true }), 1200);
+                if (window.onNoteEditorChanged) window.onNoteEditorChanged();
             };
             const refreshImageSelection = () => {
                 const sel = window.getSelection();
@@ -3441,6 +3452,92 @@
                 if (!el) return;
                 el.contentEditable = enabled ? 'true' : 'false';
                 wrap?.classList.toggle('is-disabled', !enabled);
+                el.classList.remove('is-readonly');
+            };
+
+
+            // ---------- live sharing (note-share.js) ----------
+            // A "model" is { t, s }: one entry per character; each image is a NoteShare image char
+            // whose style key holds its width ("w<px>", w0 = natural size).
+            let pointerHeld = false, pointerAt = 0;
+            document.addEventListener('pointerdown', (e) => { if (el && el.contains(e.target)) { pointerHeld = true; pointerAt = Date.now(); } }, true);
+            ['pointerup', 'pointercancel'].forEach(ev => document.addEventListener(ev, () => { pointerHeld = false; }, true));
+            const isBusy = () => composing || (pointerHeld && Date.now() - pointerAt < 4000);
+            const imgIdOf = (img) => {
+                let id = img.dataset.iid;
+                if (!id) { id = window.NoteShare.Img.idOf(img.getAttribute('src') || ''); img.dataset.iid = id; }
+                return id;
+            };
+            const getModel = () => {
+                if (!el) return { t: '', s: [] };
+                if (!composing) fixUp();
+                const d = readDoc();
+                const NSI = window.NoteShare.Img;
+                let t = '';
+                const s = [];
+                for (let i = 0; i < d.t.length; i++) {
+                    const ch = d.t[i];
+                    if (isImgKey(ch)) { t += NSI.charOf(imgIdOf(imgMap.get(ch))); s.push('w' + (imgW.get(ch) || 0)); continue; }
+                    const c = ch.charCodeAt(0);
+                    if (c >= KEY_FIRST && c <= KEY_LAST) continue;    // stray private-use char
+                    t += ch;
+                    s.push(d.s[i] || '');
+                }
+                return { t, s };
+            };
+            // Replaces the content with a model from the server, keeping the caret where it was
+            const setModel = (m, mapPos) => {
+                if (!el || composing) return false;
+                const NSI = window.NoteShare.Img;
+                const hadFocus = document.activeElement === el;
+                let sel = null;
+                if (hadFocus) { fixUp(); sel = getSel(); }
+                const spare = new Map();          // image id -> <img> elements we can reuse (no flicker)
+                imgMap.forEach((img) => { const id = imgIdOf(img); if (!spare.has(id)) spare.set(id, []); spare.get(id).push(img); });
+                imgMap = new Map();
+                imgW = new Map();
+                nextKey = KEY_FIRST;
+                let t = '';
+                const s = [];
+                for (let i = 0; i < m.t.length; i++) {
+                    const ch = m.t[i];
+                    const id = NSI.idOfChar(ch);
+                    if (id) {
+                        const w = parseInt(String(m.s[i] || '').slice(1), 10) || 0;
+                        const k = newKey();
+                        const pool = spare.get(id);
+                        const old = pool && pool.length ? pool.shift() : null;
+                        if (old) { old.dataset.k = k; imgMap.set(k, old); if (w) imgW.set(k, w); applyImgWidth(old, k); }
+                        else { const img = makeImg(NSI.src(id) || '', k, w); img.dataset.iid = id; }
+                        t += k;
+                        s.push('');
+                        continue;
+                    }
+                    const c = ch.charCodeAt(0);
+                    if (c >= KEY_FIRST && c <= KEY_LAST) continue;
+                    t += ch;
+                    s.push(m.s[i] || '');
+                }
+                pending = null;
+                undoStack = []; redoStack = []; lastRecord = { t: 0, kind: '' };
+                render(D(t, s));
+                if (sel) setSel(mapPos ? mapPos(sel.a) : sel.a, mapPos ? mapPos(sel.f) : sel.f, t);
+                updateStatusPos();
+                updateToolbar();
+                refreshImageSelection();
+                // mirror into the dashboard copy through the normal autosave
+                rev++;
+                setSaveStatus('dirty', 'Syncing…');
+                clearTimeout(saveTimer);
+                saveTimer = setTimeout(() => window.saveCurrentNote({ silent: true }), 1200);
+                return true;
+            };
+            // Fills in images whose data arrived after the text
+            const refreshImages = () => {
+                const NSI = window.NoteShare.Img;
+                imgMap.forEach((img) => {
+                    if (!img.getAttribute('src') && img.dataset.iid) { const src = NSI.src(img.dataset.iid); if (src) img.src = src; }
+                });
             };
 
             if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
@@ -3462,7 +3559,13 @@
                     saveTimer = setTimeout(() => window.saveCurrentNote({ silent: true }), 5000);
                 },
                 setSaveStatus,
-                cancelAutosave: () => clearTimeout(saveTimer)
+                cancelAutosave: () => clearTimeout(saveTimer),
+                // live sharing
+                getModel,
+                setModel,
+                refreshImages,
+                isBusy,
+                setReadOnly: (ro) => { if (!el) return; enabled = !ro; el.contentEditable = ro ? 'false' : 'true'; wrap?.classList.remove('is-disabled'); el.classList.toggle('is-readonly', !!ro); }
             };
         })();
 
@@ -5577,6 +5680,8 @@
                         <button type="button" data-fmt="bigger" class="note-tb-btn" title="Bigger text / image (Ctrl+Shift+&gt;)"><span data-lucide="a-arrow-up" class="w-4 h-4"></span></button>
                         <span class="w-px h-5 bg-gray-700 mx-2"></span>
                         <button type="button" data-fmt="clear" class="note-tb-btn" title="Clear formatting / original image size (Ctrl+\)"><span data-lucide="remove-formatting" class="w-4 h-4"></span></button>
+                        <span id="note-live-badge" class="hidden items-center gap-1.5 ml-3 text-[11px] text-white/55 truncate" data-state="ok"><span class="note-live-dot"></span><span id="note-live-text">Live</span></span>
+                        <button type="button" id="note-share-btn" class="ml-auto flex items-center gap-1.5 px-3 h-8 rounded-lg bg-blue-600/80 hover:bg-blue-500 text-white text-xs font-semibold transition-colors flex-shrink-0" title="Share this note"><span data-lucide="share-2" class="w-3.5 h-3.5"></span><span id="note-share-btn-text">Share</span></button>
                     </div>
                     <div id="current-note-content" class="note-editor flex-1 min-h-0 min-w-0 overflow-y-auto custom-scroll p-10 pt-6 text-white text-base leading-relaxed outline-none" contenteditable="false" spellcheck="true" data-placeholder="Start typing... (paste images with Ctrl+V)"></div>
                     <div class="note-statusbar relative flex items-center gap-4 px-4 py-1.5 border-t border-gray-700/80 bg-gray-800/70 text-[11px] text-white/50 select-none">
@@ -5655,6 +5760,45 @@
             </div>
         </form>
     </div>
+    <div id="note-share-modal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition-opacity duration-300 z-[85]">
+        <div class="bg-gray-800 p-6 rounded-2xl shadow-2xl w-full max-w-lg border border-gray-700 max-h-[90vh] overflow-y-auto custom-scroll">
+            <div class="flex items-start justify-between mb-1">
+                <h3 class="text-xl font-bold text-white flex items-center"><span data-lucide="share-2" class="w-5 h-5 mr-2 text-blue-400"></span>Share note</h3>
+                <button type="button" data-act="close" class="p-1.5 rounded-lg hover:bg-white/10 text-white/60 hover:text-white transition-colors" title="Close"><span data-lucide="x" class="w-4 h-4"></span></button>
+            </div>
+            <p class="text-xs text-white/50 mb-5">"<span id="note-share-note-title" class="text-white/80"></span>" — each kind of access gets its own link. Anything changed through a link shows up in your notes too.</p>
+            <div class="space-y-3">
+                <div data-mode="view" class="rounded-xl border border-sky-400/25 bg-sky-500/5 p-4">
+                    <div class="flex items-center gap-2 text-sm font-semibold text-sky-300"><span data-lucide="eye" class="w-4 h-4"></span>View only</div>
+                    <p class="text-[11px] text-white/45 mt-0.5">Can read the note and watch edits happen live. Can't change anything.</p>
+                    <div id="note-share-view"></div>
+                </div>
+                <div data-mode="edit" class="rounded-xl border border-emerald-400/25 bg-emerald-500/5 p-4">
+                    <div class="flex items-center gap-2 text-sm font-semibold text-emerald-300"><span data-lucide="pencil" class="w-4 h-4"></span>Can edit</div>
+                    <p class="text-[11px] text-white/45 mt-0.5">Edits live with everyone else. They pick a name when they join, so you can see whose cursor and highlight is whose.</p>
+                    <div id="note-share-edit"></div>
+                </div>
+            </div>
+            <div class="flex justify-between items-center mt-5">
+                <button type="button" id="note-share-stop" data-act="stop" class="hidden px-3 py-2 rounded-xl bg-red-600/80 hover:bg-red-600 text-white text-xs font-semibold transition-colors">Stop sharing</button>
+                <button type="button" data-act="close" class="ml-auto px-4 py-2 rounded-xl bg-gray-600 text-white hover:bg-gray-500 text-sm transition-colors">Done</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="note-owner-modal" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 opacity-0 pointer-events-none transition-opacity duration-300 z-[90]">
+        <form id="note-owner-form" autocomplete="off" class="bg-gray-800 p-6 rounded-2xl shadow-2xl w-full max-w-sm border border-gray-700">
+            <h3 class="text-xl font-bold text-white mb-1 flex items-center"><span data-lucide="key-round" class="w-5 h-5 mr-2 text-blue-300"></span><span id="note-owner-title">Unlock sharing</span></h3>
+            <p id="note-owner-sub" class="text-xs text-white/50 mb-4"></p>
+            <input type="password" id="note-owner-pw" placeholder="Sharing passphrase" class="w-full p-3 rounded-xl bg-gray-700 text-white placeholder-gray-400 border border-gray-600 focus:border-blue-400 outline-none transition-colors">
+            <input type="password" id="note-owner-pw2" autocomplete="new-password" placeholder="Confirm passphrase" class="hidden w-full mt-2 p-3 rounded-xl bg-gray-700 text-white placeholder-gray-400 border border-gray-600 focus:border-blue-400 outline-none transition-colors">
+            <p id="note-owner-error" class="hidden text-xs text-red-400 mt-2"></p>
+            <div class="flex justify-end gap-2 mt-5">
+                <button type="button" id="note-owner-cancel" class="px-4 py-2 rounded-xl bg-gray-600 text-white hover:bg-gray-500 text-sm">Cancel</button>
+                <button type="submit" id="note-owner-submit" class="px-4 py-2 rounded-xl bg-blue-500 text-white hover:bg-blue-600 font-semibold text-sm disabled:opacity-60">Unlock</button>
+            </div>
+        </form>
+    </div>
     <div id="note-move-menu" class="hidden fixed z-[90] w-56 max-h-72 overflow-y-auto custom-scroll p-1.5 rounded-xl bg-gray-800/95 backdrop-blur-md border border-gray-600 shadow-2xl"></div>
 
 
@@ -5720,7 +5864,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 19/11/2026 - 15:41</div>
+    <div id="version-timestamp">Last Update 24/11/2026 - 15:11</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
@@ -8700,6 +8844,16 @@
     .note-row .note-star.is-fav { opacity: 1; color: #facc15; }
     .note-row .note-star.is-fav svg { fill: currentColor; }
 
+    /* Note sharing */
+    #note-share-btn.is-shared { background: rgba(5,150,105,.85); }
+    #note-share-btn.is-shared:hover { background: rgb(16,185,129); }
+    .note-live-dot { width: .45rem; height: .45rem; border-radius: 999px; background: #34d399; flex-shrink: 0; }
+    #note-live-badge[data-state="busy"] .note-live-dot { background: #fbbf24; }
+    #note-live-badge[data-state="bad"] .note-live-dot { background: #f87171; }
+    #note-live-badge[data-state="bad"] { color: #fca5a5; }
+    .note-editor.is-readonly { cursor: default; opacity: .8; }
+    .note-editor .note-img[src=""] { min-width: 120px; min-height: 80px; background: rgba(255,255,255,.06); }
+
     /* Code-style note editor */
     #note-editor-wrap.is-disabled { opacity: 0; pointer-events: none; }
     .note-editor { position: relative; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; -moz-tab-size: 4; caret-color: #60a5fa; cursor: text; }
@@ -9683,6 +9837,503 @@
 
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wire);
     else wire();
+})();
+</script>
+<script>
+// ===================== Note sharing — owner side (engine in note-share.js, page in note.html) =====================
+(function () {
+    const NS = window.NoteShare;
+    if (!NS) { console.warn('note-share.js not loaded — note sharing is off'); return; }
+    const $ = (id) => document.getElementById(id);
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const icons = () => { if (window.lucide) window.lucide.createIcons(); };
+    const sharedLive = (n) => (n && n.share && n.share.liveId) || null;
+
+    let ownerReady = false;
+    let session = null, sessionNoteId = null;
+    let readOnlyNoteId = null;
+    const watchers = new Map();   // liveId -> { noteId, unsub, latest, busy }
+
+    // Originals, wrapped further down
+    const origPersist = window.persistNote;
+    const origOpenNote = window.openNote;
+    const origSave = window.saveCurrentNote;
+    const origDeleteNote = window.deleteNote;
+    const origMove = window.moveNoteToFolder;
+    const origRender = window.renderNotesSidebar;
+
+    // ---------- owner passphrase ----------
+    let ownerResolve = null, ownerMode = 'unlock';
+    const ownerErr = (msg) => { const el = $('note-owner-error'); el.textContent = msg; el.classList.toggle('hidden', !msg); };
+    function setOwnerMode(mode) {
+        ownerMode = mode;
+        const setup = mode === 'setup';
+        $('note-owner-title').textContent = setup ? 'Set a sharing passphrase' : 'Unlock sharing';
+        $('note-owner-sub').textContent = setup
+            ? "Only devices that know this passphrase can create, change or turn off share links. You type it once per device. Write it down: it can only be reset from the Firebase console."
+            : 'Enter your sharing passphrase. This device will remember it.';
+        $('note-owner-pw2').classList.toggle('hidden', !setup);
+        $('note-owner-pw').setAttribute('autocomplete', setup ? 'new-password' : 'current-password');
+        $('note-owner-submit').textContent = setup ? 'Save passphrase' : 'Unlock';
+    }
+    function promptOwner(mode) {
+        setOwnerMode(mode);
+        $('note-owner-pw').value = '';
+        $('note-owner-pw2').value = '';
+        ownerErr('');
+        $('note-owner-modal').classList.remove('opacity-0', 'pointer-events-none');
+        setTimeout(() => $('note-owner-pw').focus(), 60);
+        if (ownerResolve) ownerResolve(false);
+        return new Promise(res => { ownerResolve = res; });
+    }
+    function finishOwner(ok) {
+        $('note-owner-modal').classList.add('opacity-0', 'pointer-events-none');
+        $('note-owner-pw').value = '';
+        $('note-owner-pw2').value = '';
+        const r = ownerResolve;
+        ownerResolve = null;
+        if (r) r(ok);
+    }
+    async function submitOwner() {
+        const pw = $('note-owner-pw').value, pw2 = $('note-owner-pw2').value;
+        if (ownerMode === 'setup') {
+            if (pw.length < 8) return ownerErr('Use at least 8 characters.');
+            if (pw !== pw2) return ownerErr("The passphrases don't match.");
+        } else if (!pw) { $('note-owner-pw').focus(); return; }
+        const btn = $('note-owner-submit');
+        btn.disabled = true;
+        btn.textContent = 'Checking…';
+        ownerErr('');
+        try {
+            if (ownerMode === 'setup') await NS.owner.setup(pw); else await NS.owner.unlock(pw);
+            finishOwner(true);
+        } catch (e) {
+            if (e.code === 'wrong') { ownerErr('Wrong passphrase.'); $('note-owner-pw').select(); }
+            else if (e.code === 'exists') { setOwnerMode('unlock'); ownerErr('A passphrase is already set. Enter that one.'); }
+            else { console.error(e); ownerErr('Something went wrong, check the console.'); }
+        } finally {
+            btn.disabled = false;
+            if (ownerResolve) setOwnerMode(ownerMode);
+        }
+    }
+    $('note-owner-form').addEventListener('submit', (e) => { e.preventDefault(); submitOwner(); });
+    $('note-owner-cancel').addEventListener('click', () => finishOwner(false));
+    $('note-owner-modal').addEventListener('click', (e) => { if (e.target === e.currentTarget) finishOwner(false); });
+    $('note-owner-modal').addEventListener('keydown', (e) => { if (e.key === 'Escape') finishOwner(false); });
+
+    async function ensureOwner(interactive) {
+        if (ownerReady) return true;
+        if (!NS.ready()) { if (interactive) alert('Sharing needs the dashboard to be connected to Firebase.'); return false; }
+        let st;
+        try { st = await NS.owner.state(); }
+        catch (e) { console.error(e); if (interactive) alert("Couldn't reach Firebase to check sharing. Try again in a moment."); return false; }
+        if (st === 'norules') {
+            console.warn('[share] The note-sharing Firestore rules are not published yet, so sharing stays off.');
+            if (interactive) alert('Sharing stays off until the new Firestore rules are published.\n\nFirebase console → Firestore Database → Rules: paste firestore.rules, Publish, then try again.');
+            return false;
+        }
+        if (st !== 'ready') {
+            if (!interactive || !(await promptOwner(st))) return false;
+        }
+        ownerReady = true;
+        syncMirrors();
+        attachIfShared();
+        return true;
+    }
+
+    // ---------- live session for the note open in the editor ----------
+    function setLiveBadge(st) {
+        const b = $('note-live-badge');
+        if (!b) return;
+        if (!st) { b.classList.add('hidden'); b.classList.remove('flex'); return; }
+        const MAP = {
+            saved: ['Live', 'ok'], dirty: ['Syncing…', 'busy'], saving: ['Syncing…', 'busy'],
+            error: ['Reconnecting…', 'bad'], denied: ['No access', 'bad'], gone: ['Not shared', 'bad'],
+            locked: ['Read-only here: unlock sharing to edit', 'bad']
+        };
+        const [text, state] = MAP[st] || ['Live', 'ok'];
+        b.dataset.state = state;
+        $('note-live-text').textContent = text;
+        b.classList.remove('hidden');
+        b.classList.add('flex');
+    }
+    function updateShareButton() {
+        const btn = $('note-share-btn');
+        if (!btn) return;
+        const n = currentNoteId ? findNote(currentNoteId) : null;
+        const shared = !!sharedLive(n);
+        $('note-share-btn-text').textContent = shared ? 'Shared' : 'Share';
+        btn.classList.toggle('is-shared', shared);
+        if (!session) setLiveBadge(shared && readOnlyNoteId === currentNoteId ? 'locked' : null);
+    }
+    function detach() {
+        const s = session;
+        if (!s) return;
+        session = null;
+        sessionNoteId = null;
+        s.flush().finally(() => s.stop());
+        setLiveBadge(null);
+    }
+    function clearShareField(noteId, liveId) {
+        const n = findNote(noteId);
+        if (!n || sharedLive(n) !== liveId) return;
+        delete n.share;
+        window.db.patchNote(noteId, { share: NS.deleteField() });
+        if (sessionNoteId === noteId) detach();
+        window.renderNotesSidebar();
+    }
+    function attachIfShared() {
+        const id = currentNoteId;
+        const note = id ? findNote(id) : null;
+        const liveId = sharedLive(note);
+        if (session && (sessionNoteId !== id || session.liveId !== liveId)) detach();
+        updateShareButton();
+        if (!liveId || session || !ownerReady) return;
+        const ed = window.noteEditor;
+        if (readOnlyNoteId === id) { readOnlyNoteId = null; ed.setReadOnly(false); }
+        const noteId = id;
+        let last = ed.getModel();
+        const isOpen = () => currentNoteId === noteId && sessionNoteId === noteId;
+        sessionNoteId = noteId;
+        session = new NS.LiveSession(liveId, {
+            seed: last,
+            who: 'Owner',
+            getLocal: () => { if (isOpen()) last = ed.getModel(); return last; },
+            applyRemote: (m, map) => (isOpen() ? ed.setModel(m, map) : true),
+            busy: () => isOpen() && ed.isBusy(),
+            onImages: () => { if (isOpen()) ed.refreshImages(); },
+            onTitle: (title) => {
+                const n = findNote(noteId);
+                if (n && title && n.title !== title) { origPersist(noteId, { title }); window.renderNotesSidebar(); }
+            },
+            onStatus: (st) => { if (isOpen()) setLiveBadge(st); },
+            onGone: () => clearShareField(noteId, liveId),
+            onDenied: () => {
+                if (sessionNoteId === noteId) detach();
+                ownerReady = false;
+                NS.owner.forget();
+                updateShareButton();
+            }
+        }).start();
+        setLiveBadge('saved');
+    }
+    // Called by the editor on every local change
+    window.onNoteEditorChanged = () => {
+        if (session && sessionNoteId === currentNoteId) session.localChanged();
+    };
+
+    // ---------- keep the dashboard copy of every shared note up to date ----------
+    let mirrorTimer = null;
+    function syncMirrors() { clearTimeout(mirrorTimer); mirrorTimer = setTimeout(syncMirrorsNow, 60); }
+    function syncMirrorsNow() {
+        if (!ownerReady) return;
+        const want = new Map();
+        (window.userNotes || []).forEach(n => { const l = sharedLive(n); if (l && !noteIsHidden(n)) want.set(l, n.id); });
+        watchers.forEach((w, l) => { if (!want.has(l)) { w.unsub(); watchers.delete(l); } });
+        want.forEach((noteId, liveId) => {
+            const existing = watchers.get(liveId);
+            if (existing) { existing.noteId = noteId; return; }
+            const w = { noteId, unsub: () => {}, latest: undefined, busy: false };
+            watchers.set(liveId, w);
+            w.unsub = NS.admin.watchLive(liveId, (d) => { w.latest = d; pumpMirror(w, liveId); }, (e) => console.warn('[share] watch', liveId, e));
+        });
+    }
+    async function pumpMirror(w, liveId) {
+        if (w.busy) return;
+        w.busy = true;
+        try {
+            while (w.latest !== undefined) {
+                const d = w.latest;
+                w.latest = undefined;
+                if (!d) clearShareField(w.noteId, liveId);
+                else await mirrorInto(w.noteId, liveId, d, false);
+            }
+        } finally { w.busy = false; }
+    }
+    async function mirrorInto(noteId, liveId, d, force) {
+        const note = findNote(noteId);
+        if (!note || sharedLive(note) !== liveId) return;
+        if (!force && session && sessionNoteId === noteId) return;     // the open editor keeps it in sync
+        if (!force && (note.share.rev || 0) >= d.rev) return;
+        try {
+            const images = await NS.admin.fetchImages(liveId, d.imgs || []);
+            if (images.some(x => !x)) return;                          // try again on the next change
+            if (!force && session && sessionNoteId === noteId) return;
+            await window.db.patchNote(noteId, {
+                title: d.title || note.title || 'Note',
+                content: d.text || '', styles: d.styles || '',
+                images, imageSizes: d.imgW || [],
+                updatedAt: d.updatedAt || new Date().toISOString(),
+                share: { liveId, rev: d.rev }
+            });
+        } catch (e) { console.warn('[share] mirror', e); }
+    }
+
+    // ---------- share modal ----------
+    let shareNoteId = null;
+    let shareState = { view: null, edit: null };
+    window.openShareModal = async () => {
+        const note = currentNoteId ? findNote(currentNoteId) : null;
+        if (!note) return;
+        if (note.folderId && folderIsLocked(note.folderId)) {
+            alert("Notes in locked folders are encrypted, so they can't be shared.\nMove it out of the locked folder first.");
+            return;
+        }
+        if (!(await ensureOwner(true))) return;
+        shareNoteId = note.id;
+        $('note-share-note-title').textContent = note.title || 'Note';
+        $('note-share-modal').classList.remove('opacity-0', 'pointer-events-none');
+        await refreshShareModal();
+    };
+    function closeShareModal() {
+        $('note-share-modal').classList.add('opacity-0', 'pointer-events-none');
+        shareNoteId = null;
+    }
+    async function refreshShareModal() {
+        const note = findNote(shareNoteId);
+        if (!note) return closeShareModal();
+        const liveId = sharedLive(note);
+        ['view', 'edit'].forEach(m => { $('note-share-' + m).innerHTML = '<p class="text-xs text-white/40 pt-3">Loading…</p>'; });
+        let shares = [];
+        if (liveId) {
+            try { shares = await NS.admin.listShares(liveId); }
+            catch (e) {
+                console.error(e);
+                ['view', 'edit'].forEach(m => { $('note-share-' + m).innerHTML = '<p class="text-xs text-red-400 pt-3">Couldn\'t load the links. Check your connection.</p>'; });
+                return;
+            }
+        }
+        if (shareNoteId !== note.id) return;
+        shareState = { view: shares.find(s => s.mode === 'view') || null, edit: shares.find(s => s.mode === 'edit') || null };
+        renderCard('view');
+        renderCard('edit');
+        $('note-share-stop').classList.toggle('hidden', !liveId);
+        icons();
+    }
+    function renderCard(mode) {
+        const box = $('note-share-' + mode);
+        const s = shareState[mode];
+        const input = 'p-2.5 rounded-xl bg-gray-700 text-white text-sm placeholder-gray-400 border border-gray-600 focus:border-amber-400 outline-none transition-colors';
+        if (!s) {
+            box.innerHTML = `
+                <label class="flex items-center gap-2 text-xs text-white/70 cursor-pointer select-none mt-3">
+                    <input type="checkbox" data-role="pw-toggle" class="w-3.5 h-3.5 accent-amber-400 cursor-pointer">Require a password
+                </label>
+                <input type="password" data-role="pw" autocomplete="new-password" placeholder="Password for this link" style="display:none" class="w-full mt-2 ${input}">
+                <p data-role="error" class="hidden text-xs text-red-400 mt-2"></p>
+                <button type="button" data-act="create" class="mt-3 w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl ${mode === 'edit' ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-sky-600 hover:bg-sky-500'} text-white text-sm font-semibold transition-colors disabled:opacity-60">
+                    <span data-lucide="link" class="w-4 h-4"></span>Create ${mode === 'edit' ? 'edit' : 'view-only'} link
+                </button>`;
+            return;
+        }
+        box.innerHTML = `
+            <div class="flex gap-2 mt-3">
+                <input type="text" readonly value="${esc(NS.admin.linkFor(s.id))}" data-role="link" class="flex-1 min-w-0 p-2.5 rounded-xl bg-gray-900/70 text-white/80 text-xs border border-gray-600 outline-none font-mono">
+                <button type="button" data-act="copy" class="px-3 rounded-xl bg-gray-600 hover:bg-gray-500 text-white text-xs font-semibold transition-colors flex items-center gap-1.5"><span data-lucide="copy" class="w-3.5 h-3.5"></span><span data-role="copy-text">Copy</span></button>
+            </div>
+            <div class="flex items-center justify-between mt-3 text-xs">
+                <span class="flex items-center gap-1.5 ${s.hasPassword ? 'text-amber-300' : 'text-white/45'}"><span data-lucide="${s.hasPassword ? 'lock' : 'lock-open'}" class="w-3.5 h-3.5"></span>${s.hasPassword ? 'Password protected' : 'No password'}</span>
+                <span class="flex gap-3">
+                    <button type="button" data-act="pw-edit" class="text-blue-300 hover:text-blue-200">${s.hasPassword ? 'Change password' : 'Add password'}</button>
+                    ${s.hasPassword ? '<button type="button" data-act="pw-remove" class="text-white/50 hover:text-white">Remove</button>' : ''}
+                </span>
+            </div>
+            <div data-role="pw-row" style="display:none" class="gap-2 mt-2">
+                <input type="password" data-role="pw" autocomplete="new-password" placeholder="New password" class="flex-1 min-w-0 ${input}">
+                <button type="button" data-act="pw-save" class="px-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-gray-900 text-xs font-semibold">Save</button>
+            </div>
+            <p data-role="error" class="hidden text-xs text-red-400 mt-2"></p>
+            <button type="button" data-act="off" class="mt-3 text-xs text-red-300 hover:text-red-200 flex items-center gap-1.5"><span data-lucide="link-2-off" class="w-3.5 h-3.5"></span>Turn off this link</button>`;
+    }
+    const cardErr = (card, msg) => { const el = card.querySelector('[data-role="error"]'); if (el) { el.textContent = msg; el.classList.toggle('hidden', !msg); } };
+
+    async function createLink(mode, password) {
+        const note = findNote(shareNoteId);
+        if (!note) return;
+        let liveId = sharedLive(note);
+        if (!liveId) {
+            let model;
+            if (currentNoteId === note.id) { await window.saveCurrentNote({ silent: true }); model = window.noteEditor.getModel(); }
+            else model = NS.model.fromIndex(note);
+            liveId = await NS.admin.createLive(note.title || 'Note', model);
+            note.share = { liveId, rev: 1 };
+            await window.db.patchNote(note.id, { share: { liveId, rev: 1 } });
+        }
+        await NS.admin.createShare(liveId, mode, password || null);
+        attachIfShared();
+        syncMirrors();
+        window.renderNotesSidebar();
+    }
+
+    // Turns every link off and removes the live copy; the note stays in your notes with its latest text
+    async function stopSharing(noteId) {
+        const note = findNote(noteId);
+        const liveId = sharedLive(note);
+        if (!liveId) return true;
+        if (!(await ensureOwner(true))) return false;
+        if (session && sessionNoteId === noteId) {
+            await session.flush();
+            await window.saveCurrentNote({ silent: true });
+            detach();
+        } else {
+            try { const d = await NS.admin.getLive(liveId); if (d) await mirrorInto(noteId, liveId, d, true); } catch (e) { console.warn(e); }
+        }
+        await NS.admin.destroyLive(liveId);
+        clearShareField(noteId, liveId);
+        return true;
+    }
+
+    async function copyText(text, input) {
+        try { await navigator.clipboard.writeText(text); return true; }
+        catch (e) { try { input.select(); return document.execCommand('copy'); } catch (err) { return false; } }
+    }
+
+    $('note-share-modal').addEventListener('change', (e) => {
+        if (e.target.dataset.role !== 'pw-toggle') return;
+        const card = e.target.closest('[data-mode]');
+        const pw = card.querySelector('[data-role="pw"]');
+        pw.style.display = e.target.checked ? '' : 'none';
+        if (e.target.checked) pw.focus();
+    });
+    $('note-share-modal').addEventListener('click', async (e) => {
+        if (e.target === e.currentTarget) return closeShareModal();
+        const btn = e.target.closest('[data-act]');
+        if (!btn) return;
+        const act = btn.dataset.act;
+        if (act === 'close') return closeShareModal();
+        const noteId = shareNoteId;
+        if (act === 'stop') {
+            if (!confirm('Stop sharing this note?\nEvery link stops working straight away. The note stays in your notes.')) return;
+            btn.disabled = true;
+            try { await stopSharing(noteId); } catch (err) { console.error(err); alert("Couldn't stop sharing, check the console."); }
+            btn.disabled = false;
+            return refreshShareModal();
+        }
+        const card = btn.closest('[data-mode]');
+        if (!card) return;
+        const mode = card.dataset.mode;
+        const s = shareState[mode];
+        cardErr(card, '');
+        try {
+            if (act === 'create') {
+                const wantPw = card.querySelector('[data-role="pw-toggle"]').checked;
+                const pw = card.querySelector('[data-role="pw"]').value;
+                if (wantPw && pw.length < 4) return cardErr(card, 'Use at least 4 characters.');
+                btn.disabled = true;
+                btn.lastChild.textContent = 'Creating…';
+                await createLink(mode, wantPw ? pw : null);
+                return refreshShareModal();
+            }
+            if (!s) return;
+            if (act === 'copy') {
+                const ok = await copyText(NS.admin.linkFor(s.id), card.querySelector('[data-role="link"]'));
+                const t = card.querySelector('[data-role="copy-text"]');
+                t.textContent = ok ? 'Copied!' : 'Select & copy';
+                setTimeout(() => { t.textContent = 'Copy'; }, 1500);
+                return;
+            }
+            if (act === 'pw-edit') {
+                const row = card.querySelector('[data-role="pw-row"]');
+                row.style.display = 'flex';
+                row.querySelector('input').focus();
+                return;
+            }
+            if (act === 'pw-save') {
+                const pw = card.querySelector('[data-role="pw-row"] input').value;
+                if (pw.length < 4) return cardErr(card, 'Use at least 4 characters.');
+                btn.disabled = true;
+                await NS.admin.setSharePassword(s.id, pw);
+                return refreshShareModal();
+            }
+            if (act === 'pw-remove') {
+                if (!confirm('Remove the password from this link?\nAnyone with the link will be able to open it.')) return;
+                await NS.admin.setSharePassword(s.id, null);
+                return refreshShareModal();
+            }
+            if (act === 'off') {
+                const other = shareState[mode === 'edit' ? 'view' : 'edit'];
+                if (!confirm(`Turn off the ${mode === 'edit' ? 'edit' : 'view-only'} link?\nAnyone using it loses access straight away.` + (other ? '' : '\nIt is the last link, so the note stops being shared.'))) return;
+                btn.disabled = true;
+                if (other) await NS.admin.deleteShare(s.id);
+                else await stopSharing(noteId);
+                return refreshShareModal();
+            }
+        } catch (err) {
+            console.error(err);
+            cardErr(card, 'Something went wrong, check the console.');
+            btn.disabled = false;
+        }
+    });
+    $('note-share-modal').addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeShareModal();
+        if (e.key === 'Enter' && e.target.dataset.role === 'pw') {
+            e.preventDefault();
+            const card = e.target.closest('[data-mode]');
+            const b = card && (card.querySelector('[data-act="pw-save"]') || card.querySelector('[data-act="create"]'));
+            if (b) b.click();
+        }
+    });
+    $('note-share-btn').addEventListener('click', () => window.openShareModal());
+
+    // ---------- hooks into the notes app ----------
+    window.openNote = async (id) => {
+        if (session) await session.flush();
+        if (readOnlyNoteId) { readOnlyNoteId = null; window.noteEditor.setReadOnly(false); }
+        await origOpenNote(id);
+        if (currentNoteId !== id) return;
+        if (sharedLive(findNote(id)) && !ownerReady) {
+            // Editing here without the live link would split the note in two, so stay read-only until unlocked
+            const ok = await ensureOwner(true);
+            if (!ok && currentNoteId === id) { readOnlyNoteId = id; window.noteEditor.setReadOnly(true); }
+        }
+        attachIfShared();
+    };
+    window.saveCurrentNote = async (opts = {}) => {
+        const r = await origSave(opts);
+        if (session && !(opts && opts.silent)) session.flush();
+        return r;
+    };
+    window.persistNote = (id, fields) => {
+        const r = origPersist(id, fields);
+        const n = findNote(id);
+        const liveId = sharedLive(n);
+        if (liveId && ownerReady && fields && typeof fields.title === 'string') {
+            if (session && sessionNoteId === id) session.setTitle(fields.title);
+            else NS.admin.setLiveTitle(liveId, fields.title).catch(e => console.warn('[share] title', e));
+        }
+        return r;
+    };
+    window.deleteNote = async (id) => {
+        const n = findNote(id);
+        const liveId = sharedLive(n);
+        if (!liveId) return origDeleteNote(id);
+        if (!confirm('Delete this note?\nIt is shared, so its links stop working too.')) return;
+        if (!(await ensureOwner(true))) { alert('Unlock sharing first, so the share links can be turned off.'); return; }
+        if (sessionNoteId === id) detach();
+        if (currentNoteId === id) closeNoteEditor();
+        try { await NS.admin.destroyLive(liveId); } catch (e) { console.error(e); alert("Couldn't turn the links off, so the note wasn't deleted."); return; }
+        await window.db.deleteNote(id);
+    };
+    window.moveNoteToFolder = async (id, folderId) => {
+        const n = findNote(id);
+        if (sharedLive(n) && folderId && folderIsLocked(folderId)) {
+            if (!confirm(`"${n.title}" is shared. Locked folders are encrypted, so moving it there turns its links off.\nContinue?`)) return;
+            if (!(await stopSharing(id))) return;
+        }
+        return origMove(id, folderId);
+    };
+    window.renderNotesSidebar = () => {
+        origRender();
+        if (session && sessionNoteId !== currentNoteId) detach();
+        if (readOnlyNoteId && readOnlyNoteId !== currentNoteId) readOnlyNoteId = null;
+        updateShareButton();
+        syncMirrors();
+    };
+
+    // ---------- start ----------
+    const boot = () => ensureOwner(false).catch(e => console.warn('[share]', e));
+    window.addEventListener('noteshare-ready', boot);
+    if (NS.ready()) boot();
 })();
 </script>
 </body>
