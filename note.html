@@ -1464,7 +1464,9 @@
         const shareId = (new URLSearchParams(location.search).get('id') || '').trim();
         const NAME_KEY = 'noteShareName';
         const joinedKey = 'noteShareJoined:' + shareId;
+        const keyStore = 'noteShareKey:' + shareId;      // this tab's copy of an encrypted note's key
         let share = null, session = null, presence = null, unsubPresence = null, unsubShare = null;
+        let liveKey = null;
         let locked = false, canEdit = false;
 
         // ---------- gate ----------
@@ -1490,7 +1492,15 @@
             catch (e) { console.error(e); return showError("Couldn't open this note", 'Check your connection, then reload the page.'); }
             if (!share) return showError("This link doesn't work anymore", 'The owner may have turned it off.');
             canEdit = share.mode === 'edit';
-            if (!(await NS().join.checkMember(share))) {
+            if (share.e2e && !share.hasPassword) {
+                // Encrypted note, no password: the key is in the link after "#"
+                liveKey = new URLSearchParams(location.hash.slice(1)).get('k');
+                if (!NS().join.isKey(liveKey)) return showError("This link isn't complete", 'The end of the link (the part after #) is missing. Ask for the link again and copy all of it.');
+            } else if (share.e2e) {
+                try { const k = sessionStorage.getItem(keyStore); if (NS().join.isKey(k)) liveKey = k; } catch (e) { /* ignore */ }
+            }
+            const needKey = share.e2e && !liveKey;
+            if (needKey || !(await NS().join.checkMember(share))) {
                 if (share.hasPassword) { gate('gate-password'); return; }
                 try { await NS().join.enter(share, ''); }
                 catch (e) { console.error(e); return showError("Couldn't open this note", 'The link may have just changed. Reload to try again.'); }
@@ -1526,7 +1536,14 @@
             btn.textContent = 'Checking…';
             fieldError('gate-pw-error', '');
             try {
-                await NS().join.enter(share, input.value);
+                const pw = input.value;
+                await NS().join.enter(share, pw);
+                if (share.e2e) {
+                    // The password also unlocks the note's encryption key
+                    try { liveKey = await NS().join.unwrapKey(share, pw); }
+                    catch (err) { share = (await NS().join.loadShare(shareId)) || share; liveKey = await NS().join.unwrapKey(share, pw); }
+                    try { sessionStorage.setItem(keyStore, liveKey); } catch (err) { /* ignore */ }
+                }
                 input.value = '';
                 await afterPassword();
             } catch (err) {
@@ -1575,7 +1592,9 @@
             b.classList.remove('hidden');
             b.className = 'hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold flex-shrink-0 ' +
                 (canEdit ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-400/30' : 'bg-sky-500/15 text-sky-300 border border-sky-400/30');
-            b.innerHTML = canEdit ? '<span data-lucide="pencil" class="w-3 h-3"></span>Can edit' : '<span data-lucide="eye" class="w-3 h-3"></span>View only';
+            b.innerHTML = (canEdit ? '<span data-lucide="pencil" class="w-3 h-3"></span>Can edit' : '<span data-lucide="eye" class="w-3 h-3"></span>View only') +
+                (share.e2e ? '<span data-lucide="lock" class="w-3 h-3 ml-1 opacity-80"></span>' : '');
+            b.title = share.e2e ? 'End-to-end encrypted: only people with the link (and password) can read it' : '';
             $('note-toolbar').classList.toggle('hidden', !canEdit);
             $('note-title').readOnly = !canEdit;
             $('note-keys-btn').classList.toggle('sm:flex', canEdit);
@@ -1597,6 +1616,7 @@
             });
             session = new (NS().LiveSession)(share.liveId, {
                 seed: NS().model.Model(),
+                key: liveKey,
                 who: presence ? presence.name : '',
                 readOnly: !canEdit,
                 getLocal: () => ed.getModel(),
@@ -1611,6 +1631,10 @@
                     Cursors.schedule();
                 },
                 onGone: () => lockOut("This note isn't shared anymore", 'The owner stopped sharing it.'),
+                onDecryptError: () => {
+                    try { sessionStorage.removeItem(keyStore); } catch (e) { /* ignore */ }
+                    lockOut("This note couldn't be unlocked", share.hasPassword ? 'The password may have just changed. Reload the page to enter it again.' : 'The link is wrong or out of date. Ask for a new link.');
+                },
                 onDenied: () => lockOut('Your access was removed', 'The link was turned off or its password changed. Reload the page to try again.')
             }).start();
             unsubPresence = NS().watchPresence(share.liveId, (list) => {

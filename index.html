@@ -1085,7 +1085,7 @@
                 await setDoc(doc(db, getCollectionPath('notes'), id), {
                     ...extra,
                     enc: { v: 1, iv: enc.iv, data: Bytes.fromUint8Array(enc.bytes) },
-                    title: deleteField(), content: deleteField(), images: deleteField(), imageSizes: deleteField(), styles: deleteField()
+                    title: deleteField(), content: deleteField(), images: deleteField(), imageSizes: deleteField(), styles: deleteField(), shareKey: deleteField()
                 }, { merge: true });
                 return true;
             } catch (e) { console.error(e); return false; }
@@ -1581,7 +1581,7 @@
         // turns it into a wrapping key that encrypts the data key, and only the salt + wrapped key
         // live on the folder doc. Notes inside are stored as { enc: { iv, data } } with their
         // title / content / images / styles removed.
-        const NOTE_SECRET_FIELDS = ['title', 'content', 'images', 'imageSizes', 'styles'];
+        const NOTE_SECRET_FIELDS = ['title', 'content', 'images', 'imageSizes', 'styles', 'shareKey'];
         const NOTE_LOCK_ITER = 600000;
         const NOTE_LOCK_IDLE_MS = 10 * 60 * 1000;   // re-lock after 10 minutes with no clicks/keys
         const unlockedFolders = new Map();          // folderId -> { key, raw }  (memory only, gone on reload)
@@ -1634,7 +1634,7 @@
         const folderIsLocked = (fid) => !!fid && (!!folderById(fid)?.lock || unlockedFolders.has(fid));
         const folderIsSealed = (fid) => folderIsLocked(fid) && !unlockedFolders.has(fid);
         const noteIsHidden = (n) => (n.enc && !n.decrypted) || (!!n.folderId && folderIsSealed(n.folderId));
-        const pickSecret = (o) => ({ title: o.title || 'New Note', content: o.content || '', images: o.images || [], imageSizes: o.imageSizes || [], styles: o.styles || '' });
+        const pickSecret = (o) => ({ title: o.title || 'New Note', content: o.content || '', images: o.images || [], imageSizes: o.imageSizes || [], styles: o.styles || '', ...(o.shareKey ? { shareKey: o.shareKey } : {}) });
         const lockSupported = () => !!(window.db && window.db.writeNoteEncrypted && window.crypto && window.crypto.subtle);
         const queueNoteWrite = (id, fn) => {
             const next = (noteWriteChains.get(id) || Promise.resolve()).catch(() => {}).then(fn);
@@ -5766,7 +5766,8 @@
                 <h3 class="text-xl font-bold text-white flex items-center"><span data-lucide="share-2" class="w-5 h-5 mr-2 text-blue-400"></span>Share note</h3>
                 <button type="button" data-act="close" class="p-1.5 rounded-lg hover:bg-white/10 text-white/60 hover:text-white transition-colors" title="Close"><span data-lucide="x" class="w-4 h-4"></span></button>
             </div>
-            <p class="text-xs text-white/50 mb-5">"<span id="note-share-note-title" class="text-white/80"></span>" — each kind of access gets its own link. Anything changed through a link shows up in your notes too.</p>
+            <p class="text-xs text-white/50 mb-4">"<span id="note-share-note-title" class="text-white/80"></span>" — each kind of access gets its own link. Anything changed through a link shows up in your notes too.</p>
+            <div id="note-share-enc" class="hidden"></div>
             <div class="space-y-3">
                 <div data-mode="view" class="rounded-xl border border-sky-400/25 bg-sky-500/5 p-4">
                     <div class="flex items-center gap-2 text-sm font-semibold text-sky-300"><span data-lucide="eye" class="w-4 h-4"></span>View only</div>
@@ -5864,7 +5865,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 24/11/2026 - 15:11</div>
+    <div id="version-timestamp">Last Update 25/11/2026 - 15:08</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
@@ -9949,6 +9950,7 @@
         const MAP = {
             saved: ['Live', 'ok'], dirty: ['Syncing…', 'busy'], saving: ['Syncing…', 'busy'],
             error: ['Reconnecting…', 'bad'], denied: ['No access', 'bad'], gone: ['Not shared', 'bad'],
+            undecryptable: ["Can't decrypt the shared copy", 'bad'],
             locked: ['Read-only here: unlock sharing to edit', 'bad']
         };
         const [text, state] = MAP[st] || ['Live', 'ok'];
@@ -9977,8 +9979,15 @@
     function clearShareField(noteId, liveId) {
         const n = findNote(noteId);
         if (!n || sharedLive(n) !== liveId) return;
+        const hadKey = !!n.shareKey;
         delete n.share;
-        window.db.patchNote(noteId, { share: NS.deleteField() });
+        delete n.shareKey;
+        if (hadKey && n.folderId && folderIsLocked(n.folderId) && !folderIsSealed(n.folderId)) {
+            // re-encrypt the note without the key
+            origPersist(noteId, { share: NS.deleteField() }).then(() => { delete n.share; });
+        } else {
+            window.db.patchNote(noteId, hadKey && !folderIsLocked(n.folderId) ? { share: NS.deleteField(), shareKey: NS.deleteField() } : { share: NS.deleteField() });
+        }
         if (sessionNoteId === noteId) detach();
         window.renderNotesSidebar();
     }
@@ -9997,6 +10006,7 @@
         sessionNoteId = noteId;
         session = new NS.LiveSession(liveId, {
             seed: last,
+            key: note.shareKey || null,
             who: 'Owner',
             getLocal: () => { if (isOpen()) last = ed.getModel(); return last; },
             applyRemote: (m, map) => (isOpen() ? ed.setModel(m, map) : true),
@@ -10008,6 +10018,7 @@
             },
             onStatus: (st) => { if (isOpen()) setLiveBadge(st); },
             onGone: () => clearShareField(noteId, liveId),
+            onDecryptError: () => { if (isOpen()) setLiveBadge('undecryptable'); },
             onDenied: () => {
                 if (sessionNoteId === noteId) detach();
                 ownerReady = false;
@@ -10053,16 +10064,20 @@
     async function mirrorInto(noteId, liveId, d, force) {
         const note = findNote(noteId);
         if (!note || sharedLive(note) !== liveId) return;
+        if (noteIsHidden(note)) return;                                // locked folder closed: catches up once unlocked
         if (!force && session && sessionNoteId === noteId) return;     // the open editor keeps it in sync
         if (!force && (note.share.rev || 0) >= d.rev) return;
         try {
-            const images = await NS.admin.fetchImages(liveId, d.imgs || []);
+            const plain = await NS.admin.readLive(liveId, d, note.shareKey);
+            const images = await NS.admin.fetchImages(liveId, plain.imgs || [], note.shareKey);
             if (images.some(x => !x)) return;                          // try again on the next change
             if (!force && session && sessionNoteId === noteId) return;
-            await window.db.patchNote(noteId, {
-                title: d.title || note.title || 'Note',
-                content: d.text || '', styles: d.styles || '',
-                images, imageSizes: d.imgW || [],
+            if (noteIsHidden(note)) return;
+            // origPersist encrypts it again when the note is in a locked folder
+            await origPersist(noteId, {
+                title: plain.title || note.title || 'Note',
+                content: plain.text || '', styles: plain.styles || '',
+                images, imageSizes: plain.imgW || [],
                 updatedAt: d.updatedAt || new Date().toISOString(),
                 share: { liveId, rev: d.rev }
             });
@@ -10075,10 +10090,6 @@
     window.openShareModal = async () => {
         const note = currentNoteId ? findNote(currentNoteId) : null;
         if (!note) return;
-        if (note.folderId && folderIsLocked(note.folderId)) {
-            alert("Notes in locked folders are encrypted, so they can't be shared.\nMove it out of the locked folder first.");
-            return;
-        }
         if (!(await ensureOwner(true))) return;
         shareNoteId = note.id;
         $('note-share-note-title').textContent = note.title || 'Note';
@@ -10108,11 +10119,24 @@
         renderCard('view');
         renderCard('edit');
         $('note-share-stop').classList.toggle('hidden', !liveId);
+        const locked = !!(note.folderId && folderIsLocked(note.folderId));
+        const enc = $('note-share-enc');
+        if (note.shareKey || (locked && !liveId)) {
+            enc.className = 'flex items-start gap-2 mb-4 p-3 rounded-xl text-[11px] leading-relaxed bg-amber-500/10 border border-amber-400/25 text-amber-100/80';
+            enc.innerHTML = '<span data-lucide="lock" class="w-3.5 h-3.5 mt-0.5 text-amber-300 flex-shrink-0"></span><span><b class="text-amber-200">Encrypted.</b> The shared copy is scrambled before it leaves this device, like the rest of this folder. A link with a password keeps the key behind that password. A link <i>without</i> one carries the key itself, so anyone who has the whole link can read the note.</span>';
+        } else if (locked && liveId) {
+            enc.className = 'flex items-start gap-2 mb-4 p-3 rounded-xl text-[11px] leading-relaxed bg-red-500/10 border border-red-400/25 text-red-100/80';
+            enc.innerHTML = '<span data-lucide="lock-open" class="w-3.5 h-3.5 mt-0.5 text-red-300 flex-shrink-0"></span><span>This note was shared before it went into a locked folder, so its shared copy <b>isn\'t encrypted</b>. Stop sharing and share it again to encrypt it.</span>';
+        } else {
+            enc.className = 'hidden';
+            enc.innerHTML = '';
+        }
         icons();
     }
     function renderCard(mode) {
         const box = $('note-share-' + mode);
         const s = shareState[mode];
+        const note = findNote(shareNoteId);
         const input = 'p-2.5 rounded-xl bg-gray-700 text-white text-sm placeholder-gray-400 border border-gray-600 focus:border-amber-400 outline-none transition-colors';
         if (!s) {
             box.innerHTML = `
@@ -10128,7 +10152,7 @@
         }
         box.innerHTML = `
             <div class="flex gap-2 mt-3">
-                <input type="text" readonly value="${esc(NS.admin.linkFor(s.id))}" data-role="link" class="flex-1 min-w-0 p-2.5 rounded-xl bg-gray-900/70 text-white/80 text-xs border border-gray-600 outline-none font-mono">
+                <input type="text" readonly value="${esc(linkOf(s, note))}" data-role="link" class="flex-1 min-w-0 p-2.5 rounded-xl bg-gray-900/70 text-white/80 text-xs border border-gray-600 outline-none font-mono">
                 <button type="button" data-act="copy" class="px-3 rounded-xl bg-gray-600 hover:bg-gray-500 text-white text-xs font-semibold transition-colors flex items-center gap-1.5"><span data-lucide="copy" class="w-3.5 h-3.5"></span><span data-role="copy-text">Copy</span></button>
             </div>
             <div class="flex items-center justify-between mt-3 text-xs">
@@ -10145,6 +10169,7 @@
             <p data-role="error" class="hidden text-xs text-red-400 mt-2"></p>
             <button type="button" data-act="off" class="mt-3 text-xs text-red-300 hover:text-red-200 flex items-center gap-1.5"><span data-lucide="link-2-off" class="w-3.5 h-3.5"></span>Turn off this link</button>`;
     }
+    const linkOf = (s, note) => NS.admin.linkFor(s.id, s.e2e && !s.hasPassword ? (note && note.shareKey) : null);
     const cardErr = (card, msg) => { const el = card.querySelector('[data-role="error"]'); if (el) { el.textContent = msg; el.classList.toggle('hidden', !msg); } };
 
     async function createLink(mode, password) {
@@ -10155,11 +10180,23 @@
             let model;
             if (currentNoteId === note.id) { await window.saveCurrentNote({ silent: true }); model = window.noteEditor.getModel(); }
             else model = NS.model.fromIndex(note);
-            liveId = await NS.admin.createLive(note.title || 'Note', model);
-            note.share = { liveId, rev: 1 };
-            await window.db.patchNote(note.id, { share: { liveId, rev: 1 } });
+            // Notes in a locked folder get an encrypted shared copy with its own key
+            const encrypted = !!(note.folderId && folderIsLocked(note.folderId));
+            const res = await NS.admin.createLive(note.title || 'Note', model, { encrypted });
+            liveId = res.liveId;
+            if (res.key) {
+                note.shareKey = res.key;   // saved inside the note's own encryption
+                if (await origPersist(note.id, { share: { liveId, rev: 1 } }) === false) {
+                    await NS.admin.destroyLive(liveId);
+                    delete note.shareKey;
+                    throw new Error("Couldn't save the note's sharing key (is the folder still unlocked?)");
+                }
+            } else {
+                note.share = { liveId, rev: 1 };
+                await window.db.patchNote(note.id, { share: { liveId, rev: 1 } });
+            }
         }
-        await NS.admin.createShare(liveId, mode, password || null);
+        await NS.admin.createShare(liveId, mode, password || null, note.shareKey || null);
         attachIfShared();
         syncMirrors();
         window.renderNotesSidebar();
@@ -10226,7 +10263,7 @@
             }
             if (!s) return;
             if (act === 'copy') {
-                const ok = await copyText(NS.admin.linkFor(s.id), card.querySelector('[data-role="link"]'));
+                const ok = await copyText(linkOf(s, findNote(noteId)), card.querySelector('[data-role="link"]'));
                 const t = card.querySelector('[data-role="copy-text"]');
                 t.textContent = ok ? 'Copied!' : 'Select & copy';
                 setTimeout(() => { t.textContent = 'Copy'; }, 1500);
@@ -10242,12 +10279,12 @@
                 const pw = card.querySelector('[data-role="pw-row"] input').value;
                 if (pw.length < 4) return cardErr(card, 'Use at least 4 characters.');
                 btn.disabled = true;
-                await NS.admin.setSharePassword(s.id, pw);
+                await NS.admin.setSharePassword(s.id, pw, s.e2e ? (findNote(noteId) || {}).shareKey : null);
                 return refreshShareModal();
             }
             if (act === 'pw-remove') {
-                if (!confirm('Remove the password from this link?\nAnyone with the link will be able to open it.')) return;
-                await NS.admin.setSharePassword(s.id, null);
+                if (!confirm('Remove the password from this link?\nAnyone with the link will be able to open it.' + (s.e2e ? '\nThe link changes (it will carry the key), so copy it again.' : ''))) return;
+                await NS.admin.setSharePassword(s.id, null, null);
                 return refreshShareModal();
             }
             if (act === 'off') {
@@ -10299,7 +10336,7 @@
         const liveId = sharedLive(n);
         if (liveId && ownerReady && fields && typeof fields.title === 'string') {
             if (session && sessionNoteId === id) session.setTitle(fields.title);
-            else NS.admin.setLiveTitle(liveId, fields.title).catch(e => console.warn('[share] title', e));
+            else NS.admin.setLiveTitle(liveId, fields.title, n.shareKey).catch(e => console.warn('[share] title', e));
         }
         return r;
     };
@@ -10316,8 +10353,8 @@
     };
     window.moveNoteToFolder = async (id, folderId) => {
         const n = findNote(id);
-        if (sharedLive(n) && folderId && folderIsLocked(folderId)) {
-            if (!confirm(`"${n.title}" is shared. Locked folders are encrypted, so moving it there turns its links off.\nContinue?`)) return;
+        if (sharedLive(n) && !n.shareKey && folderId && folderIsLocked(folderId)) {
+            if (!confirm(`"${n.title}" is shared, and its shared copy isn't encrypted. Moving it into a locked folder turns its links off.\nYou can share it again afterwards and it will be encrypted.\nContinue?`)) return;
             if (!(await stopSharing(id))) return;
         }
         return origMove(id, folderId);

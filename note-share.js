@@ -57,6 +57,50 @@
         const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: te.encode(OWNER_SALT), iterations: OWNER_ITER }, base, 256);
         return hex(bits);
     };
+
+    // ---------- end-to-end encryption (notes shared from a locked folder) ----------
+    // The shared copy gets its own random AES key. Firestore only ever sees ciphertext.
+    // Links carry the key after "#" (never sent to a server) or wrapped with the link password.
+    const td = new TextDecoder();
+    const b64 = (u8) => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
+    const unb64 = (s) => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+    const b64url = (u8) => b64(u8).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    const unb64url = (s) => { s = String(s || '').replace(/-/g, '+').replace(/_/g, '/'); return unb64(s + '='.repeat((4 - s.length % 4) % 4)); };
+    const WRAP_ITER = 310000;
+    const WRAP_AAD = te.encode('note-share-key');
+    const E2E = {
+        newKey: () => b64url(crypto.getRandomValues(new Uint8Array(32))),
+        isKey: (k) => typeof k === 'string' && /^[A-Za-z0-9_-]{43}$/.test(k),
+        async cipher(keyStr) {
+            const key = await crypto.subtle.importKey('raw', unb64url(keyStr), 'AES-GCM', false, ['encrypt', 'decrypt']);
+            return {
+                async enc(obj, aad) {
+                    const iv = crypto.getRandomValues(new Uint8Array(12));
+                    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: te.encode(aad) }, key, te.encode(JSON.stringify(obj)));
+                    return { iv: b64(iv), data: b64(new Uint8Array(ct)) };
+                },
+                async dec(e, aad) {
+                    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(e.iv), additionalData: te.encode(aad) }, key, unb64(e.data));
+                    return JSON.parse(td.decode(pt));
+                }
+            };
+        },
+        async kek(password, salt, iterations) {
+            const base = await crypto.subtle.importKey('raw', te.encode(password), 'PBKDF2', false, ['deriveKey']);
+            return crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+        },
+        async wrap(keyStr, password) {
+            const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+            const kek = await E2E.kek(password, salt, WRAP_ITER);
+            const wrapped = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: WRAP_AAD }, kek, unb64url(keyStr)));
+            return { iter: WRAP_ITER, salt: b64(salt), iv: b64(iv), wrapped: b64(wrapped) };
+        },
+        // Throws when the password is wrong
+        async unwrap(w, password) {
+            const kek = await E2E.kek(password, unb64(w.salt), w.iter || WRAP_ITER);
+            return b64url(new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(w.iv), additionalData: WRAP_AAD }, kek, unb64(w.wrapped))));
+        }
+    };
     const cyrb53 = (str, seed = 0) => {
         let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;
         for (let i = 0; i < str.length; i++) {
@@ -318,22 +362,50 @@
         };
     };
 
+    // ---------- codec: how a live note is stored (plain, or encrypted with the note's own key) ----------
+    const plainCodec = {
+        e2e: false,
+        decode: async (d) => ({ m: fromStored(d), title: d.title || '' }),
+        encode: async (m, title) => ({ ...toStored(m), title: String(title || '') }),
+        decImg: async (id, d) => d.src,
+        encImg: async (id, src) => ({ src })
+    };
+    const codecCache = new Map();
+    const makeCodec = (liveId, key) => {
+        if (!key) return Promise.resolve(plainCodec);
+        const ck = liveId + '|' + key;
+        if (!codecCache.has(ck)) {
+            codecCache.set(ck, E2E.cipher(key).then(c => ({
+                e2e: true,
+                async decode(d) {
+                    if (!d.enc) return plainCodec.decode(d);
+                    const p = await c.dec(d.enc, liveId);
+                    return { m: fromStored(p), title: p.title || '' };
+                },
+                encode: async (m, title) => ({ enc: await c.enc({ ...toStored(m), title: String(title || '') }, liveId) }),
+                decImg: async (id, d) => (d.enc ? (await c.dec(d.enc, liveId + '/' + id)).src : d.src),
+                encImg: async (id, src) => ({ enc: await c.enc({ src }, liveId + '/' + id) })
+            })));
+        }
+        return codecCache.get(ck);
+    };
+
     // ---------- images in Firestore ----------
-    const ensureImages = async (liveId, ids) => {
+    const ensureImages = async (liveId, ids, codec = plainCodec) => {
         const missing = [...new Set(ids)].filter(id => id && !Img.has(id));
         await Promise.all(missing.map(async (id) => {
             try {
                 const snap = await F.getDoc(D('shared_notes', liveId, 'images', id));
-                if (snap.exists()) Img.add(id, snap.data().src);
+                if (snap.exists()) Img.add(id, await codec.decImg(id, snap.data()));
             } catch (e) { console.warn('[note-share] image', id, e); }
         }));
     };
-    const uploadImages = async (liveId, model, known) => {
+    const uploadImages = async (liveId, model, known, codec = plainCodec) => {
         for (const id of new Set(idsOf(model))) {
             if (known.has(id)) continue;
             const src = Img.src(id);
             if (!src) continue;
-            try { await F.setDoc(D('shared_notes', liveId, 'images', id), { src }); }
+            try { await F.setDoc(D('shared_notes', liveId, 'images', id), await codec.encImg(id, src)); }
             catch (e) { if (!isDenied(e)) throw e; }   // denied = it already exists (images are never overwritten)
             known.add(id);
         }
@@ -360,21 +432,33 @@
             this.known = new Set();
             this.unsubs = [];
             this.state = '';
+            this.codec = null;
         }
+        // o.key = the note's own key when the shared copy is encrypted (locked folders)
         start() {
-            this.unsubs.push(F.onSnapshot(this.ref, (snap) => this.onSnap(snap), (err) => this.onListenError(err)));
-            this.unsubs.push(F.onSnapshot(C('shared_notes', this.liveId, 'images'), (qs) => {
-                let added = false;
-                qs.docChanges().forEach((ch) => {
-                    if (ch.type === 'removed') return;
-                    const d = ch.doc.data();
-                    if (d && d.src && !Img.has(ch.doc.id)) added = true;
-                    if (d && d.src) Img.add(ch.doc.id, d.src);
-                    this.known.add(ch.doc.id);
-                });
-                if (added && this.o.onImages) this.o.onImages();
-            }, () => { /* the main listener reports access problems */ }));
+            makeCodec(this.liveId, this.o.key).then((codec) => {
+                if (this.stopped) return;
+                this.codec = codec;
+                this.unsubs.push(F.onSnapshot(this.ref, (snap) => this.onSnap(snap), (err) => this.onListenError(err)));
+                this.unsubs.push(F.onSnapshot(C('shared_notes', this.liveId, 'images'), async (qs) => {
+                    let added = false;
+                    for (const ch of qs.docChanges()) {
+                        if (ch.type === 'removed') continue;
+                        const id = ch.doc.id;
+                        this.known.add(id);
+                        if (Img.has(id)) continue;
+                        try { const src = await codec.decImg(id, ch.doc.data()); if (src) { Img.add(id, src); added = true; } }
+                        catch (e) { console.warn('[note-share] image', id, e); }
+                    }
+                    if (added && this.o.onImages) this.o.onImages();
+                }, () => { /* the main listener reports access problems */ }));
+            }).catch((e) => this.decryptFailed(e));
             return this;
+        }
+        decryptFailed(e) {
+            console.warn('[note-share] could not decrypt', e);
+            this.status('undecryptable');
+            if (this.o.onDecryptError) this.o.onDecryptError(e);
         }
         stop() {
             this.stopped = true;
@@ -406,11 +490,6 @@
             if (this.stopped) return;
             if (!snap.exists()) { this.status('gone'); if (this.o.onGone) this.o.onGone(); return; }
             const d = snap.data();
-            const title = d.title || '';
-            if (title !== this.title) {
-                this.title = title;
-                if (this.pendingTitle === null && this.o.onTitle) this.o.onTitle(title);
-            }
             if (this.base && d.rev <= this.base.rev) return;
             this.latest = d;
             this.enqueue(() => this.pull());
@@ -418,12 +497,19 @@
         async pull() {
             const d = this.latest;
             if (!d || (this.base && d.rev <= this.base.rev)) return;
-            await ensureImages(this.liveId, d.imgs || []);
+            let dec;
+            try { dec = await this.codec.decode(d); }
+            catch (e) { this.latest = null; this.decryptFailed(e); return; }
+            await ensureImages(this.liveId, idsOf(dec.m), this.codec);
             if (this.latest !== d) return;          // a newer version arrived meanwhile; its own pull handles it
             this.latest = null;
             if (this.base && d.rev <= this.base.rev) return;
+            if (dec.title !== this.title) {
+                this.title = dec.title;
+                if (this.pendingTitle === null && this.o.onTitle) this.o.onTitle(dec.title);
+            }
             const first = !this.base;
-            this.base = { m: fromStored(d), rev: d.rev };
+            this.base = { m: dec.m, rev: d.rev };
             this.reconcile();
             if (first) { this.status(eq(this.shadow, this.base.m) ? 'saved' : this.state || 'saved'); if (this.o.onReady) this.o.onReady(d); }
             if (this.o.onRemote) this.o.onRemote(d);
@@ -449,7 +535,7 @@
         }
         async commit() {
             if (this.stopped) return;
-            if (!this.base) { this.schedule(500); return; }
+            if (!this.base || !this.codec) { this.schedule(500); return; }
             if (this.o.busy && this.o.busy()) { this.schedule(300); return; }
             if (!this.reconcile()) return;
             const mine = this.o.getLocal();
@@ -459,14 +545,20 @@
             this.status('saving');
             const base = this.base;
             try {
-                await uploadImages(this.liveId, mine, this.known);
+                const codec = this.codec;
+                await uploadImages(this.liveId, mine, this.known, codec);
+                const knownTitle = this.title;
                 const res = await F.runTransaction(F.db, async (tx) => {
                     const snap = await tx.get(this.ref);
                     if (!snap.exists()) throw Object.assign(new Error('gone'), { code: 'not-found' });
                     const d = snap.data();
-                    const result = d.rev === base.rev ? mine : merge(base.m, mine, fromStored(d));
-                    const upd = { ...toStored(result), rev: d.rev + 1, updatedAt: nowIso(), updatedBy: String(this.o.who || '') };
-                    if (title !== null) upd.title = title;
+                    let result = mine, serverTitle = knownTitle;
+                    if (d.rev !== base.rev) {
+                        const dec = await codec.decode(d);
+                        result = merge(base.m, mine, dec.m);
+                        serverTitle = dec.title;
+                    }
+                    const upd = { ...(await codec.encode(result, title !== null ? title : (serverTitle || ''))), rev: d.rev + 1, updatedAt: nowIso(), updatedBy: String(this.o.who || '') };
                     tx.update(this.ref, upd);
                     return { result, rev: d.rev + 1 };
                 });
@@ -474,7 +566,7 @@
                 this.fails = 0;
                 if (!this.base || res.rev > this.base.rev) this.base = { m: res.result, rev: res.rev };
                 this.shadow = mine;
-                await ensureImages(this.liveId, idsOf(this.base.m));
+                await ensureImages(this.liveId, idsOf(this.base.m), codec);
                 this.reconcile();
                 this.status(this.timer ? 'dirty' : 'saved');
             } catch (e) {
@@ -631,16 +723,26 @@
 
     // ---------- owner: links ----------
     const admin = {
-        linkFor(shareId) {
+        // key: only for an encrypted note's link without a password — it travels after "#"
+        linkFor(shareId, key) {
             let base = PUBLIC_NOTE_URL;
             try { if (/^https?:$/.test(location.protocol)) base = new URL('note.html', location.href).href; } catch (e) { /* keep the public URL */ }
-            return `${base}?id=${encodeURIComponent(shareId)}`;
+            return `${base}?id=${encodeURIComponent(shareId)}` + (key ? `#k=${key}` : '');
         },
-        async createLive(title, model) {
+        // opts.encrypted: give the shared copy its own key (for notes in locked folders) -> { liveId, key }
+        async createLive(title, model, opts = {}) {
             const liveId = randomId(20);
-            await uploadImages(liveId, model, new Set());
-            await F.setDoc(D('shared_notes', liveId), { ...toStored(model), title: String(title || 'Note').slice(0, 200), rev: 1, updatedAt: nowIso(), updatedBy: 'Owner' });
-            return liveId;
+            const key = opts.encrypted ? E2E.newKey() : null;
+            const codec = await makeCodec(liveId, key);
+            await uploadImages(liveId, model, new Set(), codec);
+            await F.setDoc(D('shared_notes', liveId), { ...(await codec.encode(model, String(title || 'Note').slice(0, 200))), e2e: !!key, rev: 1, updatedAt: nowIso(), updatedBy: 'Owner' });
+            return { liveId, key };
+        },
+        // A live doc as plain fields ({ title, text, styles, imgs, imgW }), decrypting it if needed
+        async readLive(liveId, d, key) {
+            const codec = await makeCodec(liveId, d && d.enc ? key : null);
+            const dec = await codec.decode(d);
+            return { title: dec.title, ...toStored(dec.m) };
         },
         async getLive(liveId) {
             const snap = await F.getDoc(D('shared_notes', liveId));
@@ -649,38 +751,45 @@
         watchLive(liveId, cb, onErr) {
             return F.onSnapshot(D('shared_notes', liveId), (snap) => cb(snap.exists() ? snap.data() : null), (e) => { if (onErr) onErr(e); });
         },
-        async fetchImages(liveId, ids) {
-            await ensureImages(liveId, ids);
+        async fetchImages(liveId, ids, key) {
+            await ensureImages(liveId, ids, await makeCodec(liveId, key));
             return ids.map(id => Img.src(id) || null);
         },
-        async setLiveTitle(liveId, title) {
+        async setLiveTitle(liveId, title, key) {
             const ref = D('shared_notes', liveId);
+            title = String(title || '').slice(0, 200);
             await F.runTransaction(F.db, async (tx) => {
                 const snap = await tx.get(ref);
                 if (!snap.exists()) return;
                 const d = snap.data();
-                if ((d.title || '') === title) return;
-                tx.update(ref, { title: String(title || '').slice(0, 200), rev: d.rev + 1, updatedAt: nowIso(), updatedBy: 'Owner' });
+                const codec = await makeCodec(liveId, d.enc ? key : null);
+                const dec = await codec.decode(d);
+                if (dec.title === title) return;
+                tx.update(ref, { ...(await codec.encode(dec.m, title)), rev: d.rev + 1, updatedAt: nowIso(), updatedBy: 'Owner' });
             });
         },
         async listShares(liveId) {
             const qs = await F.getDocs(F.query(C('note_shares'), F.where('liveId', '==', liveId)));
             return qs.docs.map(d => ({ id: d.id, ...d.data() }));
         },
-        async createShare(liveId, mode, password) {
+        // key: the note's own key when the shared copy is encrypted. With a password the key is
+        // stored wrapped by that password; without one it only lives in the link (after "#").
+        async createShare(liveId, mode, password, key) {
             if (mode !== 'view' && mode !== 'edit') throw new Error('bad mode');
             const id = randomId(22);
+            const doc = { liveId, mode, hasPassword: !!password, e2e: !!key, createdAt: nowIso() };
+            if (key && password) doc.wrap = await E2E.wrap(key, password);
             const batch = F.writeBatch(F.db);
-            batch.set(D('note_shares', id), { liveId, mode, hasPassword: !!password, createdAt: nowIso() });
+            batch.set(D('note_shares', id), doc);
             if (password) batch.set(D('note_shares', id, 'secret', 'pw'), { hash: await sharePwHash(id, password) });
             await batch.commit();
             return id;
         },
-        async setSharePassword(shareId, password) {
+        async setSharePassword(shareId, password, key) {
             const batch = F.writeBatch(F.db);
             if (password) batch.set(D('note_shares', shareId, 'secret', 'pw'), { hash: await sharePwHash(shareId, password) });
             else batch.delete(D('note_shares', shareId, 'secret', 'pw'));
-            batch.update(D('note_shares', shareId), { hasPassword: !!password });
+            batch.update(D('note_shares', shareId), { hasPassword: !!password, wrap: key && password ? await E2E.wrap(key, password) : F.deleteField() });
             await batch.commit();
         },
         async deleteShare(shareId) {
@@ -723,6 +832,12 @@
                 return true;
             } catch (e) { return false; }
         },
+        // Encrypted notes: gets the note's key out of a password-protected link (throws if wrong)
+        async unwrapKey(share, password) {
+            if (!share.wrap) throw Object.assign(new Error('no key'), { code: 'no-key' });
+            return E2E.unwrap(share.wrap, String(password || ''));
+        },
+        isKey: E2E.isKey,
         // The rules check the password; a wrong one is refused by Firestore itself
         async enter(share, password) {
             const proof = share.hasPassword ? await sharePwHash(share.id, String(password || '')) : '';
