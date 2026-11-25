@@ -768,6 +768,20 @@
                 tx.update(ref, { ...(await codec.encode(dec.m, title)), rev: d.rev + 1, updatedAt: nowIso(), updatedBy: 'Owner' });
             });
         },
+        // Shared copies with no links that no note points at (e.g. left by a failed share) -> deleted
+        async cleanupOrphans(referenced, minAgeMs = 10 * 60 * 1000) {
+            const qs = await F.getDocs(C('shared_notes'));
+            let removed = 0;
+            for (const d of qs.docs) {
+                if (referenced.has(d.id)) continue;
+                const t = Date.parse(d.data().updatedAt || '') || 0;
+                if (Date.now() - t < minAgeMs) continue;
+                if ((await admin.listShares(d.id)).length) continue;
+                await admin.destroyLive(d.id);
+                removed++;
+            }
+            return removed;
+        },
         async listShares(liveId) {
             const qs = await F.getDocs(F.query(C('note_shares'), F.where('liveId', '==', liveId)));
             return qs.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -851,6 +865,7 @@
     };
 
     window.NoteShare = {
+        VERSION: 3,
         init(bridge) { F = bridge; },
         ready: () => !!(F && uid()),
         uid,

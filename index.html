@@ -24,7 +24,7 @@
             console.warn("Lucide failed to load - icons disabled, dashboard still works.");
         }
     </script>
-    <script src="note-share.js"></script>
+    <script src="note-share.js?v=3"></script>
     <style>
         /* Hide scrollbar for Chrome, Safari and Opera */
         .no-scrollbar::-webkit-scrollbar {
@@ -5865,7 +5865,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 25/11/2026 - 15:08</div>
+    <div id="version-timestamp">Last Update 25/11/2026 - 15:17</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
@@ -9844,8 +9844,15 @@
 // ===================== Note sharing — owner side (engine in note-share.js, page in note.html) =====================
 (function () {
     const NS = window.NoteShare;
-    if (!NS) { console.warn('note-share.js not loaded — note sharing is off'); return; }
     const $ = (id) => document.getElementById(id);
+    if (!NS || NS.VERSION !== 3) {
+        // index.html and note-share.js must come from the same update
+        const msg = !NS ? 'note-share.js did not load, so sharing is off.'
+            : 'note-share.js is an older version than this page (probably cached).\n\nHard-refresh with Ctrl+F5. If you opened the dashboard from a local copy, pull the repo first.';
+        console.error('[share] ' + msg);
+        $('note-share-btn')?.addEventListener('click', () => alert(msg));
+        return;
+    }
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     const icons = () => { if (window.lucide) window.lucide.createIcons(); };
     const sharedLive = (n) => (n && n.share && n.share.liveId) || null;
@@ -10183,6 +10190,7 @@
             // Notes in a locked folder get an encrypted shared copy with its own key
             const encrypted = !!(note.folderId && folderIsLocked(note.folderId));
             const res = await NS.admin.createLive(note.title || 'Note', model, { encrypted });
+            if (!res || !res.liveId) throw new Error('note-share.js is out of date: hard-refresh with Ctrl+F5');
             liveId = res.liveId;
             if (res.key) {
                 note.shareKey = res.key;   // saved inside the note's own encryption
@@ -10359,8 +10367,21 @@
         }
         return origMove(id, folderId);
     };
+    // Once per load: remove shared copies nothing points at any more (no links, no note, 10+ min old)
+    let cleanedUp = false;
+    function cleanupOrphansOnce() {
+        if (cleanedUp || !ownerReady || !Array.isArray(window.userNotes)) return;
+        cleanedUp = true;
+        setTimeout(() => {
+            const referenced = new Set((window.userNotes || []).map(n => n.share && n.share.liveId).filter(Boolean));
+            NS.admin.cleanupOrphans(referenced)
+                .then(n => { if (n) console.info(`[share] removed ${n} unused shared cop${n === 1 ? 'y' : 'ies'}`); })
+                .catch(e => console.warn('[share] clean-up', e));
+        }, 8000);
+    }
     window.renderNotesSidebar = () => {
         origRender();
+        cleanupOrphansOnce();
         if (session && sessionNoteId !== currentNoteId) detach();
         if (readOnlyNoteId && readOnlyNoteId !== currentNoteId) readOnlyNoteId = null;
         updateShareButton();
