@@ -22,6 +22,7 @@
     const STALE_MS = 45000;                                 // presence older than this = gone (matches the rules)
     const COMMIT_DELAY = 500;                               // ms between pushes while typing
     const NAME_RE = /^[A-Za-z0-9](?:[A-Za-z0-9 _.-]{0,22}[A-Za-z0-9_.-])?$/;
+    const OWNER_NAME = 'bonit';                             // the owner's name everywhere (reserved in the rules)
     const COLORS = ['#f472b6', '#60a5fa', '#34d399', '#fbbf24', '#a78bfa', '#f87171', '#22d3ee', '#fb923c', '#a3e635', '#e879f9'];
 
     let F = null;   // Firestore bridge: { db, auth, doc, collection, getDoc, getDocs, setDoc, updateDoc, deleteDoc, onSnapshot, runTransaction, serverTimestamp, writeBatch, query, where, deleteField }
@@ -601,11 +602,12 @@
             this.beat = null;
             this.onLost = null;
         }
-        // 'ok' | 'taken' | 'invalid' | 'denied'
-        async claim(rawName) {
+        // 'ok' | 'taken' | 'reserved' | 'invalid'. opts.force: the owner takes "bonit" even from another of their devices
+        async claim(rawName, opts = {}) {
             const name = cleanName(rawName);
             if (!NAME_RE.test(name)) return 'invalid';
             const key = name.toLowerCase();
+            if (key === OWNER_NAME && !opts.force) return 'reserved';
             const ref = D('shared_notes', this.liveId, 'presence', key);
             const used = new Set();
             try {
@@ -619,7 +621,7 @@
                     const cur = await tx.get(ref);
                     if (cur.exists()) {
                         const p = cur.data();
-                        if (p.uid !== uid() && presenceFresh(p)) { takenBySomeone = true; throw new Error('taken'); }
+                        if (p.uid !== uid() && presenceFresh(p) && !opts.force) { takenBySomeone = true; throw new Error('taken'); }
                     }
                     tx.set(ref, { uid: uid(), name, color, a: 0, f: 0, focus: false, lastSeen: F.serverTimestamp() });
                 });
@@ -629,7 +631,7 @@
                 throw e;
             }
             if (this.ref && this.key !== key) this.leave();
-            this.ref = ref; this.name = name; this.key = key; this.color = color;
+            this.ref = ref; this.name = name; this.key = key; this.color = color; this.force = !!opts.force;
             clearInterval(this.beat);
             this.beat = setInterval(() => this.heartbeat(), 15000);
             return 'ok';
@@ -657,7 +659,7 @@
                     const name = this.name;
                     this.ref = null;
                     clearInterval(this.beat);
-                    const r = await this.claim(name).catch(() => 'denied');
+                    const r = await this.claim(name, { force: this.force }).catch(() => 'denied');
                     if (r !== 'ok' && this.onLost) this.onLost(r);
                 }
             }
@@ -865,12 +867,12 @@
     };
 
     window.NoteShare = {
-        VERSION: 3,
+        VERSION: 4,
         init(bridge) { F = bridge; },
         ready: () => !!(F && uid()),
         uid,
         deleteField: () => F.deleteField(),
-        OBJ, COLORS, NAME_RE, Img,
+        OBJ, COLORS, NAME_RE, OWNER_NAME, Img,
         model: { fromStored, toStored, fromIndex, idsOf, eq, merge, posMapper, diffRuns, Model },
         LiveSession, Presence, watchPresence, cleanName,
         owner, admin, join

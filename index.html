@@ -24,7 +24,7 @@
             console.warn("Lucide failed to load - icons disabled, dashboard still works.");
         }
     </script>
-    <script src="note-share.js?v=3"></script>
+    <script src="note-share.js?v=4"></script>
     <style>
         /* Hide scrollbar for Chrome, Safari and Opera */
         .no-scrollbar::-webkit-scrollbar {
@@ -1583,7 +1583,6 @@
         // title / content / images / styles removed.
         const NOTE_SECRET_FIELDS = ['title', 'content', 'images', 'imageSizes', 'styles', 'shareKey'];
         const NOTE_LOCK_ITER = 600000;
-        const NOTE_LOCK_IDLE_MS = 10 * 60 * 1000;   // re-lock after 10 minutes with no clicks/keys
         const unlockedFolders = new Map();          // folderId -> { key, raw }  (memory only, gone on reload)
         const noteDecCache = new Map();             // noteId -> { iv, payload }
         const noteWriteChains = new Map();          // noteId -> Promise, keeps each note's writes in order
@@ -1715,12 +1714,8 @@
         window.lockNoteFolder = lockFolderNow;
         window.lockAllNoteFolders = () => Promise.all([...unlockedFolders.keys()].map(lockFolderNow));
 
-        // Auto re-lock after a stretch of inactivity
+        // Unlocked folders stay unlocked until you lock them yourself or close the page
         let noteLockLastActivity = Date.now();
-        ['pointerdown', 'keydown', 'wheel'].forEach(ev => document.addEventListener(ev, () => { noteLockLastActivity = Date.now(); }, { passive: true, capture: true }));
-        setInterval(() => {
-            if (unlockedFolders.size && Date.now() - noteLockLastActivity > NOTE_LOCK_IDLE_MS) window.lockAllNoteFolders();
-        }, 30000);
 
         // ---- Password prompt ----
         let unlockResolver = null, unlockPromptFolderId = null;
@@ -3530,6 +3525,7 @@
                 setSaveStatus('dirty', 'Syncing…');
                 clearTimeout(saveTimer);
                 saveTimer = setTimeout(() => window.saveCurrentNote({ silent: true }), 1200);
+                if (window.onNoteEditorRemoteApplied) window.onNoteEditorRemoteApplied();
                 return true;
             };
             // Fills in images whose data arrived after the text
@@ -3538,6 +3534,58 @@
                 imgMap.forEach((img) => {
                     if (!img.getAttribute('src') && img.dataset.iid) { const src = NSI.src(img.dataset.iid); if (src) img.src = src; }
                 });
+            };
+
+            // ---------- where things are on screen (for other people's cursors) ----------
+            const rangeOf = (a, b, t) => {
+                const [n1, o1] = domAt(a, t), [n2, o2] = domAt(b, t);
+                const r = document.createRange();
+                r.setStart(n1, o1);
+                r.setEnd(n2, o2);
+                return r;
+            };
+            const caretRect = (pos, t) => {
+                if (!el) return null;
+                if (t === undefined) t = readDoc().t;
+                pos = Math.max(0, Math.min(pos | 0, t.length));
+                const pick = (a, b, last) => {
+                    try {
+                        const list = [...rangeOf(a, b, t).getClientRects()].filter(x => x.height > 0);
+                        return list.length ? list[last ? list.length - 1 : 0] : null;
+                    } catch (e) { return null; }
+                };
+                let r;
+                if (pos < t.length && t[pos] !== '\n') { r = pick(pos, pos + 1, false); if (r) return { left: r.left, top: r.top, height: r.height }; }
+                if (pos > 0 && t[pos - 1] !== '\n') { r = pick(pos - 1, pos, true); if (r) return { left: r.right, top: r.top, height: r.height }; }
+                // Empty line: line it up with the start of the text
+                const cs = getComputedStyle(el);
+                const box = el.getBoundingClientRect();
+                const left = box.left + parseFloat(cs.paddingLeft);
+                const lh = parseFloat(cs.lineHeight) || (parseFloat(cs.fontSize) || 16) * 1.6;
+                if (pos < t.length) { r = pick(pos, pos + 1, false); if (r) return { left, top: r.top, height: Math.min(r.height, lh) || lh }; }
+                if (pos > 0) { r = pick(pos - 1, pos, true); if (r) return { left, top: r.top + lh, height: lh }; }
+                return { left, top: box.top + parseFloat(cs.paddingTop) - el.scrollTop, height: lh };
+            };
+            const rangeRects = (a, b, t) => {
+                if (!el || a === b) return [];
+                if (t === undefined) t = readDoc().t;
+                const lo = Math.max(0, Math.min(a, b, t.length)), hi = Math.min(Math.max(a, b), t.length);
+                if (lo >= hi) return [];
+                try {
+                    const seen = new Set();
+                    return [...rangeOf(lo, hi, t).getClientRects()].filter(r => {
+                        if (r.width < 0.5 || r.height <= 0) return false;
+                        const key = [r.left, r.top, r.width, r.height].map(Math.round).join(',');
+                        if (seen.has(key)) return false;
+                        seen.add(key);
+                        return true;
+                    });
+                } catch (e) { return []; }
+            };
+            const getSelOffsets = () => {
+                if (!el || document.activeElement !== el) return null;
+                const s = getSel();
+                return { a: s.a, f: s.f };
             };
 
             if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
@@ -3565,6 +3613,10 @@
                 setModel,
                 refreshImages,
                 isBusy,
+                caretRect,
+                rangeRects,
+                getSelOffsets,
+                getText: () => (el ? readDoc().t : ''),
                 setReadOnly: (ro) => { if (!el) return; enabled = !ro; el.contentEditable = ro ? 'false' : 'true'; wrap?.classList.remove('is-disabled'); el.classList.toggle('is-readonly', !!ro); }
             };
         })();
@@ -5681,9 +5733,13 @@
                         <span class="w-px h-5 bg-gray-700 mx-2"></span>
                         <button type="button" data-fmt="clear" class="note-tb-btn" title="Clear formatting / original image size (Ctrl+\)"><span data-lucide="remove-formatting" class="w-4 h-4"></span></button>
                         <span id="note-live-badge" class="hidden items-center gap-1.5 ml-3 text-[11px] text-white/55 truncate" data-state="ok"><span class="note-live-dot"></span><span id="note-live-text">Live</span></span>
+                        <span id="note-live-people" class="hidden items-center gap-2 ml-3 min-w-0"><span id="note-live-avatars" class="flex -space-x-1.5 flex-shrink-0"></span><span id="note-live-names" class="text-[11px] text-white/60 truncate"></span></span>
                         <button type="button" id="note-share-btn" class="ml-auto flex items-center gap-1.5 px-3 h-8 rounded-lg bg-blue-600/80 hover:bg-blue-500 text-white text-xs font-semibold transition-colors flex-shrink-0" title="Share this note"><span data-lucide="share-2" class="w-3.5 h-3.5"></span><span id="note-share-btn-text">Share</span></button>
                     </div>
+                    <div id="note-ed-stage" class="relative flex-1 min-h-0 min-w-0 flex flex-col">
                     <div id="current-note-content" class="note-editor flex-1 min-h-0 min-w-0 overflow-y-auto custom-scroll p-10 pt-6 text-white text-base leading-relaxed outline-none" contenteditable="false" spellcheck="true" data-placeholder="Start typing... (paste images with Ctrl+V)"></div>
+                    <div id="note-cursor-layer"></div>
+                    </div>
                     <div class="note-statusbar relative flex items-center gap-4 px-4 py-1.5 border-t border-gray-700/80 bg-gray-800/70 text-[11px] text-white/50 select-none">
                         <span id="note-status-pos">Ln 1, Col 1</span>
                         <span>Spaces: 4</span>
@@ -5865,7 +5921,7 @@
         </div>
     </div>
 
-    <div id="version-timestamp">Last Update 25/11/2026 - 15:17</div>
+    <div id="version-timestamp">Last Update 27/11/2026 - 14:26</div>
     
     <style>
         .custom-scroll::-webkit-scrollbar { height: 8px; }
@@ -8855,6 +8911,16 @@
     .note-editor.is-readonly { cursor: default; opacity: .8; }
     .note-editor .note-img[src=""] { min-width: 120px; min-height: 80px; background: rgba(255,255,255,.06); }
 
+    /* People editing a shared note: names in the toolbar, cursors + highlights in the editor */
+    #note-cursor-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 5; }
+    .rc-sel { position: absolute; border-radius: 2px; }
+    .rc-caret { position: absolute; width: 2px; border-radius: 1px; background: var(--c); transition: left .08s linear, top .08s linear; }
+    .rc-caret.is-idle { opacity: .45; }
+    .rc-tag { position: absolute; left: -1px; bottom: 100%; margin-bottom: 1px; background: var(--c); color: #0b1120; font: 600 10px/1 Inter, sans-serif; padding: 3px 6px; border-radius: 4px 4px 4px 0; white-space: nowrap; opacity: 0; transform: translateY(2px); transition: opacity .2s, transform .2s; }
+    .rc-caret.below .rc-tag { bottom: auto; top: 100%; margin: 1px 0 0; border-radius: 0 4px 4px 4px; }
+    .rc-caret.is-recent .rc-tag { opacity: 1; transform: none; }
+    .live-person { width: 1.5rem; height: 1.5rem; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; font-size: .6rem; font-weight: 700; color: #0b1120; background: var(--c); border: 2px solid #111827; text-transform: uppercase; cursor: default; }
+
     /* Code-style note editor */
     #note-editor-wrap.is-disabled { opacity: 0; pointer-events: none; }
     .note-editor { position: relative; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; -moz-tab-size: 4; caret-color: #60a5fa; cursor: text; }
@@ -9845,7 +9911,7 @@
 (function () {
     const NS = window.NoteShare;
     const $ = (id) => document.getElementById(id);
-    if (!NS || NS.VERSION !== 3) {
+    if (!NS || NS.VERSION !== 4) {
         // index.html and note-share.js must come from the same update
         const msg = !NS ? 'note-share.js did not load, so sharing is off.'
             : 'note-share.js is an older version than this page (probably cached).\n\nHard-refresh with Ctrl+F5. If you opened the dashboard from a local copy, pull the repo first.';
@@ -9949,6 +10015,94 @@
         return true;
     }
 
+    // ---------- people editing the open shared note: names in the toolbar, cursors in the editor ----------
+    const safeColor = (c) => (/^#[0-9a-f]{6}$/i.test(c || '') ? c : '#94a3b8');
+    const initials = (name) => {
+        const parts = String(name || '?').trim().split(/[\s_.-]+/).filter(Boolean);
+        return ((parts[0] || '?')[0] + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+    };
+    let unwatchPresence = null;
+    let myPresence = null;        // you, as "bonit", while a shared note is open here
+    const notMe = (p) => p.key !== NS.OWNER_NAME;
+    function renderPeople(list) {
+        const box = $('note-live-people');
+        if (!box) return;
+        if (!list.length) { box.classList.add('hidden'); box.classList.remove('flex'); return; }
+        const sorted = [...list].sort((a, b) => String(a.name).localeCompare(String(b.name)));
+        $('note-live-avatars').innerHTML = sorted.slice(0, 5).map(p =>
+            `<span class="live-person" style="--c:${safeColor(p.color)}" title="${esc(p.name)} is editing">${esc(initials(p.name))}</span>`).join('');
+        const names = sorted.map(p => p.name);
+        $('note-live-names').textContent = (names.length <= 2 ? names.join(' & ') : `${names.slice(0, 2).join(', ')} +${names.length - 2}`) + ' editing';
+        $('note-live-names').title = names.join(', ');
+        box.classList.remove('hidden');
+        box.classList.add('flex');
+    }
+    const Cursors = (() => {
+        const layer = $('note-cursor-layer'), stage = $('note-ed-stage'), edEl = $('current-note-content');
+        let remote = new Map();   // key -> { name, color, a, f, focus, moved }
+        let lastT = null, raf = 0, idleTimer = 0;
+        const RECENT_MS = 3500;
+        const ed = () => window.noteEditor;
+        function setRemote(list) {
+            const now = Date.now();
+            const next = new Map();
+            for (const p of list) {
+                const old = remote.get(p.key);
+                const moved = !old || old.ra !== p.a || old.rf !== p.f ? now : old.moved;
+                next.set(p.key, { name: p.name, color: safeColor(p.color), a: p.a | 0, f: p.f | 0, ra: p.a, rf: p.f, focus: !!p.focus, moved });
+            }
+            remote = next;
+            lastT = ed().getText();   // their positions are for the text as it is now
+            schedule();
+        }
+        function schedule() { if (!raf && layer) raf = requestAnimationFrame(draw); }
+        function clear() { remote = new Map(); lastT = null; if (layer) layer.innerHTML = ''; }
+        function draw() {
+            raf = 0;
+            if (!remote.size || !session) { layer.innerHTML = ''; return; }
+            const t = ed().getText();
+            if (lastT !== null && lastT !== t) {
+                // The text changed since their last update: slide their cursors along with it
+                const map = NS.model.posMapper(lastT, t);
+                remote.forEach(r => { r.a = map(r.a); r.f = map(r.f); });
+            }
+            lastT = t;
+            const box = stage.getBoundingClientRect();
+            const now = Date.now();
+            let html = '', nextFade = Infinity;
+            remote.forEach(r => {
+                const a = Math.min(r.a, t.length), f = Math.min(r.f, t.length);
+                for (const q of ed().rangeRects(a, f, t)) {
+                    html += `<div class="rc-sel" style="left:${q.left - box.left}px;top:${q.top - box.top}px;width:${q.width}px;height:${q.height}px;background:${r.color}38"></div>`;
+                }
+                const c = ed().caretRect(f, t);
+                if (!c) return;
+                const top = c.top - box.top;
+                if (top + c.height < -4 || top > box.height + 4) return;
+                const recent = now - r.moved < RECENT_MS;
+                if (recent) nextFade = Math.min(nextFade, r.moved + RECENT_MS - now);
+                html += `<div class="rc-caret${recent ? ' is-recent' : ''}${r.focus ? '' : ' is-idle'}${top < 18 ? ' below' : ''}" style="--c:${r.color};left:${c.left - box.left - 1}px;top:${top}px;height:${c.height}px"><span class="rc-tag">${esc(r.name)}</span></div>`;
+            });
+            layer.innerHTML = html;
+            clearTimeout(idleTimer);
+            if (nextFade !== Infinity) idleTimer = setTimeout(schedule, nextFade + 30);
+        }
+        if (edEl && layer) {
+            edEl.addEventListener('scroll', schedule, { passive: true });
+            edEl.addEventListener('load', schedule, true);   // images changing size
+            window.addEventListener('resize', schedule);
+            if (window.ResizeObserver) new ResizeObserver(schedule).observe(edEl);
+        }
+        return { setRemote, schedule, clear };
+    })();
+    window.onNoteEditorRemoteApplied = () => Cursors.schedule();
+    function stopPresence() {
+        if (unwatchPresence) { unwatchPresence(); unwatchPresence = null; }
+        if (myPresence) { myPresence.leave(); myPresence = null; }
+        renderPeople([]);
+        Cursors.clear();
+    }
+
     // ---------- live session for the note open in the editor ----------
     function setLiveBadge(st) {
         const b = $('note-live-badge');
@@ -9982,6 +10136,7 @@
         sessionNoteId = null;
         s.flush().finally(() => s.stop());
         setLiveBadge(null);
+        stopPresence();
     }
     function clearShareField(noteId, liveId) {
         const n = findNote(noteId);
@@ -10034,10 +10189,35 @@
             }
         }).start();
         setLiveBadge('saved');
+        stopPresence();
+        unwatchPresence = NS.watchPresence(liveId, (list) => {
+            if (!isOpen()) return;
+            const others = list.filter(notMe);
+            renderPeople(others);
+            Cursors.setRemote(others);
+        });
+        // You show up to everyone else as "bonit", with your cursor and highlights
+        const me = new NS.Presence(liveId);
+        me.onLost = () => { if (myPresence === me) me.claim(NS.OWNER_NAME, { force: true }).catch(() => {}); };
+        myPresence = me;
+        me.claim(NS.OWNER_NAME, { force: true })
+            .then(r => { if (r === 'ok' && myPresence === me) sendMySel(); else if (r !== 'ok') console.warn('[share] presence', r); })
+            .catch(e => console.warn('[share] presence', e));
     }
+    // My caret/selection -> everyone else
+    let lastMySel = { a: 0, f: 0 };
+    function sendMySel() {
+        if (!myPresence || !session || sessionNoteId !== currentNoteId) return;
+        const s = window.noteEditor.getSelOffsets();
+        if (s) { lastMySel = s; myPresence.setSel(s.a, s.f, true); }
+    }
+    document.addEventListener('selectionchange', sendMySel);
+    $('current-note-content').addEventListener('blur', () => { if (myPresence) myPresence.setSel(lastMySel.a, lastMySel.f, false); });
+    window.addEventListener('pagehide', () => { if (myPresence) myPresence.leave(); });
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && myPresence) myPresence.heartbeat(); });
     // Called by the editor on every local change
     window.onNoteEditorChanged = () => {
-        if (session && sessionNoteId === currentNoteId) session.localChanged();
+        if (session && sessionNoteId === currentNoteId) { session.localChanged(); Cursors.schedule(); sendMySel(); }
     };
 
     // ---------- keep the dashboard copy of every shared note up to date ----------

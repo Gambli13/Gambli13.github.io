@@ -13,7 +13,7 @@
         // If the icon CDN ever breaks, stub it so nothing else stops working
         if (typeof lucide === 'undefined') window.lucide = { createIcons: function () {} };
     </script>
-    <script src="note-share.js?v=3"></script>
+    <script src="note-share.js?v=4"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&family=JetBrains+Mono:wght@400;600&display=swap');
         html, body { height: 100%; }
@@ -1467,6 +1467,7 @@
         const keyStore = 'noteShareKey:' + shareId;      // this tab's copy of an encrypted note's key
         let share = null, session = null, presence = null, unsubPresence = null, unsubShare = null;
         let liveKey = null;
+        let isOwnerHere = false;   // this browser has the sharing passphrase: you're "bonit" 
         let locked = false, canEdit = false;
 
         // ---------- gate ----------
@@ -1486,7 +1487,7 @@
         const fieldError = (id, msg) => { const el = $(id); el.textContent = msg; el.classList.toggle('hidden', !msg); };
 
         async function start() {
-            if (NS().VERSION !== 3) return showError('This page is being updated', 'Wait a minute, then reload the page (Ctrl+F5).');
+            if (NS().VERSION !== 4) return showError('This page is being updated', 'Wait a minute, then reload the page (Ctrl+F5).');
             if (!/^[A-Za-z0-9]{10,64}$/.test(shareId)) return showError("This link isn't complete", 'Ask the person who sent it to copy the whole link again.');
             gate('gate-loading');
             try { share = await NS().join.loadShare(shareId); }
@@ -1501,6 +1502,9 @@
                 try { const k = sessionStorage.getItem(keyStore); if (NS().join.isKey(k)) liveKey = k; } catch (e) { /* ignore */ }
             }
             const needKey = share.e2e && !liveKey;
+            // The owner's own devices skip the password and name screens (unless the password is needed for the key)
+            try { isOwnerHere = (await NS().owner.state()) === 'ready'; } catch (e) { isOwnerHere = false; }
+            if (isOwnerHere && !needKey) return afterPassword();
             if (needKey || !(await NS().join.checkMember(share))) {
                 if (share.hasPassword) { gate('gate-password'); return; }
                 try { await NS().join.enter(share, ''); }
@@ -1512,6 +1516,10 @@
         async function afterPassword() {
             if (!canEdit) return openNote();
             presence = new (NS().Presence)(share.liveId);
+            if (isOwnerHere) {
+                try { if (await presence.claim(NS().OWNER_NAME, { force: true }) === 'ok') return openNote(); }
+                catch (e) { console.warn(e); }
+            }
             presence.onLost = () => {
                 if (locked) return;
                 fieldError('gate-name-error', 'You were away for a while and someone took your name. Pick a name to keep editing.');
@@ -1572,7 +1580,8 @@
             try {
                 const r = await presence.claim(name);
                 if (r !== 'ok') {
-                    fieldError('gate-name-error', r === 'taken' ? `Someone in this note is already called "${name}". Pick a different name.` : "That name can't be used.");
+                    fieldError('gate-name-error', r === 'taken' ? `Someone in this note is already called "${name}". Pick a different name.`
+                        : r === 'reserved' ? `"${name}" is the note owner's name. Pick a different one.` : "That name can't be used.");
                     input.select();
                     return;
                 }
